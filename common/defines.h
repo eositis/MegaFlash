@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-//This file is shared by Pico and CPanel project
+//This file is shared with Pico and CPanel project
 
 //************** MegaFlash ********************/
 //MegaFlash Commands

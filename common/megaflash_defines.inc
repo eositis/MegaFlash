@@ -1,4 +1,9 @@
 ;
+; This files is shared with firmware and cpanel projects  
+;
+
+
+;
 ;Peripheral Registers
 ;
 cmdreg          := $c0c0        ;Command Register
@@ -43,7 +48,7 @@ CMD_SETRTC_PRODOS25     =       $1B
 CMD_WRITEBLOCKSIZETOVDH =       $1C
 CMD_FORMATDISK          =       $1D
    
-		 
+     
 CMD_SAVEUSERCONFIG      =       $20
 CMD_GETUSERCONFIG       =       $21
 CMD_SAVEWIFISETTING     =       $22
@@ -51,17 +56,17 @@ CMD_GETCONFIGBYTES      =       $23
 CMD_ERASEUSERCONFIG     =       $24
 CMD_ERASEWIFISETTING    =       $25        
 CMD_ERASEALLCONFIG      =       $26  
-				
-CMD_FADD								=       $30	
+        
+CMD_FADD                =       $30 
 CMD_FMUL                =       $31
 CMD_FDIV                =       $32
 CMD_FSIN                =       $33 
 CMD_FCOS                =       $34
 CMD_FTAN                =       $35
 CMD_FATN                =       $36
-CMD_FLOG                =				$37
-CMD_FEXP                =				$38
-CMD_FSQR                = 			$39
+CMD_FLOG                =       $37
+CMD_FEXP                =       $38
+CMD_FSQR                =       $39
 CMD_FOUT                =       $3A
 CMD_FMUL10              =       $3B
 CMD_FDIV10              =       $3C
@@ -94,5 +99,5 @@ MAGIC5                  =       $C0C1
 CPUSPEEDFLAG            =       %10000000
 AUTOBOOTFLAG            =       %01000000
 RAMDISKFLAG             =       %00100000
-NTPCLIENTFLAG  					=       %00010000
+NTPCLIENTFLAG           =       %00010000
 FPUFLAG                 =       %00001000

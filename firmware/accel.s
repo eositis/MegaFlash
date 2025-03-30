@@ -1,21 +1,10 @@
-; Byte-for-byte match
-; Cleanup source code
-; Correct Docuementation
-; Incorporated into firmware build environment
-; Removed Unused Code / Bytes
-; Apply all bug fixes
-; Briefly Tested, functinally equvialent to original code, optimized in speed and memory consumption
-; Remove Esc Key. Speed Selection is by Boot Menu
-
-
-; Apple IIc Plus Accelerator Control Code
-; This is an analyzed and commented disassembly of the Apple //c accelerator control firmware described in the
-; appendices of https://archive.org/details/AppleIIcTechnicalReference2ndEd
-; If you wish to know how to *use* the accelerator control functions, see that document.
-
-; Without setting fixbugs, ca65 will assemble this into a byte-for-byte match of what is in the IIc Plus firmware.
-
-; Setting fixbugs attempts to fix them, but these are untested as of 2/10/2017.
+;--------------------------------------------------------
+; Apple IIc MegaFlash Firmware
+; Module: Apple IIc Plus Accelerator Control Code
+;
+; Based on the source code from
+; https://gist.github.com/mgcaret/022bd0bb3ee71f28429972523556416e
+;
 
 ; Undocumented features/functions/bugs/errors:
 ; * undocumented command $00 - executed during reset, this inits accelerator and checks for esc key

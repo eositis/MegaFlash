@@ -1,6 +1,3 @@
-
-
-
 ;
 ; Constants
 ;
@@ -31,7 +28,7 @@ NEXTBOOTSLOT    =     $C6             ;IIc : $C6
 ;
 BCRUN             =     $0200   ;Address of Boot code in RAM
 BMRUN             =     $0800   ;Address of Boot Menu in RAM
-CPANELADDR        =     $0A00 	;Address of Control Panel in RAM
+CPANELADDR        =     $0A00   ;Address of Control Panel in RAM
 
 ;
 ;Firmware Routine ID
@@ -44,9 +41,9 @@ MODE_CLOCKDRV     :=      $3              ;ProDOS clockdriver
 MODE_TOGGLESPEED  :=      $4              ;IIC+: Toggle CPU speed
 MODE_SHOWSPEED    :=      $5              ;IIC+: Show current CPU speed on screen
 MODE_LOADCPANEL   :=      $6              ;Load Control Panel code to CPANELADDR
-MODE_LOADBOOTMENU :=		  $7							;Load BootMenu code to BMRUN
-																					;Currently Not Used by the firmware. 
-																					;Provide a well-defined method to execute bootmenu
+MODE_LOADBOOTMENU :=      $7              ;Load BootMenu code to BMRUN
+                                          ;Currently Not Used by the firmware. 
+                                          ;Provide a well-defined method to execute bootmenu
 
 
 ;
@@ -79,12 +76,12 @@ spkr            :=      $C030   ;R Toggle Speaker
 butn0           :=      $C061   ;R7 Open Apple Key/Joystick Button 0
 butn1           :=      $C062   ;R7 Closed Apple Key/Joystick Button 1
 romain          :=      $C081   ;W Switch to ROM ($D000-$FFFF)
-acia1data       :=      $C098	  ;  ACIA 1 Data Register
-acia1status     :=      $C099	  ;  ACIA 1 Status Register
+acia1data       :=      $C098   ;  ACIA 1 Data Register
+acia1status     :=      $C099   ;  ACIA 1 Status Register
 acia1cmd        :=      $C09A   ;  ACIA 1 Command Register
 acia1ctrl       :=      $C09B   ;  ACIA 1 Control Register
 acia2data       :=      $C0A8   ;  ACIA 2 Data Register
-acia2status     :=      $C0A9	  ;  ACIA 2 Status Register
+acia2status     :=      $C0A9   ;  ACIA 2 Status Register
 acia2cmd        :=      $C0AA   ;  ACIA 2 Command Register
 acia2ctrl       :=      $C0AB   ;  ACIA 2 Control Register
 
@@ -144,8 +141,8 @@ DIB_LEN         =       25      ;Device Information Block Length
 ; System ROM Routines
 ;
 swrts           :=      $C784   ;Switch ROM Bank, then RTS
-slxeq						:=      $C752	  ;Aux Bank Routines Entry Point
-getlc           :=      $C816	  ;Bank 1, Get Language Card state
+slxeq           :=      $C752   ;Aux Bank Routines Entry Point
+getlc           :=      $C816   ;Bank 1, Get Language Card state
 applesoft       :=      $E000
 cr              :=      $FC62
 cout            :=      $FDED

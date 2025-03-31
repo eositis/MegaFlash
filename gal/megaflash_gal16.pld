@@ -1,12 +1,12 @@
 Name     megaflash_gal16 ;
-PartNo   00 ;
-Date     15-Apr-24 ;
-Revision 01 ;
-Designer Engineer ;
-Company   ;
-Assembly None ;
-Location  ;
-Device   g16v8 ;
+PartNo   00              ;
+Date     15-Apr-24       ;
+Revision 01              ;
+Designer Engineer        ;
+Company                  ;
+Assembly None            ;
+Location                 ;
+Device   g16v8           ;
 
 /* *************** INPUT PINS *********************/
 PIN [1..9]   = [a4..a12]          ; /* 65C02 Address Bus                   */ 
@@ -41,14 +41,3 @@ bufdir = !(select & ph0  & r_nw);
 picowr = !picowr_n;
 bufoe_n=  bufdir &  picowr #
          !bufdir & !picowr ; 
-           
-          
-
-
-
-
-
-
-
-
-

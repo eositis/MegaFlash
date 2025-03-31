@@ -13,7 +13,7 @@ PIN [1..9]   = [a4..a12]          ; /* 65C02 Address Bus                   */
 PIN 11       = a13                ; /* 65C02 Address Bus                   */ 
 PIN 14       = a14                ; /* 65C02 Address Bus                   */ 
 PIN 15       = a15                ; /* 65C02 Address Bus                   */ 
-PIN 16       = r_nw	              ; /* =1 for dev->cpu, =0 for cpu->dev    */
+PIN 16       = r_nw               ; /* =1 for dev->cpu, =0 for cpu->dev    */
 PIN 17       = ph0                ; /* 65C02 Clock, =1 for CPU cycle       */
 PIN 18       = picowr_n           ; /* pico is outputting data, active low */
 

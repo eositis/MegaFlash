@@ -1,0 +1,107 @@
+
+*******************************************************************************
+                                megaflash_gal16
+*******************************************************************************
+
+CUPL(WM)        5.0a Serial# 60008009
+Device          g16v8ma  Library DLIB-h-40-8
+Created         Mon Mar 31 19:28:56 2025
+Name            megaflash_gal16 
+Partno          00 
+Revision        01 
+Date            15-Apr-24 
+Designer        Engineer 
+Company         
+Assembly        None 
+Location        
+
+===============================================================================
+                            Expanded Product Terms
+===============================================================================
+
+bufdir =>
+    !a4 & !a5 & a6 & a7 & !a8 & !a9 & !a10 & !a11 & !a12 & !a13 & a14 & a15 & 
+      ph0 & r_nw
+
+bufoe_n =>
+    bufdir & !picowr_n
+  # !bufdir & picowr_n
+
+devsel_n =>
+    !a4 & !a5 & a6 & a7 & !a8 & !a9 & !a10 & !a11 & !a12 & !a13 & a14 & a15 & 
+      ph0
+
+picowr =>
+    !picowr_n
+
+select =>
+    !a4 & !a5 & a6 & a7 & !a8 & !a9 & !a10 & !a11 & !a12 & !a13 & a14 & a15
+
+a14.oe  =>
+    0 
+
+a15.oe  =>
+    0 
+
+bufdir.oe  =>
+    1 
+
+bufoe_n.oe  =>
+    1 
+
+devsel_n.oe  =>
+    1 
+
+ph0.oe  =>
+    0 
+
+picowr_n.oe  =>
+    0 
+
+r_nw.oe  =>
+    0 
+
+
+===============================================================================
+                                 Symbol Table
+===============================================================================
+
+Pin Variable                                    Pterms   Max     Min    
+Pol   Name              Ext     Pin     Type     Used   Pterms  Level   
+--- --------            ---     ---     ----    ------  ------  -----   
+
+    a4                          1        V        -       -       -     
+    a5                          2        V        -       -       -     
+    a6                          3        V        -       -       -     
+    a7                          4        V        -       -       -     
+    a8                          5        V        -       -       -     
+    a9                          6        V        -       -       -     
+    a10                         7        V        -       -       -     
+    a11                         8        V        -       -       -     
+    a12                         9        V        -       -       -     
+    a13                         11       V        -       -       -     
+    a14                         14       V        -       -       -     
+    a15                         15       V        -       -       -     
+    bufdir                      13       V        1       7       4     
+    bufoe_n                     12       V        2       7       4     
+    devsel_n                    19       V        1       7       4     
+    ph0                         17       V        -       -       -     
+    picowr                      0        I        1       -       -     
+    picowr_n                    18       V        -       -       -     
+    r_nw                        16       V        -       -       -     
+    select                      0        I        1       -       -     
+    a14                 oe      14       D        1       1       0     
+    a15                 oe      15       D        1       1       0     
+    bufdir              oe      13       D        1       1       0     
+    bufoe_n             oe      12       D        1       1       0     
+    devsel_n            oe      19       D        1       1       0     
+    ph0                 oe      17       D        1       1       0     
+    picowr_n            oe      18       D        1       1       0     
+    r_nw                oe      16       D        1       1       0     
+
+
+LEGEND    D : default variable         F : field      G : group
+          I : intermediate variable    N : node       M : extended node
+          U : undefined                V : variable   X : extended variable
+          T : function
+

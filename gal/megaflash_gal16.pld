@@ -1,0 +1,54 @@
+Name     megaflash_gal16 ;
+PartNo   00 ;
+Date     15-Apr-24 ;
+Revision 01 ;
+Designer Engineer ;
+Company   ;
+Assembly None ;
+Location  ;
+Device   g16v8 ;
+
+/* *************** INPUT PINS *********************/
+PIN [1..9]   = [a4..a12]          ; /* 65C02 Address Bus                   */ 
+PIN 11       = a13                ; /* 65C02 Address Bus                   */ 
+PIN 14       = a14                ; /* 65C02 Address Bus                   */ 
+PIN 15       = a15                ; /* 65C02 Address Bus                   */ 
+PIN 16       = r_nw	              ; /* =1 for dev->cpu, =0 for cpu->dev    */
+PIN 17       = ph0                ; /* 65C02 Clock, =1 for CPU cycle       */
+PIN 18       = picowr_n           ; /* pico is outputting data, active low */
+
+/* *************** OUTPUT PINS *********************/
+PIN 12    =  bufoe_n              ; /* Data Bus Buffer /OE                  */
+                                    /* Not connected on Rev0 Dev Board      */
+PIN 13    =  bufdir               ; /* Data Bus Buffer Direction            */
+                                    /* =0: pico->6502, =1: 6502->pico       */ 
+PIN 19    =  devsel_n             ; /* CPU is accessing pico, active low    */
+
+
+/* Apple I/O Address at $C0Cn at slot 4 */
+select = [a15..4]:'h'c0cx;
+
+/* Inform Pico CPU is accessing */
+devsel_n = !(select & ph0);
+
+/* Switch Data Bus Buffer Direction */
+bufdir = !(select & ph0  & r_nw);
+                  
+/* 74LVCH16T245 /OE is disabled when */
+/* 1) bufdir is 'To Pico' and Pico is outputting. (Bus conflict)     OR */
+/* 2) bufdir is 'To Apple' and Pico is not outputting (Floating bus)    */
+/* Note: 74LVCH16T245 is CMOS and its inputs should not be floating     */
+picowr = !picowr_n;
+bufoe_n=  bufdir &  picowr #
+         !bufdir & !picowr ; 
+           
+          
+
+
+
+
+
+
+
+
+

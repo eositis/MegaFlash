@@ -1,0 +1,76 @@
+LISTING FOR LOGIC DESCRIPTION FILE: MEGAFLASH_GAL16.pld              Page 1
+
+CUPL(WM): Universal Compiler for Programmable Logic
+Version 5.0a Serial# 60008009
+Copyright (c) 1983, 1998 Logical Devices, Inc.
+Created Mon Mar 31 19:28:56 2025
+
+  1:Name     megaflash_gal16 ;
+  2:PartNo   00 ;
+  3:Date     15-Apr-24 ;
+  4:Revision 01 ;
+  5:Designer Engineer ;
+  6:Company   ;
+  7:Assembly None ;
+  8:Location  ;
+  9:Device   g16v8 ;
+ 10:
+ 11:/* *************** INPUT PINS *********************/
+ 12:PIN [1..9]   = [a4..a12]          ; /* 65C02 Address Bus                   */ 
+ 13:PIN 11       = a13                ; /* 65C02 Address Bus                   */ 
+ 14:PIN 14       = a14                ; /* 65C02 Address Bus                   */ 
+ 15:PIN 15       = a15                ; /* 65C02 Address Bus                   */ 
+ 16:PIN 16       = r_nw                   ; /* =1 for dev->cpu, =0 for cpu->dev    */
+ 17:PIN 17       = ph0                ; /* 65C02 Clock, =1 for CPU cycle       */
+ 18:PIN 18       = picowr_n           ; /* pico is outputting data, active low */
+ 19:
+ 20:/* *************** OUTPUT PINS *********************/
+ 21:PIN 12    =  bufoe_n              ; /* Data Bus Buffer /OE                  */
+ 22:                                    /* Not connected on Rev0 Dev Board      */
+ 23:PIN 13    =  bufdir               ; /* Data Bus Buffer Direction            */
+ 24:                                    /* =0: pico->6502, =1: 6502->pico       */ 
+ 25:PIN 19    =  devsel_n             ; /* CPU is accessing pico, active low    */
+ 26:
+ 27:
+ 28:/* Apple I/O Address at $C0Cn at slot 4 */
+ 29:select = [a15..4]:'h'c0cx;
+ 30:
+ 31:/* Inform Pico CPU is accessing */
+ 32:devsel_n = !(select & ph0);
+ 33:
+ 34:/* Switch Data Bus Buffer Direction */
+ 35:bufdir = !(select & ph0  & r_nw);
+ 36:                  
+ 37:/* 74LVCH16T245 /OE is disabled when */
+ 38:/* 1) bufdir is 'To Pico' and Pico is outputting. (Bus conflict)     OR */
+ 39:/* 2) bufdir is 'To Apple' and Pico is not outputting (Floating bus)    */
+ 40:/* Note: 74LVCH16T245 is CMOS and its inputs should not be floating     */
+ 41:picowr = !picowr_n;
+ 42:bufoe_n=  bufdir &  picowr #
+ 43:         !bufdir & !picowr ; 
+ 44:           
+ 45:          
+ 46:
+ 47:
+ 48:
+ 49:
+ 50:
+ 51:
+ 52:
+ 53:
+
+LISTING FOR LOGIC DESCRIPTION FILE: MEGAFLASH_GAL16.pld              Page 2
+
+CUPL(WM): Universal Compiler for Programmable Logic
+Version 5.0a Serial# 60008009
+Copyright (c) 1983, 1998 Logical Devices, Inc.
+Created Mon Mar 31 19:28:56 2025
+
+ 54:
+ 55:
+ 56:
+
+
+
+Jedec Fuse Checksum       (21e0)
+Jedec Transmit Checksum   (a4d1)

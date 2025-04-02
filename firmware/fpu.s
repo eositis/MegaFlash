@@ -72,7 +72,7 @@ stack           := $100         ;Bottom of stack
 ;
 ; 3) FPU implementation is used and there is error such as Overflow Error or
 ; Division by Zero Error. fpu_exec does not return. It jumps to the error handler
-; directly. This is how the Applesoft routine orginally works. 
+; directly. This is how the Applesoft routine originally works. 
 ;
 ; As a result, fadd is just 10 bytes long. All error handling, branching are
 ; handled by fpu_exec.
@@ -114,6 +114,11 @@ stack           := $100         ;Bottom of stack
                 .segment "B0_C7FC"
                 .reloc
 fpu_exec:       sta rombank             ;First, Switch to Aux Bank
+
+                ;We still have one byte of empty space at $C7FF.
+                ;Use this byte as a signature to indicate FPU Support is enabled in firmware
+                ;The Control Panel use this byte to detect FPU support
+                .byte FPU_SUPPORT_SIGNATURE     
          
                 .segment"B1_C7FF"
                 .reloc

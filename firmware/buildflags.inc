@@ -53,6 +53,6 @@ PRINTSPEED_FIX  EQU     TRUE
 ;--------------------------------------------
 ;Applesoft FPU Support
 ;Default: TRUE
-FPUSUPPORT       EQU     TRUE
+FPUSUPPORT       EQU     FALSE
 
 

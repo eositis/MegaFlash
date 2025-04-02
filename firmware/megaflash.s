@@ -190,8 +190,10 @@ coldstartinit:
                 ;It takes MegaFlash about 8us to switch mode
                 jsr shortdelay
                 
+.if FPUSUPPORT
                 ;FPU is not enabled if MegaFlash not exist
                 stz fpuenabled
+.endif
    
                 ;Check if MegaFlash exist
                 jsr chkmegaflashex
@@ -220,12 +222,14 @@ coldstartinit:
                 stx $01
 noautoboot:
                 
+.if FPUSUPPORT                
                 ;Set MSB of fpuenabled if FPU is enabled in configbyte1
                 ;fpuenabled has been set to 0 above
                 bit #FPUFLAG            ;Test FPU Flag
                 beq fpudisabled         ;Branch if not enabled
                 dec fpuenabled          ;change it from 0 to $ff to set MSB
 fpudisabled:
+.endif
 
                 ;Set Power Up CPU Speed
                 ;

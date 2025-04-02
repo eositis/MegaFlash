@@ -60,6 +60,7 @@ const char strOKAnyKey[]="OK:Any Key";
 const char strYes[]="(\304)";
 const char strNo []="( )";
 const char strConfirm[] = "Confirm";
+const char strNA []="N/A";
 
 char mmTitle[] = "MegaFlash Control Panel";
 char mmPrompt[] ="Cancel:esc   Select:\310 \325 \312 \313 \315";
@@ -129,13 +130,20 @@ void ToggleRamdisk() {
 void ShowFPU() {
   gotoxy(XPOS+28,YPOS+4);
   MoveCursorUpIfNotIIcplus();  
-  if (config.configbyte1 & FPUFLAG) cputs(strYes);
-  else cputs(strNo);   
+  if (HasFPUSupport()) {
+    if (config.configbyte1 & FPUFLAG) cputs(strYes);
+    else cputs(strNo);   
+  } else {
+    cputs(strNA);
+  }
+
 }
 
 void ToggleFPU() {
-  config.configbyte1 = config.configbyte1 ^ FPUFLAG;
-  ShowFPU();
+  if (HasFPUSupport()) {
+    config.configbyte1 = config.configbyte1 ^ FPUFLAG;
+    ShowFPU();
+  }
 }
 
 

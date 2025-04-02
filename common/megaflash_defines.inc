@@ -101,3 +101,9 @@ AUTOBOOTFLAG            =       %01000000
 RAMDISKFLAG             =       %00100000
 NTPCLIENTFLAG           =       %00010000
 FPUFLAG                 =       %00001000
+
+;
+;FPU Support Signature
+;ROM Bank 0 $C7FF is set to this value if FPU support is enabled in firmware
+;
+FPU_SUPPORT_SIGNATURE   =     $6B

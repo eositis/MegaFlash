@@ -19,6 +19,7 @@
                 .export _setwndlft,_resetwndlft
                 .export _ToUppercase
                 .export _EraseAllConfig,_GetUnitBlockCount
+                .export _HasFPUSupport
 
 ;
 ; Constants Definitions
@@ -221,14 +222,14 @@ _cgetchar:
 
                 ;Wait for keyboard strobe while blinking cursor
 loop:           ;Delay loop, no need to initalize x register since
-                ;it affects the first run of inner loop
+                ;it only affects the first run of inner loop
                 ldy #80         ;blinking delay
 :               lda KBD
                 bmi keypressed
                 dex
                 bne :-          ;inner loop
 .ifndef TESTBUILD                
-                lda $c09a       ;Port 1 ACIA cmd register ($C09A)
+                lda $c09a       ;Touch Serial Port 1 ACIA cmd register ($C09A)
                                 ;to slow down on IIc+
 .endif                
                 dey
@@ -573,3 +574,28 @@ _GetUnitBlockCount:
                 tax
                 rts
                 
+                
+                
+;/////////////////////////////////////////////////////////           
+; bool __fastcall__ HasFPUSupport();
+; Check if the firmware has FPU support
+;
+; $C7FF = FPU_SUPPORT_SIGNATURE if FPU Support is enabled
+; in the firmware
+_HasFPUSupport:
+.ifndef TESTBUILD                
+                ldx #0          ;Preload X=0, A=0 (false)
+                txa             ;
+                ldy $C7FF
+                cpy #FPU_SUPPORT_SIGNATURE
+                bne :+
+                inc a           ;X=0, A=1 (true)        
+:               rts
+.else
+                ldx #0
+                lda #1
+                rts
+.endif     
+               
+               
+               

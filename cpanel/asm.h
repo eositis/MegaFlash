@@ -33,5 +33,6 @@ void __fastcall__ setwndlft(uint8_t x);
 void __fastcall__ resetwndlft();
 
 void __fastcall__ ToUppercase(char*);
+bool __fastcall__ HasFPUSupport();
 
 #endif

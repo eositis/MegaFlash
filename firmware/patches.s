@@ -171,9 +171,9 @@ bell2:          lda #$0c
 .if .defined(IICP) .and PRINTSPEED_FIX
                 .segment "B0_DB6C"
                 .reloc
-                .if 0
-                jsr orgwait
-                .else
+                .if 0   ;Patch to call orgwait is enough to fix the problem
+                jsr orgwait     
+                .else   ;A even better implementation
                 jsr printwait
 
                 .segment "APPLESOFT"

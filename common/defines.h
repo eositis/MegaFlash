@@ -183,6 +183,7 @@ typedef enum {
   ERR_NONET,
   ERR_WIFINOTCONNECTED,
   ERR_BADAUTH,  
+  ERR_ABORTED,  //Aborted by user or system reset
   ERR_NOIP,     //Wifi OK, DHCP problem
   ERR_DNSFAILED,//Wifi OK, DHCP OK, DNS problem
   ERR_NTPFAILED,//Wifi OK, DHCP OK, DNS OK, NTP problem

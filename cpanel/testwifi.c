@@ -40,7 +40,7 @@ void DoTestWifi(){
   //
   //Step 1: Show "Testing" message
   DrawTestWifiWindowFrame();
-  cputs("Testing...\n\rIt may take up to one minute.\n\n\rPlease wait.");
+  cputs("Testing...\n\rIt may take up to 90 seconds.\n\n\rPlease wait.");
   
   //
   //Step 2: Perform the test
@@ -61,7 +61,7 @@ void DoTestWifi(){
   }
   
   if (error == ERR_NETTIMEOUT) {
-    cputs("Timeout Error.\n\rNo response from PicoW.");
+    cputs("Timeout Error.\n\rNo response from MegaFlash.");
     goto exit;
   }
   
@@ -77,6 +77,11 @@ void DoTestWifi(){
   
   if (error == ERR_WIFINOTCONNECTED || error == ERR_BADAUTH) {
     cputs("WIFI not connected.\n\n\rProbably, it is due to\n\rauthentication problem.");   
+    goto exit;
+  }
+  
+  if (error == ERR_ABORTED) {
+    cputs("Aborted.");
     goto exit;
   }
   

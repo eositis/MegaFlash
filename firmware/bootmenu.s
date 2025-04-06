@@ -300,6 +300,10 @@ NFMSGLEN        = (*-notfoundmsg)
 ;A small routine to get keyboard input
 ;It also displays time regularly.
 getkey:         
+                .ifdef IICP
+                lda acia1cmd    ;Touch slot 1 ($C09A) to slow down on IIC+
+                .endif
+
                 inc counter
                 bne :+
                 inc counter+1

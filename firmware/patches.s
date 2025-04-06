@@ -153,7 +153,7 @@ bell2:          lda #$0c
 ; is printed to screen, the wait routine is called even
 ; SPEED is set to 255. ($DB6C: JSR $FCA8)
 ;
-; On IIc plus, the wait routine touches the slot 2 and
+; On IIc plus, the wait routine touches the slot 1 and
 ; the CPU will slow down to 1MHz for 50ms. If a program
 ; print to screen continuously, the whole program is
 ; executed at 1MHz

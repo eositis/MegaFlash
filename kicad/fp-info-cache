@@ -1,4 +1,4 @@
-24654038823993124
+24655783389837823
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -65640,6 +65640,13 @@ QFN DFN_QFN
 57
 MCU_RaspberryPi_and_Boards
 RPi_Pico_SMD_NO_LABEL
+Through hole straight pin header, 2x20, 2.54mm pitch, double rows
+Through hole pin header THT 2x20 2.54mm double row
+0
+43
+43
+MCU_RaspberryPi_and_Boards
+RPi_Pico_SMD_NO_LABEL_NO_DEBUG
 Through hole straight pin header, 2x20, 2.54mm pitch, double rows
 Through hole pin header THT 2x20 2.54mm double row
 0

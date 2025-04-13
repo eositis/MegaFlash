@@ -14290,7 +14290,7 @@
 				)
 			)
 		)
-		(property "Footprint" "MCU_RaspberryPi_and_Boards:RPi_Pico_SMD_NO_LABEL"
+		(property "Footprint" "MCU_RaspberryPi_and_Boards:RPi_Pico_SMD_NO_LABEL_NO_DEBUG"
 			(at 207.01 52.07 90)
 			(effects
 				(font

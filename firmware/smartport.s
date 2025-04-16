@@ -325,7 +325,8 @@ preadwrite:     ;read/write command
                 ;Validate block number
                 ;Block Size (AXY) > Block Number
                 ;
-                ;if y!=0, block number must be valid.
+                ;if y!=0, Block Size>$FFFF
+                ;block number must be valid.
                 ;If not, check  AX > pdBlockNum                   
                 ;Test: AX - pdBlockNum -1 >= 0
                 cpy #0

@@ -63,6 +63,9 @@
 #define CMD_FMUL10              0x3b
 #define CMD_FDIV10              0x3c
 
+#define CMD_TFTPRUN             0x40
+#define CMD_TFTPSTATUS          0x41
+
 //MegaFlash Error Code
 #define ERR_SUCCESS      0x00  /* No Error*/
 #define ERR_NOFLASH      0x01  /* Supported Flash Chip is not found  */
@@ -168,10 +171,10 @@ typedef struct {
 
 
 /********* Time Zone Info **************/
-
+//These Time Zone Info may be changed in the future. timezoneidver is to identify the version of this Time Zone Information
 #define TZHOUR {-12,-11,-10,-9,-9,-8,-7,-6,-5,-4,-3,-3,-2,-1,0,1,2,3, 3,4, 4,5, 5, 5,6, 6,7,8, 8,9, 9,10,10,11,12,12,13,14}
 #define TZMIN  {  0,  0,  0,30, 0, 0, 0, 0, 0, 0,30, 0, 0, 0,0,0,0,0,30,0,30,0,30,45,0,30,0,0,45,0,30, 0,30, 0, 0,45, 0, 0}
-#define DEFAULTTIMEZONE 14  //UTC+0:00
+#define DEFAULTTIMEZONE 14  //15th timezone. ie. UTC+0:00
 
 
 /******************************* Test Wifi *********************************/
@@ -189,6 +192,14 @@ typedef enum {
   ERR_NTPFAILED,//Wifi OK, DHCP OK, DNS OK, NTP problem
   ERR_NOERR     //Everything ok
 } NetworkError_t;
+
+
+/********************************* TFTP ***********************************/
+#define TFTP_HOSTNAME_MAXLEN 80     /* Not including the NULL characters */
+#define TFTP_FILENAME_MAXLEN 80     /* Not including the NULL characters */
+
+
+
 
 
 #endif

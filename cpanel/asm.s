@@ -7,7 +7,7 @@
                 .importzp tmp1,tmp2,tmp3,tmp4
                 .importzp ptr1,ptr2,ptr3,ptr4
                 .import popa, VTABZ
-                .import putchardirect
+                .import putchardirect,_cputc
                 .import _ShowClock
                 
                 .export _GetBoardType,_GetUnitCount,_DisableROMDisk,_FormatDisk,_GetVolInfo
@@ -19,8 +19,8 @@
                 .export _setwndlft,_resetwndlft
                 .export _ToUppercase
                 .export _EraseAllConfig,_GetUnitBlockCount
-                .export _HasFPUSupport
-
+                .export _HasFPUSupport,_ReadOpenApple,_PrintStringFromDataBuffer
+                .export _SendCommand
 ;
 ; Constants Definitions
 ; The .inc file is shared with Firmware Project
@@ -113,7 +113,7 @@ _IsAppleIIcplus:
 ;
 ; Note: cputc() inverts the high bit before the character
 ;       is put into screen memory. So, we do the same here.
-_cputchar:       eor #$80
+_cputchar:      eor #$80
                 jmp putchardirect
 
 ;/////////////////////////////////////////////////////////
@@ -578,7 +578,9 @@ _GetUnitBlockCount:
                 
 ;/////////////////////////////////////////////////////////           
 ; bool __fastcall__ HasFPUSupport();
-; Check if the firmware has FPU support
+; Check if the firmware has FPU support enabled
+;
+; Output: bool - Apple Firmware has FPU support enabled
 ;
 ; $C7FF = FPU_SUPPORT_SIGNATURE if FPU Support is enabled
 ; in the firmware
@@ -596,6 +598,108 @@ _HasFPUSupport:
                 lda #1
                 rts
 .endif     
+
+
+;/////////////////////////////////////////////////////////     
+; bool __fastcall__ ReadOpenApple()
+; Read Open-Apple Key status 
+;
+; Output: bool - status of Open Apple key
+;
+_ReadOpenApple:
+                lda #0          ;a=0, x=0
+                tax 
+                bit $C061       ;Joystick Button 0
+                bpl :+
+                inc a           ;a=1, x=0
+:               rts
+
+
+;///////////////////////////////////////////////////////// 
+; void __fastcall__ PrintStringFromDataBuffer()
+; Pull a string from Data Buffer and print to screen
+;
+
+_PrintStringFromDataBuffer:
+.ifndef TESTBUILD
+@loop:          lda datareg
+                beq :+          ;Null char?
+                jsr _cputc
+                bra @loop
+:               rts          
+.else
+                rts
+.endif     
+
+;///////////////////////////////////////////////////////// 
+; void __fastcall__ SendCommand(uint8_t cmd)
+; Send a command to MegaFlash and wait until it is executed.
+;
+; Input: cmd - Command to be sent
+;
+_SendCommand:=execute           ;same implementation as execute
+                
                
-               
+;*****************************************************************************
+;
+;                     TFTP
+;
+;*****************************************************************************          
+                .import _tftp_dir,_tftp_unitNum,_tftp_hostname,_tftp_filename
+                .export _Send_CMD_TFTPRUN
+                .export _GetParam8,_GetParam16
+;ParamBuffer
+; WE_KEY
+; Dir (TX or RX)
+; UnitNum               
+_Send_CMD_TFTPRUN:
+.ifndef TESTBUILD
+                ;Reset buffer pointers    
+                stz cmdreg          
+                
+                ;Put Write Enable Key to parameter buffer
+                lda #WE_KEY
+                sta paramreg
+
+                ;Direction
+                lda _tftp_dir
+                sta paramreg
+                
+                ;UnitNum
+                lda _tftp_unitNum
+                sta paramreg
+                
+                ;Copy Hostname to Data Buffer
+                ldx #$FF
+:               inx
+                lda _tftp_hostname,x
+                sta datareg
+                bne :-
+                
+                ;Copy Filename to Data Buffer
+                ldx #$FF
+:               inx
+                lda _tftp_filename,x
+                sta datareg
+                bne :-         
+
+                ;Send CMD_TFTPRUN
+                lda #CMD_TFTPRUN
+                jsr execute
+                rts
+.else
+                rts
+.endif                
+ 
+;--------------------------------- 
+;                
+_GetParam8:
+                lda paramreg
+                ldx #0
+                rts
+                
+_GetParam16:
+                lda paramreg
+                ldx paramreg
+                rts
                

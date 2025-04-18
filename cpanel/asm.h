@@ -34,5 +34,14 @@ void __fastcall__ resetwndlft();
 
 void __fastcall__ ToUppercase(char*);
 bool __fastcall__ HasFPUSupport();
+bool __fastcall__ ReadOpenApple();
+void __fastcall__ PrintStringFromDataBuffer();
+
+void __fastcall__ SendCommand();
+
+
+void __fastcall__ Send_CMD_TFTPRUN();
+int8_t  __fastcall__ GetParam8();
+int16_t __fastcall__ GetParam16();
 
 #endif

@@ -3,7 +3,7 @@
 #Source Files
 DEPS       = Makefile defines.h asm.h ui.h wifi.h timezone.h config.h testwifi.h format.h ../common/defines.h 
 DEPSASM    = ../common/megaflash_defines.inc
-SRC        = main.c ui.c wifi.c timezone.c config.c testwifi.c format.c
+SRC        = main.c ui.c wifi.c timezone.c config.c testwifi.c format.c imagetransfer.c
 ASM        = asm.s
 
 #Depolyment Build

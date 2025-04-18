@@ -71,6 +71,9 @@ CMD_FOUT                =       $3A
 CMD_FMUL10              =       $3B
 CMD_FDIV10              =       $3C
 
+CMD_TFTPRUN             =       $40
+CMD_TFTPSTATUS          =       $41
+
 
 WE_KEY                  =       $71     ;Write Enable Key
 SIGNATURE1              =       $88     ;MegaFlash Device Signature Byte #1

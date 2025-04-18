@@ -12,6 +12,7 @@
 #include "config.h"
 #include "testwifi.h"
 #include "format.h"
+#include "imagetransfer.h"
 
 /******************************************************************
 Build Types
@@ -43,6 +44,8 @@ bool isAppleIIcplus;
 
 uint8_t boardType;
 bool isWifiSupported;
+bool showPicoFirmwareVer;
+
 
 /////////////////////////////////////////////////////////////////////
 // Fatal Error handler
@@ -73,11 +76,12 @@ const char* mainMenuItems[] = {
   "Time Zone",
   "Wifi Setting >\n",
   "Test Wifi/NTP >",
+  "Image Transfer via WIFI >",
   "Format >",
   "Erase All Settings\n",
   "Save and Reboot"
 };
-#define MMITEMCOUNT 11  
+#define MMITEMCOUNT 12
 #define XPOS 4
 #define YPOS 3
 #define WIDTH 32
@@ -289,6 +293,13 @@ void ShowPicoWNeeded() {
 }
 
 
+void ShowFirmwareVer() {
+  gotoxy(0,23);
+  cputs("Pico Firmware ");
+  SendCommand(CMD_GETDEVINFO);
+  PrintStringFromDataBuffer();
+}
+
 void DoMainMenu() {
   static_local bool redrawAll = true;
   static_local uint8_t itemCount;
@@ -315,6 +326,7 @@ void DoMainMenu() {
       cputs(mmPrompt);
       ShowAllOptions();
       ShowClock();
+      if (showPicoFirmwareVer) ShowFirmwareVer();
     }
     
     do {
@@ -363,21 +375,26 @@ void DoMainMenu() {
           if (isWifiSupported) DoTestWifi();
           else ShowPicoWNeeded();
           break;
-        case 8:
+        case 8:  
+          //Disk Image Transfer
+          DoImageTransfer();
+          redrawAll = true;   
+          break;
+        case 9:
           //Format Megaflash Drive
           if (key!=KEY_ENTER) break;       
           DrawMainMenuWindowFrame(false,false);  //Inactive Main Menu Window           
           redrawAll = true;       
           DoFormat();
           break;
-        case 9:
+        case 10:
           //Erase All Settings
           if (key!=KEY_ENTER) break;     
           DrawMainMenuWindowFrame(false,false);  //Inactive Main Menu Window 
           redrawAll = true;
           DoFactoryReset();
           break;
-        case 10:
+        case 11:
           //Save and Reboot
           if (key!=KEY_ENTER) break;          
           DrawMainMenuWindowFrame(false,false);  //Inactive Main Menu Window 
@@ -403,7 +420,7 @@ void main() {
   boardType = BRD_PICOW;
   isWifiSupported = true;
 #endif  
-   
+  showPicoFirmwareVer = ReadOpenApple(); 
    
   LoadConfig();
   DoMainMenu();

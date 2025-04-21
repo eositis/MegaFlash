@@ -1040,27 +1040,27 @@ clockdriverimpl:
                 
 dest            := $42  ;$42-43 destination pointer
 
-loadcpanel:     stz aval        ;Assume No error        
+loadcpanel:     stz aval                ;Assume No error        
                 jsr chkmegaflash
-                bcs notexist
+                bcs @notexist
 
                 ld16i dest, CPANELADDR
-                ldx #0          ;x = pageno
+                ldx #0                  ;x = pageno
                 ldy #0
                 
-@loop:          stz cmdreg      ;Reset Buffer Pointer
-                stx paramreg    ;Write current page number to parameter buffer
+@loop:          stz cmdreg              ;Reset Buffer Pointer
+                lda #CMD_LOAD_CPANEL    ;Preload A=CMD_LOAD_CPANEL
+                stx paramreg            ;Write current page number to parameter buffer
                 
-                lda #CMD_LOAD_CPANEL
                 jsr execute
-                bvs finish      ;error? Assume error means finish
+                bvs @finish             ;error? Assume error means finish
 
                 ;Copy one page
                 ;y already = 0
 :               lda datareg
                 sta (dest),y
                 iny
-                lda datareg     ;copy two bytes in each iteration
+                lda datareg             ;copy two bytes in each iteration
                 sta (dest),y
                 iny
                 bne :-
@@ -1068,9 +1068,9 @@ loadcpanel:     stz aval        ;Assume No error
                 
                 ;Inc pageno and pointer
                 inx             ;inc pageno
-                inc dest+1      ;Next page
+                inc dest+1      ;Point to next page
                 bra @loop
                 
-notexist:       inc aval        ;Change it to 1 to indicate error           
-finish:         rts                
+@notexist:      inc aval        ;Change it to 1 to indicate error           
+@finish:        rts                
                 

@@ -267,9 +267,9 @@ key7:
                 stz $bf00       ;Dont return to ProDOS
                 lda #$4c        ;jmp opcode
                 sta $3d0
-                lda #.LOBYTE(reentry)
+                lda #.LOBYTE(bmstart)
                 sta $3d1
-                lda #.HIBYTE(reentry)
+                lda #.HIBYTE(bmstart)
                 sta $3d2
 
                 lda #MODE_LOADCPANEL
@@ -287,9 +287,6 @@ nomf:           ;No Megaflash
                 bpl :-
                 
                 jsr getkey       
-                ;fall-into reentry
-                
-reentry:        jsr appleii             ;Control Panel returns here
                 jmp bmstart
                 
                 
@@ -363,9 +360,6 @@ bmjmptable:     .addr key2
                 
                 .byte $00       ;End of Menu Message
                 
-                .assert (*-bmstart) <=512, error, "Boot Menu >512 bytes"
-
-
 
 ;******************************************************************
 ; 
@@ -431,6 +425,6 @@ displaytime:
 rts1:           rts
 
 
-                
+                .assert (*-bmstart) <=512, error, "Boot Menu >512 bytes"
                 
                 

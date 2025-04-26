@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 #include "defines.h"
-#include "ui.h"
+#include "ui-menu.h"
 #include "asm.h"
 
 //
@@ -43,7 +43,7 @@ void DoImageTransfer(){
   gotoxy(0,3);
   printf("1)Download from server\n2)Upload to server\n");
   printf("Please enter(1-2):");
-  curPos = 0;
+  curPos = 0;   //No default value
   enter = EnterNumber(1,1,2);
   }while (!enter);
   tftp_dir = (uint8_t)enteredNumber-1;

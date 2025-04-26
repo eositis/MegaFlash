@@ -3,16 +3,16 @@
 #include <conio.h>
 #include <stdint.h>
 #include <stdbool.h>
-
 #include "defines.h"
 #include "asm.h"
 
-extern ConfigApple config;
+//Defined in main.c
+extern UserConfig_t config;
 
 
 //TZHOUR and TZMIN is defined in ../common/defines.h and shared with Pico Project
-const int8_t tzhour[]= TZHOUR;
-const uint8_t tzmin[]= TZMIN;
+static const int8_t tzhour[]= TZHOUR;
+static const uint8_t tzmin[]= TZMIN;
 
 #define TIMEZONECOUNT (sizeof(tzhour)/sizeof(tzhour[0]))
 

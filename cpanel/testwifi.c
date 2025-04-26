@@ -3,39 +3,33 @@
 #include <conio.h>
 #include <stdint.h>
 #include <stdbool.h>
-
 #include "defines.h"
-#include "ui.h"
+#include "ui-menu.h"
+#include "ui-wnd.h"
+#include "ui-misc.h"
 #include "asm.h"
+#include "textstrings.h"
 
-#define TESTMODE 0
-
-// Position and size of Test setting window
+// Position and size of Test Wifi window
 #define XPOS 4
 #define YPOS 3
 #define WIDTH 32
 #define HEIGHT 18
 #define HTAB 24
 
-const char windowTitle[] = "Test Wifi Connection";
-const char strOK[]     = "    OK";
-const char strFailed[] = "Failed";
-extern const char strOKAnyKey[];
+static const char windowTitle[] = "Test Wifi Connection";
 
 
 /////////////////////////////////////////////////////////////////////
 // Draw Test Wifi Window Frame
 //
 void DrawTestWifiWindowFrame() {
-  resetwndlft();
-  DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,windowTitle,true,true);  
-  setwndlft(XPOS+1);
-  gotoxy(0,YPOS);  
+  wnd_DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,windowTitle,true,true);  
 }
 
 
 void DoTestWifi(){
- uint8_t error;  //Making it global results in longer code
+  uint8_t error;  //Making it static_local results in longer code
   
   //
   //Step 1: Show "Testing" message
@@ -45,14 +39,15 @@ void DoTestWifi(){
   //
   //Step 2: Perform the test
   error=TestWifi();
-  #if TESTMODE
+  #ifdef TESTBUILD
+  error=ERR_NOERR;
   cgetc_showclock();
   #endif
   DrawTestWifiWindowFrame();
   
   //
   //Step 3: Print the result
-  cputs("Result:");
+  cputs(strResult);
   newline2();
   
   if (error == ERR_UNKNOWN || error == ERR_NOTPICOW) {
@@ -81,7 +76,7 @@ void DoTestWifi(){
   }
   
   if (error == ERR_ABORTED) {
-    cputs("Aborted.");
+    cputs(strAborted);
     goto exit;
   }
   
@@ -89,7 +84,7 @@ void DoTestWifi(){
   if (error >= ERR_NOIP) {
     cputs("WIFI Connection"); 
     gotox(HTAB);
-    cputs(strOK);
+    cputs(str____OK);
   }
 
   //DHCP Failed
@@ -123,7 +118,7 @@ void DoTestWifi(){
   }
   
   if (error > ERR_DNSFAILED) {
-    cputs(strOK);
+    cputs(str____OK);
   }
 
   //NTP Server Failed/OK
@@ -136,7 +131,7 @@ void DoTestWifi(){
   }
 
   if (error > ERR_NTPFAILED) {
-    cputs(strOK);
+    cputs(str____OK);
   }
 
   //All tests passed.
@@ -146,8 +141,7 @@ void DoTestWifi(){
   }
 
 exit:
-  gotoxy(WIDTH-12,YPOS+HEIGHT-1);
+  gotoxy(WIDTH-12,HEIGHT-1);
   cputs(strOKAnyKey);
   cgetc_showclock();
-  resetwndlft();
 }

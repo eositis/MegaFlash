@@ -97,43 +97,14 @@ typedef enum {
 
 
 
-//***************** User Preference *******************
-
-//This data structure is uploaded to dataBuffer by Control Panel App
-#define SSIDLEN         32
-#define WPAKEYLEN       63
-#define WIFISETTINGVER  0
-#define WIFIAUTHTYPE    0
-typedef struct {
-  uint8_t version;          //Version ID of the structure
-  uint8_t authType;         //Authentication Type. Currently unused and should be 0
-  char wpakey[WPAKEYLEN+1]; //Wifi Password. +1 for null character  
-  char ssid[SSIDLEN+1];     //SSID. +1 for null character
-} WifiSettingApple;
-
-
-//This data structure is written to flash memory.
-typedef struct {
-  uint32_t magic;
-  
-  /**** The following fields must match with WifiSettingApple ****/
-  uint8_t version;          //Version ID of the structure
-  uint8_t authType;         //Authentication Type. Currently unused and should be 0
-  char wpakey[WPAKEYLEN+1]; //Wifi Password. +1 for null character 
-  char ssid[SSIDLEN+1];     //SSID. +1 for null character
-  /***************************************************************/
-
-  uint8_t padding;          //To make the size multiple of 4
-} WifiSettingPico;
-#define WIFISETTINGOFFSET   4   //Offset of WifiSettingApple data field
-
-//****************************************
-
+//*****************************************************
 //
-//Machine Configuration
-#define USERCONFIGVER   0
-#define TIMEZONEIDVER   0
-#define CHKBYTECOMP     0x5A
+//               User Configuration
+//
+//*****************************************************
+#define USERCONFIGVER              1       //Version starts at 1
+#define TIMEZONEIDVER              1
+#define USERCONFIG_CHKBYTECOMP     0x5A
 
 //Bits definition of configbyte1
 #define CPUSPEEDFLAG   0b10000000 //1=Normal(1MHz), 0=Fast
@@ -146,31 +117,70 @@ typedef struct {
 
 typedef struct  {
   uint8_t  version;
-  uint8_t  checkbyte;   //=version^CHKBYTECOMP to indicate the structure data is valid    
+  uint8_t  checkbyte;   //=version^USERCONFIG_CHKBYTECOMP to indicate the structure data is valid    
   uint8_t  configbyte1;
   uint8_t  configbyte2; //=0, reserved for future
   uint8_t  timezoneidver;  
   uint8_t  timezoneid;
-} ConfigApple;
+} UserConfig_t;
+
+
+//*****************************************************
+//
+//              WIFI Setting
+//
+//*****************************************************
+#define WIFISETTINGVER           1
+#define WIFISETTING_CHKBYTECOMP  0x46
+#define WIFIAUTHTYPE             0
+#define SSIDLEN                  32
+#define WPAKEYLEN                63
 
 typedef struct {
-  uint32_t magic;
-  
-  /****** The following fields must match with ConfigApple ******/  
-  uint8_t  version;
-  uint8_t  checkbyte;   //=version^$5A to indicate the structure data is valid  
-  uint8_t  configbyte1;
-  uint8_t  configbyte2; //=0, reserved for future
-  uint8_t  timezoneidver;  
-  uint8_t  timezoneid;  
-  /***************************************************************/  
-  
-  uint8_t  padding[2];
-} ConfigPico;
-#define USERCONFIGOFFSET 4  //Offset of ConfigApple data field
+  uint8_t version;          //Version ID of the structure
+  uint8_t checkbyte;        //=version^WIFISETTING_CHKBYTECOMP to indicate the structure data is valid    
+  uint8_t authType;         //WIFI Authentication Type. Currently unused and should be 0
+  uint8_t reserved;         //Reserved. should be 0
+  uint32_t ipaddr;          //Reserved for manual IP Address configuration
+  uint32_t netmask;         //Reserved for manual IP Address configuration
+  uint32_t gateway;         //Reserved for manual IP Address configuration
+  uint32_t dns;             //Reserved for manual IP Address configuration
+  char wpakey[WPAKEYLEN+1]; //Wifi Password. +1 for null character  
+  char ssid[SSIDLEN+1];     //SSID. +1 for null character
+} WifiSetting_t; //len=117 bytes
+
+//*****************************************************
+//
+//           Network Setting
+//
+//*****************************************************
+#define NETWORKSETTINGVER 1
+#define NETWORKSETTING_CHKBYTECOMP 0x35
+#define TFTP_LASTSERVERLEN         31
+#define NTPSERVERORLEN             31
+
+typedef struct {
+  uint8_t version;            //Version ID of the structure
+  uint8_t checkbyte;          //=version^NETWORKSETING_CHKBYTECOMP to indicate the structure data is valid
+  uint8_t reserved;           //=0, reserved for future use
+  uint8_t tftp_maxattempt;    //TFTP maxattempt
+  uint8_t tftp_serverport_l;  //low byte of TFTP server port
+  uint8_t tftp_serverport_h;  //high byte of TFTP server port
+  uint8_t tftp_timeout_l;     //low byte of TFTP timeout
+  uint8_t tftp_timeout_h;     //high byte of TFTP timeout
+  bool    tftp_enable1kblock; //TFTP enable1kblock
+  char tftp_lastserver[TFTP_LASTSERVERLEN+1]; //+1 for NULL char. TFTP Last Server Hostname/IP Addr
+  char ntpserver_override[NTPSERVERORLEN+1];  //+1 for NULL char. NTP Server Override
+} NetworkSetting_t;
 
 
-/********* Time Zone Info **************/
+
+
+//*****************************************************
+//
+//              Time  Zone Info
+//
+//*****************************************************
 //These Time Zone Info may be changed in the future. timezoneidver is to identify the version of this Time Zone Information
 #define TZHOUR {-12,-11,-10,-9,-9,-8,-7,-6,-5,-4,-3,-3,-2,-1,0,1,2,3, 3,4, 4,5, 5, 5,6, 6,7,8, 8,9, 9,10,10,11,12,12,13,14}
 #define TZMIN  {  0,  0,  0,30, 0, 0, 0, 0, 0, 0,30, 0, 0, 0,0,0,0,0,30,0,30,0,30,45,0,30,0,0,45,0,30, 0,30, 0, 0,45, 0, 0}
@@ -183,7 +193,7 @@ typedef enum {
   ERR_NOTPICOW,
   ERR_NETTIMEOUT,
   ERR_SSIDNOTSET,
-  ERR_NONET,
+  ERR_NONET,    //No matching SSID
   ERR_WIFINOTCONNECTED,
   ERR_BADAUTH,  
   ERR_ABORTED,  //Aborted by user or system reset

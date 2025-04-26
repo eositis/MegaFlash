@@ -5,8 +5,8 @@
 #include "defines.h"
 
 void InitConfig();
-bool ValidateConfig(ConfigApple* config);
+bool ValidateConfig(UserConfig_t* config);
 void LoadConfig();
-void SaveConfig();
+void SaveConfigReboot();
 
 #endif

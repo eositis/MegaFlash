@@ -42,10 +42,48 @@
 #define RTARROW  213    //'\325'
 #define CDASH    211    //'\323'
 
+//Scroll Window Zero Page
+#define WNDLFT  0x20   //Range: 0-39, Default 0
+#define WNDWDTH 0x21   //Range: 1-40, Default 40
+#define WNDTOP  0x22   //Range: 0-22, Default 0
+#define WNDBTM  0x23   //Scroll Window Bottom Line + 1.
+                       //Range WNDTOP+1 - 24, Default 24
+#define WNDLFT_DEFAULT  0
+#define WNDWDTH_DEFAULT 40
+#define WNDTOP_DEFAULT  0
+#define WNDBTM_DEFAULT  24
 
+/////////////////////////////////////////////////////////
+// Data structure of CMD_GETVOLINFO command result
+//
+// type = 0 if ProDOS,1 = Empty, 2 = Unknown
+// Block Count (Low)
+// Block Count (High)
+// =0, Reserved
+// Volume Name Length
+// Volume Name, null terminated.
+//
+#define VOLNAMELEN 15
+typedef struct {
+  uint8_t type;
+  uint16_t blockCount;
+  uint8_t reserved;
+  uint8_t volNameLen;
+  char volName[16];
+} VolInfo_t;
+
+typedef enum {
+  TYPE_PRODOS = 0,
+  TYPE_EMPTY = 1,
+  TYPE_UNKNOWN = 2
+} VolumeType;
+
+/////////////////////////////////////////
+// Fatal Errors
+//
 enum ERROR {
   ERR_CONFIG_INVALID,
-  ERR_SAVECONFIG_FAIL,
+  ERR_SaveConfigReboot_FAIL,
   ERR_UINTCOUNT_ZERO,
   ERR_GETVOLINFO_FAIL,
   ERR_GETBLOCKCOUNT_FAIL,

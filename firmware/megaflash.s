@@ -123,7 +123,7 @@
                 ; Constants Definitions
                 ; The .inc file is shared with Control Panel Project
                 ;                
-                .include "../common/megaflash_defines.inc"
+                .include "../common/defines.inc"
 
 ;
 ;Variables
@@ -265,7 +265,7 @@ nobootmenu:
 
 ;-----
 ;A short delay sub-routine.
-;must be in IOROM segment so that it is not acclerated
+;must be in IOROM segment so that it is not accelerated
                 .segment "IOROM"
                 .reloc
 shortdelay:     jsr :+

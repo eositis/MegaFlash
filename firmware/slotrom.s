@@ -123,7 +123,7 @@ spentry:        lda #MODE_SP
 ; to screen.
 ; (For Development only)
 .if 0
-                .include "../common/megaflash_defines.inc"   
+                .include "../common/defines.inc"   
 speedtest:      ldx #STCMDLEN-1         
 :               lda stcmd,x             
                 sta pdCommandCode,x

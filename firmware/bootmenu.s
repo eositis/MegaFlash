@@ -19,7 +19,7 @@
 
                 .include "buildflags.inc"
                 .include "defines.inc"
-                .include "../common/megaflash_defines.inc"
+                .include "../common/defines.inc"
                 .include "macros.inc"
 
 

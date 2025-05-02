@@ -16,7 +16,7 @@ BOOTMENUFILE=bootmenu.s
 FPUFILE=fpu.s
 PATCHFILE=patches.s
 ACCELFILE=accel.s
-INC = defines.inc macros.inc buildflags.inc
+INC = defines.inc macros.inc buildflags.inc ../common/defines.inc
 
 #### Apple IIc Plus ####
 FLAGS_IICP= $(FLAGS) -D IICP

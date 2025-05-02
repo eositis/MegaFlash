@@ -26,13 +26,6 @@ CMD_DISABLEROMDISK      =       $07
 CMD_LOAD_CPANEL         =       $08
 CMD_TESTWIFI            =       $09
 
-CMD_RESETTIMER_US       =       $0A
-CMD_GETTIMER_US         =       $0B
-CMD_RESETTIMER_MS       =       $0C
-CMD_GETTIMER_MS         =       $0D
-CMD_RESETTIMER_S        =       $0E
-CMD_GETTIMER_S          =       $0F
-
 CMD_GETDEVINFO          =       $10
 CMD_GETDEVSTATUS        =       $11
 CMD_GETUNITSTATUS       =       $12
@@ -47,7 +40,7 @@ CMD_SETRTC_PRODOS       =       $1A
 CMD_SETRTC_PRODOS25     =       $1B
 CMD_WRITEBLOCKSIZETOVDH =       $1C
 CMD_FORMATDISK          =       $1D
-   
+CMD_ERASEDISK           =       $1E   
      
 CMD_SAVEUSERCONFIG      =       $20
 CMD_GETUSERCONFIG       =       $21
@@ -71,8 +64,17 @@ CMD_FOUT                =       $3A
 CMD_FMUL10              =       $3B
 CMD_FDIV10              =       $3C
 
-CMD_TFTPRUN             =       $40
-CMD_TFTPSTATUS          =       $41
+CMD_RESETTIMER_US       =       $40
+CMD_GETTIMER_US         =       $41
+CMD_RESETTIMER_MS       =       $42
+CMD_GETTIMER_MS         =       $43
+CMD_RESETTIMER_S        =       $44
+CMD_GETTIMER_S          =       $45
+
+CMD_TFTPRUN             =       $50
+CMD_TFTPSTATUS          =       $51
+CMD_TFTPLOADLASTSERVER  =       $52
+CMD_TFTPSAVELASTSERVER  =       $53
 
 
 WE_KEY                  =       $71     ;Write Enable Key

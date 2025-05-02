@@ -18,13 +18,6 @@
 #define CMD_LOAD_CPANEL         0x08
 #define CMD_TESTWIFI            0x09
 
-#define CMD_RESETTIMER_US       0x0A
-#define CMD_GETTIMER_US         0x0B
-#define CMD_RESETTIMER_MS       0x0C
-#define CMD_GETTIMER_MS         0x0D
-#define CMD_RESETTIMER_S        0x0E
-#define CMD_GETTIMER_S          0x0F
-
 #define CMD_GETDEVINFO          0x10
 #define CMD_GETDEVSTATUS        0x11
 #define CMD_GETUNITSTATUS       0x12
@@ -39,7 +32,7 @@
 #define CMD_SETRTC_PRODOS25     0x1b
 #define CMD_WRITEBLOCKSIZETOVDH 0x1c
 #define CMD_FORMATDISK          0x1d
-
+#define CMD_ERASEDISK           0x1e
 
 #define CMD_SAVEUSERCONFIG      0x20
 #define CMD_GETUSERCONFIG       0x21
@@ -63,19 +56,31 @@
 #define CMD_FMUL10              0x3b
 #define CMD_FDIV10              0x3c
 
-#define CMD_TFTPRUN             0x40
-#define CMD_TFTPSTATUS          0x41
+#define CMD_RESETTIMER_US       0x40
+#define CMD_GETTIMER_US         0x41
+#define CMD_RESETTIMER_MS       0x42
+#define CMD_GETTIMER_MS         0x43
+#define CMD_RESETTIMER_S        0x44
+#define CMD_GETTIMER_S          0x45
+
+#define CMD_TFTPRUN             0x50
+#define CMD_TFTPSTATUS          0x51
+#define CMD_TFTPLOADLASTSERVER  0x52
+#define CMD_TFTPSAVELASTSERVER  0x53
 
 //MegaFlash Error Code
-#define ERR_SUCCESS      0x00  /* No Error*/
-#define ERR_NOFLASH      0x01  /* Supported Flash Chip is not found  */
-#define ERR_UNKNOWNCMD   0x02  /* Unknown Command Code */
-#define ERR_INVALIDWEKEY 0x03  /* Invalid Write Enable KEY */
-#define ERR_INVALIDUNIT  0x04  /* Invalid Unit Number */
-#define ERR_INVALIDBLK   0x05  /* Invalid Block Number */
-#define ERR_RWERROR      0x06  /* ReadBlock/WriteBlock Error */
-#define ERR_INVALIDPAGE  0x07  /* LoadCPanel Invalid Page */
-#define ERR_USERCONFIG   0x08  /* Error in accessing User Configuration */
+#define MFERR_NONE         0x00  /* No Error*/
+#define MFERR_NOFLASH      0x01  /* Supported Flash Chip is not found  */
+#define MFERR_NOTPICOW     0x02  /* Not running on PicoW */
+#define MFERR_UNKNOWNCMD   0x03  /* Unknown Command Code */
+#define MFERR_INVALIDWEKEY 0x04  /* Invalid Write Enable KEY */
+#define MFERR_INVALIDUNIT  0x05  /* Invalid Unit Number */
+#define MFERR_INVALIDBLK   0x06  /* Invalid Block Number */
+#define MFERR_RWERROR      0x07  /* ReadBlock/WriteBlock Error */
+#define MFERR_INVALIDPAGE  0x08  /* LoadCPanel Invalid Page */
+#define MFERR_USERCONFIG   0x09  /* Error in accessing User Configuration */
+#define MFERR_INVALIDARG   0x0A  /* Invalid Argument   */
+#define MFERR_TIMEOUT      0x0B  /* Timeout Error.  */
 
 //Write Enable Key
 #define WRITEENABLEKEY  0x71
@@ -189,18 +194,18 @@ typedef struct {
 
 /******************************* Test Wifi *********************************/
 typedef enum {
-  ERR_UNKNOWN,
-  ERR_NOTPICOW,
-  ERR_NETTIMEOUT,
-  ERR_SSIDNOTSET,
-  ERR_NONET,    //No matching SSID
-  ERR_WIFINOTCONNECTED,
-  ERR_BADAUTH,  
-  ERR_ABORTED,  //Aborted by user or system reset
-  ERR_NOIP,     //Wifi OK, DHCP problem
-  ERR_DNSFAILED,//Wifi OK, DHCP OK, DNS problem
-  ERR_NTPFAILED,//Wifi OK, DHCP OK, DNS OK, NTP problem
-  ERR_NOERR     //Everything ok
+  NETERR_UNKNOWN,
+  NETERR_NOTPICOW,
+  NETERR_TIMEOUT,
+  NETERR_SSIDNOTSET,
+  NETERR_NONET,    //No matching SSID
+  NETERR_WIFINOTCONNECTED,
+  NETERR_BADAUTH,  
+  NETERR_ABORTED,  //Aborted by user or system reset
+  NETERR_NOIP,     //Wifi OK, DHCP problem
+  NETERR_DNSFAILED,//Wifi OK, DHCP OK, DNS problem
+  NETERR_NTPFAILED,//Wifi OK, DHCP OK, DNS OK, NTP problem
+  NETERR_NONE      //Everything ok
 } NetworkError_t;
 
 

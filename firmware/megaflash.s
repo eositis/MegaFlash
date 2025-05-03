@@ -335,7 +335,7 @@ chkmegaflashex:
                 ;may get stuck at 1.
                 ;So, a loop counter is used to avoid dead loop
           
-                ldx #20
+                ldx #25
 :               bit statusreg
                 bpl notbusy     ;Branch if busy flag is 0
                 dex

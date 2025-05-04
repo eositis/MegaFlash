@@ -84,7 +84,12 @@ boot:           lda #MODE_COPYBC        ;Copy bootcode to RAM
                 ;A=unitCount, X=prodosPresent
                 
                 jmp BCRUN               ;execute the bootcode
-                nop                     ;filler byte        
+                
+                ;******************************************
+                ;Device Signature Byte #1
+                ;******************************************
+                .assert .LOBYTE(*) = $10, error, "Signature not at $Cn10"
+                .byte SIGNATURE_AT_10
 
                 ;***********************************************
                 ;$90 and $4B must be in location $C411 and $C412
@@ -153,17 +158,33 @@ stcmd:          .byte PD_READ   ;read command
                 .word 0000      ;Block Number
 STCMDLEN        = (* - stcmd)    
 .endif                        
-                        
 
+;
+; Data Table for MegaFlash Device
+;                        
+                .segment "SLOTROM_F8" ;at $CnF8
+                .org (SLOTCN*$0100+$F8)
+
+                ;
+                ;Clock Driver Offset at $CnF8
+                ;
+                .assert clockdriver=0 || .HIBYTE(clockdriver)=SLOTCN, error, "clock driver not in slot rom"
+                .byte   .LOBYTE(clockdriver)    ;Clock Driver Entry Point, =0 if clock driver is not implemented         
+
+                ;
+                ;Firmware Version at $CnF9
+                ;
+                .byte   FWVERSION               ;Our Firmware Version
+
+                ;
+                ;Device Signature Byte #2 at $CnFA
+                ;
+                .assert .LOBYTE(*) = $FA, error, "Signature not at $CnFA"
+                .byte SIGNATURE_AT_FA
+                
 ;
 ; Data Table for ProDOS/Smartport Interface
 ;
-                .segment "SLOTROM_F9" ;at $CnF9
-                .reloc
-                
-                .assert clockdriver=0 || .HIBYTE(clockdriver)=SLOTCN, error, "clock driver not in slot rom"
-                .byte   .LOBYTE(clockdriver)    ;Clock Driver Entry Point, =0 if clock driver is not implemented         
-                .byte   FWVERSION               ;Our Firmware Version
                 
 ;$CnFB
 ;Smartport ID Type

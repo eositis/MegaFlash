@@ -24,18 +24,6 @@
                 ; Exports
                 ;
         
-                ;
-                ;togglecpuspeed, showcpuspeed only present in IIc+
-                ;
-                .ifdef IICP
-                .import togglecpuspeed,showcpuspeed
-                .else
-                togglecpuspeed := known_rts
-                showcpuspeed   := known_rts
-                .endif
-                
-                
-                
                 
 ;---------------------------------------------------------------------------------     
 ; slxeq $C752 is the original entry point of Slinky firmware.
@@ -173,10 +161,8 @@ jmptable:
                 .addr copybc            ; 1
                 .addr coldstartinit     ; 2
                 .addr clockdriverimpl   ; 3
-                .addr togglecpuspeed    ; 4
-                .addr showcpuspeed      ; 5
-                .addr loadcpanel        ; 6
-                .addr copybm            ; 7        
+                .addr loadcpanel        ; 4
+                .addr copybm            ; 5        
 JMPTBLLEN       = (*-jmptable)/2        ;No of entries of jmptable
 
 

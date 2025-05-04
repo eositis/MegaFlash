@@ -22,6 +22,16 @@ NEXTBOOTSLOT    =     $C5             ;IIc+: $C5
 NEXTBOOTSLOT    =     $C6             ;IIc : $C6
 .endif
 
+;
+;Device Signature Bytes
+;There are two device signature bytes in slotrom ($Cn00-$CnFF) to identify MegaFlash
+; $Cn10 = 77 (ASCII code of 'M')
+; $CnFA = 70 (ASCII code of 'F')
+;
+;
+SIGNATURE_AT_10   = 77          ;$4D
+SIGNATURE_AT_FA   = 70          ;$46
+
 
 ;
 ;Boot Code/Boot Menu
@@ -38,10 +48,8 @@ MODE_SP           :=      MODE_PRODOS|$80 ;MSB set to indicate Smartport call
 MODE_COPYBC       :=      $1              ;Copy Bootcode to RAM
 MODE_INIT         :=      $2              ;Cold Start Init
 MODE_CLOCKDRV     :=      $3              ;ProDOS clockdriver
-MODE_TOGGLESPEED  :=      $4              ;IIC+: Toggle CPU speed
-MODE_SHOWSPEED    :=      $5              ;IIC+: Show current CPU speed on screen
-MODE_LOADCPANEL   :=      $6              ;Load Control Panel code to CPANELADDR
-MODE_LOADBOOTMENU :=      $7              ;Load BootMenu code to BMRUN
+MODE_LOADCPANEL   :=      $4              ;Load Control Panel code to CPANELADDR
+MODE_LOADBOOTMENU :=      $5              ;Load BootMenu code to BMRUN
                                           ;Currently Not Used by the firmware. 
                                           ;Provide a well-defined method to execute bootmenu
 

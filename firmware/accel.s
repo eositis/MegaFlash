@@ -391,7 +391,7 @@ msg:    .byte   $A0, 'F'|$80, 'a'|$80, 's'|$80, 't'|$80, $A0    ; ' Fast '
         .endproc
         
 ; ----------------------------------------------------------------------------  
-; Toogle CPU speed 
+; Toggle CPU speed 
 ; call from auxbank only
 togglecpuspeed:
         jsr     setmigpage2

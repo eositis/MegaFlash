@@ -241,27 +241,14 @@ fpudisabled:
 
 
 nomf:
-                ;Show Boot Menu if enabled by copying the code to RAM
-                ;and write its entry address to $00,$01
-                ;See coldstart2 routine in patches.s
+                ;Execute Boot Menu if enabled
                 bit toshowbootmenu      ;Test MSB of toshowbootmenu
                 bpl nobootmenu
-                stz toshowbootmenu      ;Clear the MSB
+                stz toshowbootmenu      ;Clear the MSB of toshowbootmenu
       
                 jsr copybm              ;Copy Boot Menu code to RAM
                 jmp BMRUN               ;Execute Boot Menu
-                
-.if 0                
-                jsr copybm              ;Copy Boot Menu code to RAM
-                lda #.HIBYTE(BMRUN)     ;Write Address of Boot Menu Code
-                sta $01                 ;to pointer at $00 to execute the code
-                                        ;No need to write to low-byte since it
-                                        ;should be 0.
-                .assert .LOBYTE(BMRUN)=0, error, "Low Byte of BMRUN not 0"
-.endif
-
-nobootmenu: 
-                rts
+nobootmenu:     rts
 
 ;-----
 ;A short delay sub-routine.
@@ -271,31 +258,6 @@ nobootmenu:
 shortdelay:     jsr :+
 :               rts
 
-.if 0
-;--------------------------------------------------------
-;Delay Routine in Aux Bank
-;Built-in for IIc plus
-;
-.ifdef IICP 
-adelay          := $FCB5
-.else
-                ;This routine is IIc only.
-                ;ROM3 segment is bigger on Apple IIc
-                ;So, put it into that segment
-                .segment "ROM3"
-                .reloc
-adelay:         sec
-adelay2:        pha
-adelay3:        sbc #$01
-                bne adelay3
-                pla
-                sbc #$01
-                bne adelay2
-                rts
-.endif
-.endif
-
-                
 ;***********************************************************
 ;
 ; Device / Unit Status

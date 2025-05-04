@@ -750,6 +750,9 @@ exec_restore:
                 sta ramcodeloc-1,y   
                 dey                
                 bne :-           
+                
+                lda #CMD_MODELINEAR     ;Restore to linear mode
+                sta cmdreg
                 rts
 
 ;----------------------------------------------------------------------
@@ -838,7 +841,10 @@ writeoneblock:  lda #CMD_MODEINTERLEAVED        ;switch to interleaved mode, res
 :               lda paramreg       
                 sta ramcodeloc-1,y   
                 dey                
-                bne :-             
+                bne :-         
+
+                lda #CMD_MODELINEAR     ;Restore to linear mode
+                sta cmdreg                
                 rts
 .endif
 ;----

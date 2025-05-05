@@ -297,7 +297,7 @@ chkmegaflashex:
                 ;may get stuck at 1.
                 ;So, a loop counter is used to avoid dead loop
           
-                ldx #25
+                ldx #100        ;A high value is needed to give Pico to complete the command        
 :               bit statusreg
                 bpl notbusy     ;Branch if busy flag is 0
                 dex

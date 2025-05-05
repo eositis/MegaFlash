@@ -14,16 +14,14 @@
 #include "asm.h"
 
 
-// Position and size of WIFI setting window
+// Position and size of Format window
 #define XPOS 1
 #define YPOS 6
 #define WIDTH 38
 #define HEIGHT 15
 
 static char formatWindowTitle[]  = "Format (1/3)";
-static char driveNumberPrompt[]  = "Drive Number (1- )? ";
-static const char volNameFormatStr[]   = " Name  = %s\n\r";
-static const char sizeFormatStr[]      = " Size  = %u Blocks\n\r";
+
 
 //
 // Variable to pass data to _DoFormat asm routine
@@ -37,10 +35,11 @@ uint16_t fmt_blockCount;
 // 
 // Input: page - '1' , '2' or '3' for page number display
 //
-void DrawFormatWindowFrame(char page) {
+static void DrawFormatWindowFrame(char page) {
   formatWindowTitle[8]=page;  
   wnd_DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,formatWindowTitle,true,true);  
 }
+
 
 
 
@@ -48,11 +47,9 @@ void DrawFormatWindowFrame(char page) {
 // The routine to drive the formatting process
 //
 void DoFormat() {
-  static_local bool enter;           //Enter key pressed
   static_local uint8_t unitCount;
   static_local uint8_t error;
   static_local uint16_t maxBlockCount;
-  static_local VolInfo_t volInfo; //Data structure returned by CMD_GETVOLINFO command
   
   ///////////////////////////////////////////////////////////
   //
@@ -74,10 +71,9 @@ void DoFormat() {
   //
   //Enter Drive Number
   //
-  driveNumberPrompt[16]=unitCount+'0';
-  cputs(driveNumberPrompt);
-  enter=ti_EnterNumber(1,1,unitCount);
-  if (!enter) return;
+  strDriveNumberPrompt[16]=unitCount+'0';
+  cputs(strDriveNumberPrompt);
+  if (!ti_EnterNumber(1,1,unitCount)) return;
   fmt_selectedUnit = (uint8_t) ti_enteredNumber;
   
   ///////////////////////////////////////////////////////////
@@ -99,8 +95,8 @@ void DoFormat() {
   gotoxy00();
   cprintf("Number of Blocks (32-%u)? ",maxBlockCount);
   
-  enter = ti_EnterNumberDefault(5,32,maxBlockCount,maxBlockCount); //Set Default to maxBlockCount
-  if (!enter) return;
+  //Set Default to maxBlockCount
+  if (!ti_EnterNumberDefault(5,32,maxBlockCount,maxBlockCount)) return;
   fmt_blockCount = ti_enteredNumber;
   
   //
@@ -111,8 +107,7 @@ void DoFormat() {
   
   ti_textBuffer[0]='\0';
 again:
-  enter = ti_EnterVolName(13,2);  
-  if (!enter) return;
+  if (!ti_EnterVolName(13,2)) return;
 
   gotoxy(0,5);
   clreol();
@@ -136,39 +131,24 @@ again:
   //    Page 3
   //
   ///////////////////////////////////////////////////////////
-  
-  //Get current volume info
-  if (!GetVolInfo(fmt_selectedUnit,&volInfo)) FatalError(ERR_GETVOLINFO_FAIL);
-
   DrawFormatWindowFrame('3');
   gotoxy(1,HEIGHT-1);
   cputs(strEditPrompt); 
   
   //Print current volume info
   gotoxy00();
-  cputs(strCurrent);
-  newline();
-  cprintf(" Drive = %u",fmt_selectedUnit);  
-  newline();
-  cputs(" Type  = ");
-  PrintVolumeType(volInfo.type);
-  newline();
-  if (volInfo.type==TYPE_PRODOS) {
-    cprintf(volNameFormatStr,volInfo.volName);
-    cprintf(sizeFormatStr,volInfo.blockCount);
-  }
-  
+  PrintDriveInfo(fmt_selectedUnit);
+    
   //Print new volume info
   gotoxy(0,6);
   cputs(strNew);
   newline();
-  cprintf(volNameFormatStr,fmt_volName);
-  cprintf(sizeFormatStr,fmt_blockCount);
+  cprintf(strVolNameFormat,fmt_volName);
+  cprintf(strVolSizeFormat,fmt_blockCount);
   newline2();
 
   //Ask user to type CONFIRM
-  enter = AskUserToConfirm();
-  if (enter==false) return;
+  if (!AskUserToConfirm()) return;
     
   ///////////////////////////////////////////////////////////
   //

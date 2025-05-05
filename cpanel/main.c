@@ -6,6 +6,7 @@
 #include "defines.h"
 #include "textstrings.h"
 #include "ui-wnd.h"
+#include "ui-misc.h"
 #include "asm.h"
 #include "config.h"
 #include "mainmenu.h"
@@ -30,43 +31,66 @@ IIc+. It also support Slinky and serial port emulation.
 //
 //Global Variables
 //
-UserConfig_t config;
+UserSettings_t config;
 bool isAppleIIcplus;
 bool isWifiSupported;
 uint8_t boardType;
-bool showPicoFirmwareVer;
 
 
 /////////////////////////////////////////////////////////////////////
 // Fatal Error handler
 //
 void FatalError(uint8_t errorcode) {
-  wnd_ResetScrollWindow();
-  clrscr();
-  cprintf("Unexpected Error:%d\n\rPress any key to reboot.",errorcode);
+  ResetScreen();
+  cprintf("Unexpected Error:%d",errorcode);
+  newline2();
+  cputs(strPressanykeyto_);
+  cputs(strreboot);
   beep();
   cgetc();
   Reboot();
 }
 
-
+//////////////////////////////////////////////////////////////////
+// Show Device Info String in 80 column mode
+//
+void ShowDeviceInfoString() {
+  set80(); 
+  clrscr();
+  //Request System Information
+  if (!GetInfoString(INFOSTR_DEVICE)) FatalError(ERR_GETDEVINFOSTR_FAIL);  
+  PrintStringFromDataBuffer();
+  newline2();
+  cputs(strPressanykeyto_);
+  cputs(strcontinue);
+  cgetc();
+  clrscr(); //Clearing the screen before switching to 40 reduces flickering
+  set40();
+}
 
 void main() { 
 #ifndef TESTBUILD
-  DisableROMDisk();
-  boardType = GetBoardType();
-  isWifiSupported = boardType & 0x80; //MSB set if Wifi is supported
+  //If the user reset the computer during data transfer, the transfer mode may be left at interleaved.
+  //So, reset the mode to linear to avoid potential problem.
+  SendCommand(CMD_MODELINEAR);
+
+  //Make sure ROMDisk is disabled.
+  SendCommand(CMD_DISABLEROMDISK);
+  
+  //Read Pico Device Info
+  SendCommand(CMD_GETDEVINFO);
+  boardType = GetParam8Offset(5);                     //Read board type
+  isWifiSupported = boardType & 0x80;                 //MSB set if Wifi is supported
+  if (ReadOpenAppleButton()) ShowDeviceInfoString();  //Device Info String already in data buffer
 #else
-  boardType = BRD_PICOW;
+  boardType = BRD_PICO2W;
   isWifiSupported = true;
 #endif  
-
+  
   isAppleIIcplus = IsAppleIIcplus();
-  showPicoFirmwareVer = ReadOpenAppleButton(); 
   LoadConfig();
   DoMainMenu();
 	
-  wnd_ResetScrollWindow();
-  clrscr();
+  ResetScreen();
 	return;
 }

@@ -16,21 +16,21 @@
 #include "wifi.h"
 #include "testwifi.h"
 #include "format.h"
+#include "tftp.h"
 
 
 //Variables
 //=1 if running on IIc
 //=0 if running on IIc+
-//for adjusting postion of menu items
+//for adjusting position of menu items
 static uint8_t isAppleIIc;
 
 //
 // Defined in main.c
 //
-extern UserConfig_t config;
+extern UserSettings_t config;
 extern bool isAppleIIcplus;
 extern bool isWifiSupported;
-extern bool showPicoFirmwareVer;
 
 //
 // Constants
@@ -43,23 +43,29 @@ static char mmTitle[] = "MegaFlash Control Panel";
 static char mmPrompt[] ="Cancel:esc   Select:\310 \325 \312 \313 \315";
 static const char* mainMenuItems[] = {
   "Power on CPU Speed",
-  "Auto-boot MegaFlash",
+  "Boot MegaFlash",
   "RAM Disk",
   "Applesoft BASIC FPU",
   "Network Time Sync",
   "Time Zone",
-  "Wifi Setting >\n",
+  "Wifi Settings >\n",
   "Test Wifi/NTP >",
-  "Image Transfer via WIFI >",
+  "Disk Image Transfer via WIFI >",
   "Format >",
   "Erase All Settings\n",
   "Save and Reboot"
 };
 #define MMITEMCOUNT 12
-#define MM_XPOS 4
-#define MM_YPOS 3
-#define MM_WIDTH 32
-#define MM_HEIGHT 18
+
+//Window Position and Size
+#define XPOS 4
+#define YPOS 3
+#define WIDTH 32
+#define HEIGHT 18
+
+//Menu Position
+#define MENU_XPOS 0
+#define MENU_YPOS 0
 
 
 static void ShowNA() {
@@ -68,7 +74,7 @@ static void ShowNA() {
 }
 
 static void ShowCPUSpeed() {
-  gotoxy(24,1);
+  gotoxy(24,MENU_YPOS);
   if (config.configbyte1 & CPUSPEEDFLAG) cputs("Normal");
   else cputs("  Fast");
 }
@@ -79,7 +85,7 @@ static void ToggleCPUSpeed() {
 }
 
 static void ShowAutoBoot() {
-  gotoxy(27,2-isAppleIIc);
+  gotoxy(27,MENU_YPOS+1-isAppleIIc);
   if (config.configbyte1 & AUTOBOOTFLAG) cputs(strChecked);
   else cputs(strNotChecked);
 }
@@ -90,7 +96,7 @@ static void ToggleAutoBoot() {
 }
 
 static void ShowRamdisk() {
-  gotoxy(27,3-isAppleIIc);
+  gotoxy(27,MENU_YPOS+2-isAppleIIc);
   if (config.configbyte1 & RAMDISKFLAG) cputs(strChecked);
   else cputs(strNotChecked);   
 }
@@ -101,7 +107,7 @@ static void ToggleRamdisk() {
 }
 
 static void ShowFPU() {
-  gotoxy(27,4-isAppleIIc);
+  gotoxy(27,MENU_YPOS+3-isAppleIIc);
   if (HasFPUSupport()) {
     if (config.configbyte1 & FPUFLAG) cputs(strChecked);
     else cputs(strNotChecked);   
@@ -118,7 +124,7 @@ static void ToggleFPU() {
 }
 
 static void ShowNTPClient() {
-  gotoxy(27,5-isAppleIIc);
+  gotoxy(27,MENU_YPOS+4-isAppleIIc);
 
   if (!isWifiSupported) {
     ShowNA();
@@ -136,7 +142,7 @@ static void ToggleNTPClient() {
 }
   
 static void ToggleTimezone(uint8_t key) {
-  gotoxy(21,6-isAppleIIc);
+  gotoxy(21,MENU_YPOS+5-isAppleIIc);
   if (!isWifiSupported) {
     ShowNA();
   } else {
@@ -158,16 +164,9 @@ static void ShowAllOptions() {
 }
 
 static void DrawMainMenuWindowFrame(bool isActive) {
-  wnd_DrawWindow(MM_XPOS,MM_YPOS,MM_WIDTH,MM_HEIGHT,mmTitle,isActive,false);
+  wnd_DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,mmTitle,isActive,false);
 }
 
-
-static void ShowFirmwareVer() {
-  gotoxy(0,23);
-  cputs("Pico Firmware ");
-  SendCommand(CMD_GETDEVINFO);
-  PrintStringFromDataBuffer();
-}
 
 void DoMainMenu() {
   static_local uint8_t itemCount;
@@ -188,16 +187,12 @@ void DoMainMenu() {
     isAppleIIc = 1;   //Move some items up
   }
   
-  mnu_currentMenuItem = 0;
+  selectedItem = 0;
   do{
     if (redrawAll) {
       redrawAll=false;
       wnd_ResetScrollWindow();
       clrscr();
-      //The firmware is drawn outside the Main Menu Window
-      //show it while scroll window is reset.
-      if (showPicoFirmwareVer) ShowFirmwareVer();
-
       DrawMainMenuWindowFrame(true);
       gotoxy(0,17);
       cputs(mmPrompt);
@@ -206,7 +201,8 @@ void DoMainMenu() {
     }
     
     do {
-      key=DoMenu(menuItems,itemCount,0,1);
+      mnu_currentMenuItem = selectedItem; //Restore last selected item
+      key=DoMenu(menuItems,itemCount,MENU_XPOS,MENU_YPOS);
       if (key==KEY_ESC) return;
       
       selectedItem = mnu_currentMenuItem;
@@ -236,7 +232,7 @@ void DoMainMenu() {
         case 6:
           //Wifi Setting
           if (key!=KEY_ENTER) break;
-          DrawMainMenuWindowFrame(false);  //Inactive Main Menu Window 
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;        
           if (isWifiSupported) DoWifiSetting();
           else ShowPicoWNeededDialog();
@@ -244,39 +240,41 @@ void DoMainMenu() {
         case 7:
           //Test Wifi/NTP
           //The Test window covers the main menu window completely.
-          //No need to inactive main menu window 
+          //No need to Inactivate main menu window 
           if (key!=KEY_ENTER) break;          
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window                    
           redrawAll = true;    
           if (isWifiSupported) DoTestWifi();
           else ShowPicoWNeededDialog();
           break;
         case 8:  
           //Disk Image Transfer
-          //DoImageTransfer();
-          beep();       //Not yet implemented
-          //redrawAll = true;   
+          if (key!=KEY_ENTER) break;             
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
+          DoTFTPImageTransfer();
+          redrawAll = true;   
           break;
         case 9:
           //Format Megaflash Drive
           if (key!=KEY_ENTER) break;       
-          DrawMainMenuWindowFrame(false);  //Inactive Main Menu Window           
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window           
           redrawAll = true;       
           DoFormat();
           break;
         case 10:
           //Erase All Settings
           if (key!=KEY_ENTER) break;     
-          DrawMainMenuWindowFrame(false);  //Inactive Main Menu Window 
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;
           ShowEraseSettingsDialog();
           break;
         case 11:
           //Save and Reboot
           if (key!=KEY_ENTER) break;          
-          DrawMainMenuWindowFrame(false);  //Inactive Main Menu Window 
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;
           if (ShowSaveConfirmDialog()) {
-           SaveConfigReboot(); //No return. Reboot after saving
+           SaveUserSettingsReboot(); //No return. Reboot after saving
           } 
           break;
      }  

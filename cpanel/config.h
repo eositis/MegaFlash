@@ -5,8 +5,8 @@
 #include "defines.h"
 
 void InitConfig();
-bool ValidateConfig(UserConfig_t* config);
+bool ValidateConfig(UserSettings_t* config);
 void LoadConfig();
-void SaveConfigReboot();
+void SaveUserSettingsReboot();
 
 #endif

@@ -106,7 +106,7 @@ void StartTransfer() {
   SendCommand(CMD_RESETTIMER_S);
   
   printf("Starting...");
-  Send_CMD_TFTPRUN();
+  StartTFTP();
   printf("ok\n");
   
   gotoxy(0,2);

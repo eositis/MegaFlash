@@ -82,18 +82,23 @@ void wnd_DrawWindow(uint8_t x,uint8_t y,uint8_t width,uint8_t height,const char*
   cputs(title);
   cputc(' ');  
   
-  //Extend the box 2 row upwards for title bar
-  wnd_DrawBox(x,y-2,width,height+2);  
-  
-  //Horizontal Bar under Title
-  gotoxy(x,y-1);
-  fillchar_direct(TOP_BAR,width);
-  
-  //Clear Content Area if clearContentArea is true
-  if (clearContentArea) {
-    for(i=y+height-1;i>=y;--i) {  
-      gotoxy(x, i);
-      fillchar_direct(' ',width);
+  //To optimize the performance, don't draw the frame if isActive is false.
+  //The only purpose of setting isActive to false is to deactivate current window
+  //In this case, we just need to redraw the title bar.
+  if (isActive) {
+    //Extend the box 2 row upwards for title bar
+    wnd_DrawBox(x,y-2,width,height+2);  
+    
+    //Horizontal Bar under Title
+    gotoxy(x,y-1);
+    fillchar_direct(TOP_BAR,width);
+    
+    //Clear Content Area if clearContentArea is true
+    if (clearContentArea) {
+      for(i=y+height-1;i>=y;--i) {  
+        gotoxy(x, i);
+        fillchar_direct(' ',width);
+      }
     }
   }
   

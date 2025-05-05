@@ -11,22 +11,31 @@
 #include "textstrings.h"
 
 // Position and size of Test Wifi window
-#define XPOS 4
-#define YPOS 3
-#define WIDTH 32
-#define HEIGHT 18
-#define HTAB 24
-
-static const char windowTitle[] = "Test Wifi Connection";
+#define XPOS 3
+#define YPOS 6
+#define WIDTH 34
+#define HEIGHT 15
+#define HTAB 25
 
 
 /////////////////////////////////////////////////////////////////////
 // Draw Test Wifi Window Frame
 //
-void DrawTestWifiWindowFrame() {
+static void DrawTestWifiWindowFrame() {
+  static const char windowTitle[] = "Test Wifi Connection";
   wnd_DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,windowTitle,true,true);  
 }
 
+//////////////////////////////////////////
+// Print String from Data Buffer
+// For TESTBUILD, print a fixed IP Addr
+static void PrintIPAddrFromDataBuffer() {
+  #ifndef TESTBUILD 
+  PrintStringFromDataBuffer();
+  #else 
+  cputs("192.168.100.111");
+  #endif
+}
 
 void DoTestWifi(){
   uint8_t error;  //Making it static_local results in longer code
@@ -40,7 +49,7 @@ void DoTestWifi(){
   //Step 2: Perform the test
   error=TestWifi();
   #ifdef TESTBUILD
-  error=ERR_NOERR;
+  error=NETERR_NONE;
   cgetc_showclock();
   #endif
   DrawTestWifiWindowFrame();
@@ -50,45 +59,45 @@ void DoTestWifi(){
   cputs(strResult);
   newline2();
   
-  if (error == ERR_UNKNOWN || error == ERR_NOTPICOW) {
+  if (error == NETERR_UNKNOWN || error == NETERR_NOTPICOW) {
     cputs("Unexpected Error.");  
     goto exit;
   }
   
-  if (error == ERR_NETTIMEOUT) {
+  if (error == NETERR_TIMEOUT) {
     cputs("Timeout Error.\n\rNo response from MegaFlash.");
     goto exit;
   }
   
-  if (error == ERR_SSIDNOTSET) {
-    cputs("Wifi has not been setup.\n\n\rPlease select Wifi Setting\n\rfrom Main Menu.");
+  if (error == NETERR_SSIDNOTSET) {
+  cputs("Wifi has not been setup.\n\n\rPlease select Wifi Settings from\n\rMain Menu.");
     goto exit;
   }
   
-  if (error == ERR_NONET) {
+  if (error == NETERR_NONET) {
     cputs("No matching SSID found.");
     goto exit;
   }
   
-  if (error == ERR_WIFINOTCONNECTED || error == ERR_BADAUTH) {
+  if (error == NETERR_WIFINOTCONNECTED || error == NETERR_BADAUTH) {
     cputs("WIFI not connected.\n\n\rProbably, it is due to\n\rauthentication problem.");   
     goto exit;
   }
   
-  if (error == ERR_ABORTED) {
+  if (error == NETERR_ABORTED) {
     cputs(strAborted);
     goto exit;
   }
   
   //Wifi Connection OK
-  if (error >= ERR_NOIP) {
+  if (error >= NETERR_NOIP) {
     cputs("WIFI Connection"); 
     gotox(HTAB);
     cputs(str____OK);
   }
 
   //DHCP Failed
-  if (error == ERR_NOIP) {
+  if (error == NETERR_NOIP) {
     newline2();    
     cputs("DHCP");
     gotox(HTAB);
@@ -97,27 +106,27 @@ void DoTestWifi(){
   }
   
   //Print IP Addresses
-  if (error > ERR_NOIP) {
-    cputs("\n\r IP Address: ");
+  if (error > NETERR_NOIP) {
+    cputs("\n\r IP Address:");
     PrintIPAddrFromDataBuffer();
-    cputs("\n\r Netmask   : ");
-    PrintIPAddrFromDataBuffer();    
-    cputs("\n\r Gateway   : ");
-    PrintIPAddrFromDataBuffer();    
-    cputs("\n\r DNS Server: ");
-    PrintIPAddrFromDataBuffer();    
+    cputs("\n\r Netmask   :");
+    PrintIPAddrFromDataBuffer();
+    cputs("\n\r Gateway   :");
+    PrintIPAddrFromDataBuffer();
+    cputs("\n\r DNS Server:");
+    PrintIPAddrFromDataBuffer();
   }
 
   //DNS Failed/OK
   newline2();  
   cputs("DNS Server");
   gotox(HTAB);  
-  if (error == ERR_DNSFAILED) {
+  if (error == NETERR_DNSFAILED) {
     cputs(strFailed);
     goto exit;
   }
   
-  if (error > ERR_DNSFAILED) {
+  if (error > NETERR_DNSFAILED) {
     cputs(str____OK);
   }
 
@@ -125,18 +134,18 @@ void DoTestWifi(){
   newline2();  
   cputs("NTP Server");  
   gotox(HTAB);
-  if (error == ERR_NTPFAILED) {
+  if (error == NETERR_NTPFAILED) {
     cputs(strFailed);
     goto exit;
   }
 
-  if (error > ERR_NTPFAILED) {
+  if (error > NETERR_NTPFAILED) {
     cputs(str____OK);
   }
 
   //All tests passed.
   newline2();  
-  if (error == ERR_NOERR) {
+  if (error == NETERR_NONE) {
     cputs("All tests passed.");
   }
 

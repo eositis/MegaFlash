@@ -23,7 +23,7 @@ uint16_t ti_enteredNumber;
 static bool disallowSpace;
 static bool numbersOnly;
 static bool volnameOnly;  //Only allow alphanumeric character and period (.)
-static uint8_t x,y,x2,len;
+static uint8_t x,y,len,x2;
 static uint8_t width;     //Width of the text input control for multiline edit. Set to -1 for singleline
 
 // Working Variables
@@ -31,17 +31,9 @@ static uint8_t i,curPos;
 static bool enter;
 
 
-
-
-///////////////////////////////////////////////////////////
-// Print the default text and underscore char
-//
-// The underscore char can be changed for ti_ClearUnderscore()
-// function
-static void PrintDefaultText(char underscore_char) {
+static void PrintTextEditCtrl(char underscore_char) {
   static_local uint8_t curx,cury;
   static_local char c;
-  
   //
   //Print underscore and default text
   //
@@ -62,14 +54,7 @@ static void PrintDefaultText(char underscore_char) {
     if (wherex()==x2 && i!=len-1) newlinex(x);
   }
   //Place the cursor at the end of default text
-  gotoxy(curx,cury);  
-}
-
-///////////////////////////////////////////////////////////
-// Draw the text edit but without the underscore characters
-//
-void ti_ClearUnderscore() {
-  PrintDefaultText(' ');
+  gotoxy(curx,cury);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -80,25 +65,18 @@ void ti_ClearUnderscore() {
 // passed to EnterTextImpl() through static global variables.
 //
 static bool EnterTextImpl() {
+
   static_local uint8_t key;
-  static_local char underscore;
-  
   x2= x+width;  //Use x2 to cache this value
-  
-  //It looks weird to show underscore if len==1
-  //use a space character instead
-  underscore=len!=1?'_':' ';
-  
-  //
-  //Print Default Text
-  //
-  PrintDefaultText(underscore);
+
+  PrintTextEditCtrl('_');
+
   
   //
   //Keyboard event loop
   //
   do {
-    key=cgetchar(curPos<len?underscore:' '); 
+    key=cgetchar(curPos<len?'_':' ');
     if (disallowSpace && key==' ') {
       beep();
       continue;

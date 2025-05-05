@@ -1,9 +1,11 @@
 .PHONY: all release test clean 
 
 #Source Files
-DEPS       = Makefile defines.h asm.h ui-menu.h ui-textinput.h wifi.h timezone.h config.h testwifi.h format.h ../common/defines.h 
-DEPSASM    = ../common/megaflash_defines.inc
-SRC        = main.c mainmenu.c dialogs.c ui-menu.c ui-wnd.c ui-textinput.c ui-misc.c textstrings.c wifi.c timezone.c config.c testwifi.c format.c
+DEPS       = Makefile defines.h asm.h ../common/defines.h  \
+             mainmenu.h dialogs.h ui-menu.h ui-wnd.h ui-textinput.h ui-misc.h ui-progressbar.h textstrings.h wifi.h timezone.h config.h testwifi.h format.h tftp.h
+DEPSASM    = ../common/defines.inc
+SRC        = main.c mainmenu.c dialogs.c ui-menu.c ui-wnd.c ui-textinput.c ui-misc.c ui-progressbar.c textstrings.c wifi.c timezone.c config.c \
+             testwifi.c format.c tftp.c
 ASM        = asm.s asm-megaflash.s asm-conio.s
 
 #Depolyment Build

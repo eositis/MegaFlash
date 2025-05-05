@@ -25,6 +25,7 @@ CMD_ENABLEROMDISK       =       $06
 CMD_DISABLEROMDISK      =       $07
 CMD_LOAD_CPANEL         =       $08
 CMD_TESTWIFI            =       $09
+CMD_GETINFOSTR          =       $0A
 
 CMD_GETDEVINFO          =       $10
 CMD_GETDEVSTATUS        =       $11
@@ -42,13 +43,14 @@ CMD_WRITEBLOCKSIZETOVDH =       $1C
 CMD_FORMATDISK          =       $1D
 CMD_ERASEDISK           =       $1E   
      
-CMD_SAVEUSERCONFIG      =       $20
-CMD_GETUSERCONFIG       =       $21
-CMD_SAVEWIFISETTING     =       $22
+CMD_SAVEUSERSETTINGS    =       $20
+CMD_GETUSERSETTINGS     =       $21
+CMD_SAVEWIFISETTINGS    =       $22
 CMD_GETCONFIGBYTES      =       $23
-CMD_ERASEUSERCONFIG     =       $24
-CMD_ERASEWIFISETTING    =       $25        
-CMD_ERASEALLCONFIG      =       $26  
+CMD_ERASEUSERSETTINGS   =       $24
+CMD_ERASEWIFISETTINGS   =       $25       
+CMD_ERASEADVSETTINGS    =       $26 
+CMD_ERASEALLSETTINGS    =       $27  
         
 CMD_FADD                =       $30 
 CMD_FMUL                =       $31
@@ -73,7 +75,7 @@ CMD_GETTIMER_S          =       $45
 
 CMD_TFTPRUN             =       $50
 CMD_TFTPSTATUS          =       $51
-CMD_TFTPLOADLASTSERVER  =       $52
+CMD_TFTPGETLASTSERVER   =       $52
 CMD_TFTPSAVELASTSERVER  =       $53
 
 
@@ -86,7 +88,7 @@ SIGNATURE2              =       $74     ;MegaFlash Device Signature Byte #2
 ;
 BUSYFLAG                = %10000000
 ERRORFLAG               = %01000000
-ERRORCODEFIELD          = %00001111 ;Last four bits are error code field
+ERRORCODEFIELD          = %00011111 ;Last five bits are error code field
 
 
 ;

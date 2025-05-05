@@ -7,7 +7,7 @@
 #include "asm.h"
 
 //Defined in main.c
-extern UserConfig_t config;
+extern UserSettings_t config;
 
 
 //TZHOUR and TZMIN is defined in ../common/defines.h and shared with Pico Project

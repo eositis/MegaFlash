@@ -4,7 +4,7 @@
                 ; Constants Definitions
                 ; The .inc file is shared with Firmware Project
                 ;                
-                .include "../common/megaflash_defines.inc"
+                .include "../common/defines.inc"
 
                 .code
                 .importzp sreg,sp
@@ -14,7 +14,7 @@
 
                 .export _Reboot,_IsAppleIIcplus
                 .export _ToUppercase,_ZeroMemory
-                .export _HasFPUSupport,_ReadOpenAppleButton
+                .export _HasFPUSupport,_ReadOpenAppleButton,_Delay
 
 
 ;
@@ -41,7 +41,7 @@ _Reboot:        bit $c082       ;Switch in ROM
 ; return zero if not ROM5
 ;
 _IsAppleIIcplus:
-                ldx #0  
+                ldx #0          ;Preload X=0
                 bit $c082       ;Switch in ROM
                 lda $fbbf       ;$fbbf = 05 for IIc+
                 bit $c080       ;Restore to LC bank 2
@@ -52,7 +52,7 @@ _IsAppleIIcplus:
 
 
 ;/////////////////////////////////////////////////////////
-; void __fastcall__ ToUppercase(char*)
+; void __fastcall__ ToUppercase(char* s)
 ; Convert a string to uppercase
 ; Lenght of string <256
 ;                
@@ -75,7 +75,8 @@ _ToUppercase:
 
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ ZeroMemory(uint8_t len,void* dest)
-; Clear memory region to zero
+; Clear memory region to zero.
+; Length is limited to 256 bytes only
 ;
 ; Input: len  - number of bytes
 ;        dest - pointer to destination
@@ -137,3 +138,30 @@ _ReadOpenAppleButton:
                 inc a           ;a=1, x=0 (true)
 :               rts
 
+;/////////////////////////////////////////////////////////     
+; void __fastcall__ Delay(uint8_t n)
+; To call the system wait routine. On IIc Plus, we prefer
+; our orgWait routine at $C755. First, check if orgWait
+; routine exists. If not, fall-back to system wait routine
+; at $FCA8
+;
+; Input: n - delay duration of wait routine
+;
+_Delay:
+.if 0
+                ;Check if orgWait exists
+                ;Check: $C755=$38 and $C760=$60
+                ldy $c755
+                cpy #$38
+                bne @notexist
+                ldy $c760
+                cpy #$60
+                bne @notexist
+                jmp $c755       ;orgWait routine
+                
+@notexist:                
+.endif
+                bit $c082       ;Switch in ROM
+                jsr $fca8       ;Monitor Wait routine
+                bit $c080       ;Restore to LC bank 2
+                rts

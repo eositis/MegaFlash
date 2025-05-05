@@ -97,8 +97,6 @@ static char savedPrompt3[]="WIFI Passphrase:";
 //       success - Saving of setting is successful
 // 
 void DrawWifiSavedWindowContent(char* ssid,char* password,bool success) {
-  char c; //Making it static_local results in longer code
-  
   if (success) {
     gotoxy00();    
     cputs(savedPrompt1);
@@ -110,16 +108,7 @@ void DrawWifiSavedWindowContent(char* ssid,char* password,bool success) {
     cputs(savedPrompt3);    
     newline();
     
-    if (strlen(password)<(PASSPHRASEWIDTH+1)) cputs(password);
-    else {
-      //Two lines are required to display the password
-      c=password[PASSPHRASEWIDTH];
-      password[PASSPHRASEWIDTH]='\0';
-      cputs(password);
-      password[PASSPHRASEWIDTH]=c;
-      newline();
-      cputs(password+PASSPHRASEWIDTH);
-    }
+    PrintStringTwoLines((char*)password,PASSPHRASEWIDTH);
   } else {
       newline2();
       cputs(strError);
@@ -133,7 +122,6 @@ void DrawWifiSavedWindowContent(char* ssid,char* password,bool success) {
 // The routine to drive the WIFI setting process
 //
 void DoWifiSetting() {
-  static_local bool enter;           //Enter key pressed
   static_local bool success;  
   static_local WifiSetting_t setting;  
   
@@ -142,7 +130,7 @@ void DoWifiSetting() {
   setting.checkbyte = WIFISETTINGVER ^ WIFISETTING_CHKBYTECOMP;
   setting.authType = WIFIAUTHTYPE;
   #if 0 //Already set to 0 by ZeroMemory()
-  setting.reserved = 0; //Reserved for future use
+  setting.options = 0;  //Reserved for future use
   setting.ipaddr = 0;   //Reserved for future use
   setting.netmask = 0;  //Reserved for future use
   setting.gateway = 0;  //Reserved for future use
@@ -157,8 +145,7 @@ void DoWifiSetting() {
 again:
   //Ask user to enter SSID
   ti_textBuffer[0]='\0';
-  enter=ti_EnterText(SSIDLEN,0,7,-1);
-  if (!enter) return;
+  if (!ti_EnterText(SSIDLEN,0,7,-1)) return;
   
   //SSID cannot be empty
   if (ti_textBuffer[0]=='\0') {
@@ -174,8 +161,7 @@ again:
 
   //Ask user to enter WIFI password
   ti_textBuffer[0]='\0';
-  enter=ti_EnterText(WPAKEYLEN,0,9,PASSPHRASEWIDTH);
-  if (!enter) return;     //Esc key pressed
+  if (!ti_EnterText(WPAKEYLEN,0,9,PASSPHRASEWIDTH)) return;     //Esc key pressed
   strcpy(setting.wpakey,ti_textBuffer);
   
   //Inactivate WIFI window  
@@ -188,7 +174,7 @@ again:
   cputs(strSaving);
   
   //Save setting to MegaFlash
-  success = SaveSetting(CMD_SAVEWIFISETTING,(uint8_t)sizeof(WifiSetting_t),&setting);  
+  success = SaveSetting(CMD_SAVEWIFISETTINGS,(uint8_t)sizeof(WifiSetting_t),&setting);  
 
   //Show the result
   DrawWifiSavedWindowContent(setting.ssid,setting.wpakey,success);

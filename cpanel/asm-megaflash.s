@@ -4,18 +4,23 @@
                 ; Constants Definitions
                 ; The .inc file is shared with Firmware Project
                 ;                
-                .include "../common/megaflash_defines.inc"
+                .include "../common/defines.inc"
                 
                 .code
                 .importzp sreg,sp
                 .importzp tmp1,tmp2,tmp3,tmp4
                 .importzp ptr1,ptr2,ptr3,ptr4
-                .import popa
+                .import popa,incsp2
                 
 
-                .export _SendCommand,_GetBoardType,_DisableROMDisk,_GetUnitCount,_FormatDisk,_GetVolInfo
-                .export _TestWifi,_EraseAllConfig,_GetUnitBlockCount,_DisplayTime
-                .export _SaveSetting,_LoadSetting,_PrintIPAddrFromDataBuffer,_PrintStringFromDataBuffer
+                .export _SendCommand,_GetInfoString,_GetUnitCount,_FormatDisk,_GetVolInfo
+                .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DisplayTime
+                .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
+                .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
+                .export _StartTFTP,_GetTFTPStatus
+                .export _GetParam8Offset,_GetParam8,_GetParam16
+
+
 
 ;/////////////////////////////////////////////////////////
 ; Subroutine to execute MegaFlash command
@@ -32,6 +37,18 @@ execute:
                 rts
 .endif        
 
+
+;/////////////////////////////////////////////////////////
+; Subroutine to reset MegaFlash param and data buffer pointer
+; Note: The rts instruction acts a delay for MegaFlash to
+; complete the command
+;
+resetBufferPointer:
+                stz cmdreg
+                rts
+
+
+
 ;///////////////////////////////////////////////////////// 
 ; void __fastcall__ SendCommand(uint8_t cmd)
 ; Send a command to MegaFlash and wait until it is executed.
@@ -41,36 +58,30 @@ execute:
 _SendCommand:=execute           ;same implementation as execute
 
 
-;/////////////////////////////////////////////////////////
-; uint8_t __fastcall__ GetBoardType()
-; Get Pico Board type as defined in BoardType enum
+;//////////////////////////////////////////////////////////
+; bool __fastcall__ GetInfoString(uint8_t type) 
+; Send CMD_GETINFOSTR to get Information string
+; The result is returned in data buffer
 ;
-; Output: Board Type
-;     
-_GetBoardType:  lda #CMD_GETDEVINFO
+; Input: type - Info String Type
+;
+; Output: bool - success
+;
+_GetInfoString:
+                stz cmdreg      ;reset buffer pointer
+                ldx #0          ;preload =0
+                
+                ;store type into parameter Buffer
+                sta paramreg
+                
+                lda #CMD_GETINFOSTR
                 jsr execute
-                
-                ;Skip 5 bytes from parameter buffer
-                ldx #5
-:               lda paramreg
-                dex
-                bne :-
-                
-                ;Get Board Type
-                lda paramreg
-                ;x already = 0
+                bvs @error
+                lda #1          ;a=1, x=0 (true)
                 rts
-                
-                
-;/////////////////////////////////////////////////////////
-; uint8_t __fastcall__ DisableROMDisk()
-; Disable MegaFlash ROMDisk
-;         
-_DisableROMDisk:
-                lda #CMD_DISABLEROMDISK
-                jmp execute                
-                
-                
+@error:         txa             ;a=0, x=0 (false)
+                rts
+
 ;/////////////////////////////////////////////////////////
 ; uint8_t __fastcall__ GetUnitCount()
 ; Get number of units
@@ -86,7 +97,7 @@ _GetUnitCount:
                 ldx #0
                 rts         
 .else
-                ;return 9
+                ;return 9 for testing
                 lda #9
                 ldx #0
                 rts
@@ -153,9 +164,9 @@ _FormatDisk:
 ;
 _GetVolInfo:
 .ifndef TESTBUILD
-                ;Save dest pointer to ptr4
-                sta ptr4
-                stx ptr4+1
+                ;Write dest pointer. Self-Modifying code
+                sta @stainst+1
+                stx @stainst+2
 
                 stz cmdreg;     ;reset buffer pointers
 
@@ -170,7 +181,7 @@ _GetVolInfo:
                 ;Copy 21 bytes from parameter buffer to dest
                 ldy #0
 :               lda paramreg
-                sta (ptr4),y
+@stainst:       sta $ffff,y     ;sta dest,y
                 iny
                 cpy #21
                 bne :-
@@ -183,8 +194,8 @@ _GetVolInfo:
                 txa     ;return x=0, a=0
                 rts     
 .else
-                sta ptr4
-                stx ptr4+1
+                sta @stainst+1
+                stx @stainst+2
                 
                 ;pop unitNum from stack
                 jsr popa
@@ -192,7 +203,7 @@ _GetVolInfo:
                 ;Copy 21 bytes from @testdata to dest
                 ldy #20
 :               lda @testdata,y
-                sta (ptr4),y
+@stainst:       sta $ffff,y     ;sta dest,y
                 dey
                 bpl :-
                 
@@ -229,11 +240,11 @@ _TestWifi:      ;Put Write Enable Key to parameter buffer
                 rts
 
 ;/////////////////////////////////////////////////////////		
-; void __fastcall__ EraseAllConfig()
-; Send CMD_ERASEALLCONFIG command to MegaFlash
+; void __fastcall__ EraseAllSettings()
+; Send CMD_ERASEALLSETTINGS command to MegaFlash
 ; Assume no error would occur.
 ; 
-_EraseAllConfig:
+_EraseAllSettings:
 .ifndef TESTBUILD
                 ;Reset buffer pointers    
                 stz cmdreg          
@@ -242,7 +253,7 @@ _EraseAllConfig:
                 lda #WE_KEY
                 sta paramreg          
 
-                lda #CMD_ERASEALLCONFIG
+                lda #CMD_ERASEALLSETTINGS
                 jmp execute     ;jsr+rts
 .else
                 rts
@@ -256,8 +267,7 @@ _EraseAllConfig:
 _GetUnitBlockCount:
 .ifndef TESTBUILD
                 ;Reset buffer pointers    
-                stz cmdreg 
-                ldx #0          ;Preload X=0
+                jsr resetBufferPointer
 
                 ;Put Unit Number to parameter buffer
                 sta paramreg
@@ -272,7 +282,8 @@ _GetUnitBlockCount:
                 rts
                 
 @error:         ;return 0
-                txa             ;x already = 0 if error
+                lda #0          
+                tax             
                 rts
 .else
                 ;return $ffff
@@ -332,10 +343,6 @@ _SaveSetting:
                 sta @loop+1     
                 stx @loop+2
 
-                ;Switch to linear mode
-                lda #CMD_MODELINEAR
-                sta cmdreg
-        
                 ;Get len from stack
                 jsr popa        
                 tax             ; x = length
@@ -349,7 +356,7 @@ _SaveSetting:
                 
                 ;Copy data to data buffer, x is the loop counter
                 ldy #0
-@loop:          lda $FFFF,y
+@loop:          lda $FFFF,y     ;lda src,y
                 sta datareg
                 iny
                 dex
@@ -366,6 +373,8 @@ _SaveSetting:
                 txa             ;Error, set a to 0
 noerr:          rts
 .else
+                jsr incsp2      ;Remove arguments from stack
+
                 ;return $0001
                 lda #$01
                 ldx #$00
@@ -373,78 +382,53 @@ noerr:          rts
 .endif        
         
 ;/////////////////////////////////////////////////////////
-; void __fastcall__ LoadSetting(uint8_t cmd, uint8_t len, void* dest)
-; Loading User Config from MegaFlash
-; Assume no error would occur.
+; bool __fastcall__ LoadSetting(uint8_t cmd, uint8_t len, void* dest)
+; Loading User Settings from MegaFlash
 ;
 ; Input:  cmd  - MegaFlash command to load the setting
 ;         len  - length of the data structure
 ;         dest - pointer to data
+;
+; Output: bool - success
 ;
 _LoadSetting:   
 .ifndef TESTBUILD
                 ;write dest pointer, self-modifying code
                 sta @stainst+1
                 stx @stainst+2
-        
-                jsr popa        ; Get len
+                
+                jsr popa        ; Get len from C-Stack
                 pha             ; Save len to stack        
                 
                 ;Execute the Load command
-                jsr popa        ; a = command        
+                jsr popa        ; Get command from C-Stack      
                 jsr execute     
-        
-                ;Switch to linear mode and reset buffer pointer
-                lda #CMD_MODELINEAR
-                sta cmdreg      
-                       
-                ;Copy data from data buffer, x is the loop counter
                 plx             ; Get len from stack
+                bvs @error
+ 
+                ;Copy data from data buffer, x is the loop counter
                 ldy #0
 @loop:          lda datareg
-@stainst:       sta $ffff,y
+@stainst:       sta $ffff,y     ;sta dest,y
                 iny
                 dex
                 bne @loop
-                
+                ;return 1
+                lda #1
+                ldx #0
+                rts
+@error:         ;return 0
+                lda #0
+                tax
                 rts
 .else
+                jsr incsp2      ;Remove arguments from stack
+                ;return 1
+                lda #1
+                ldx #0
                 rts
 .endif
             
-;/////////////////////////////////////////////////////////
-; void __fastcall__ PrintIPAddrFromDataBuffer()
-; Print pre-formatted IP Address from data buffer to screen
-;
-_PrintIPAddrFromDataBuffer:
-.ifndef TESTBUILD
-                ldy CH
-                ldx #16         ;Max len=16, avoid dead loop
-        
-:               lda datareg
-                beq exit
-                sta (BASL),y
-                iny
-                dex
-                bne :-
-exit:           rts
-
-.else 
-                ;For testing on Emulator
-                ldy CH
-                ldx #0
-        
-:               lda ipstr,x
-                beq exit
-                ora #$80        
-                sta (BASL),y
-                iny
-                inx
-                cpx #16         ;Max len=16, avoid dead loop
-                bne :-
-exit:           rts   
-ipstr:          .asciiz "192.168.100.111"       
-.endif        
 
 ;///////////////////////////////////////////////////////// 
 ; void __fastcall__ PrintStringFromDataBuffer()
@@ -463,67 +447,164 @@ _PrintStringFromDataBuffer:
 .endif     
            
 
-;*****************************************************************************
-;
-;                     TFTP
-;
-;*****************************************************************************          
-                .import _tftp_dir,_tftp_unitNum,_tftp_hostname,_tftp_filename
-                ;.export _Send_CMD_TFTPRUN
-                .export _GetParam8,_GetParam16
-;ParamBuffer
-; WE_KEY
-; Dir (TX or RX)
-; UnitNum              
-.if 0 
-_Send_CMD_TFTPRUN:
-.ifndef TESTBUILD
-                ;Reset buffer pointers    
-                stz cmdreg          
-                
-                ;Put Write Enable Key to parameter buffer
-                lda #WE_KEY
-                sta paramreg
 
-                ;Direction
-                lda _tftp_dir
-                sta paramreg
+;///////////////////////////////////////////////////////// 
+; uint8_t __fastcall__ CopyStringToDataBuffer(void* src) 
+; Copy a string to MegFlash Data Buffer
+; Max length of the string is 255
+;
+; Input: src - Pointer to source buffer
+;
+; Output: uint8_t - Length of the string
+;                   =0 if the len>255
+;
+_CopyStringToDataBuffer:
+                ;write src pointer, self-modifying code
+                sta @loop+1
+                stx @loop+2
                 
-                ;UnitNum
-                lda _tftp_unitNum
-                sta paramreg
-                
-                ;Copy Hostname to Data Buffer
-                ldx #$FF
-:               inx
-                lda _tftp_hostname,x
+                ldy #0
+@loop:          lda $ffff,y     ;lda src,y
                 sta datareg
-                bne :-
-                
-                ;Copy Filename to Data Buffer
-                ldx #$FF
-:               inx
-                lda _tftp_filename,x
-                sta datareg
-                bne :-         
+                beq @exit       ;Null Char?
+                iny
+                bne @loop       ;Avoid dead loop
+@exit:          tya             ;a=len
+                ldx #0          ;x=0
+                rts                
 
-                ;Send CMD_TFTPRUN
-                lda #CMD_TFTPRUN
-                jsr execute
+
+;///////////////////////////////////////////////////////// 
+; uint8_t __fastcall__ CopyStringFromDataBuffer(void* dest) 
+; Copy a string from MegaFlash Data Buffer
+; Max length of the string is 255
+;
+; Input: dest - Pointer to dest buffer
+;
+; Output: uint8_t - Length of the string
+;
+_CopyStringFromDataBuffer:
+                ;write dest pointer, self-modifying code
+                sta @stainst+1
+                stx @stainst+2
+                
+                ldy #0
+@loop:          lda datareg
+@stainst:       sta $ffff,y     ;sta dest,y
+                beq @exit       ;Null Char?
+                iny
+                bne @loop       ;Avoid dead loop
+@exit:          tya             ;a=len
+                ldx #0          ;x=0
                 rts
-.else
-                rts
-.endif                
- .endif
-;--------------------------------- 
+
+
+;///////////////////////////////////////////////////////// 
+; uint8_t __fastcall__ GetParam8Offset(uint8_t offset);
+; Get a 8-bit value from parameter buffer at offset
+;
+; input: offset   - offset of parameter buffer
+;
+; Output: uint8_t - value from parameter buffer
+;                
+_GetParam8Offset:
+                tax             ;Move offset to x and update z-flag
+                beq @exit       ;Offset = 0?        
+@loop:          lda paramreg
+                dex
+                bne @loop
+@exit:          ;fall into _GetParam8      
+
+;///////////////////////////////////////////////////////// 
+; uint8_t __fastcall__ GetParam8();
+; Get a 8-bit value from parameter buffer
+;
+; Output: uint8_t - value from parameter buffer
 ;                
 _GetParam8:
                 lda paramreg
                 ldx #0
                 rts
-                
+
+;///////////////////////////////////////////////////////// 
+; uint16_t __fastcall__ GetParam8();
+; Get a 16-bit value from parameter buffer
+;
+; Output: uint16_t - value from parameter buffer
+;                   
 _GetParam16:
                 lda paramreg
                 ldx paramreg
                 rts
-                          
+
+;*****************************************************************************
+;
+;                     TFTP
+;
+;*****************************************************************************          
+
+
+;///////////////////////////////////////////////////////// 
+; uint8_t __fastcall__ StartTFTP(uint8_t flag,uint8_t dir,uint8_t unitNum)
+; Send CMD_TFTPRUN command
+; Assume hostname and filename is already in data buffer
+;
+; Input: unitNum - Unit Number
+;        dir     - 0=Download From Server, 1=Upload to Server
+;        flag    - Bit0: To save hostname to User Config
+;
+; Output: uint8_t - Error Code
+;
+_StartTFTP:
+.ifndef TESTBUILD
+                ;Reset buffer pointers    
+                jsr resetBufferPointer
+                
+                ;unitNum
+                sta paramreg
+
+                ;Direction
+                jsr popa
+                sta paramreg
+                
+                ;flag
+                jsr popa
+                sta paramreg
+                
+                ;Write Enable Key
+                lda #WE_KEY
+                sta paramreg
+                
+                ;Send CMD_TFTPRUN
+                lda #CMD_TFTPRUN
+                jsr execute             
+                
+                ;Return Error Code from status register
+                lda statusreg
+                and #ERRORCODEFIELD
+                ldx #0
+                rts
+.else
+                jsr incsp2      ;Remove Arguments from stack        
+                lda #0          ;return 0
+                tax
+                rts
+.endif                
+
+
+
+;///////////////////////////////////////////////////////// 
+; void  __fastcall__ GetTFTPStatus(uint8_t pbMaxValue)
+; Get TFTP Status with CMD_TFTPSTATUS command
+;
+_GetTFTPStatus:
+                jsr resetBufferPointer;
+                
+                stz paramreg            ;version = 0
+                stz paramreg            ;reserved = 0
+                sta paramreg            ;pbMaxValue
+                
+                lda #CMD_TFTPSTATUS     
+                jmp execute
+
+

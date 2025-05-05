@@ -5,11 +5,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <peekpoke.h>
 #include "defines.h"
 #include "ui-misc.h"
 #include "ui-textinput.h"
+#include "ui-wnd.h"
 #include "textstrings.h"
 #include "asm.h"
+
+//Global Variable used by PrintDriveInfoList() and PrintDriveInfo()
+static VolInfo_t volInfo;  //Data structure returned by CMD_GETVOLINFO command
 
 /////////////////////////////////////////////////////////////////////
 // Replace cgetc()
@@ -37,14 +42,11 @@ char cgetc_showclock() {
 //
 bool AskUserToConfirm() {
   #define CONFIRM_LEN 7  //length of "CONFIRM" 
-  static_local bool enter;
-  
 
   cputs("Type CONFIRM to proceed:");
   ti_textBuffer[0] = '\0';
 again:
-  enter = ti_EnterText(CONFIRM_LEN,25,wherey(),-1); 
-  if (enter==false) return false;    
+  if (!ti_EnterText(CONFIRM_LEN,25,wherey(),-1)) return false;    
   if (stricmp(ti_textBuffer,"CONFIRM")!=0) {
     beep();
     goto again;
@@ -78,7 +80,6 @@ void PrintVolumeType(uint8_t type) {
 //
 void PrintDriveInfoList(uint8_t unitCount) {
   static const char strHeader[] = "Drive Type   Volume Name     Blocks";
-  static_local VolInfo_t volInfo;
   static_local uint8_t unit;
   
   cputs(strHeader);
@@ -102,3 +103,72 @@ void PrintDriveInfoList(uint8_t unitCount) {
    newline();
   }
 }
+
+
+//////////////////////////////////////////////////////////////////
+// Print information of a drive
+//
+// Input: unit - Drive number
+//
+void PrintDriveInfo(uint8_t unit) {
+  //Get current volume info
+  if (!GetVolInfo(unit,&volInfo)) FatalError(ERR_GETVOLINFO_FAIL);  
+
+  cputs(strCurrent);
+  newline();
+  cprintf(" Drive = %u",unit);  
+  newline();
+  cputs(" Type  = ");
+  PrintVolumeType(volInfo.type);
+  newline();
+  if (volInfo.type==TYPE_PRODOS) {
+    cprintf(strVolNameFormat,volInfo.volName);
+    cprintf(strVolSizeFormat,volInfo.blockCount);
+  }
+}
+
+//////////////////////////////////////////////////////////////////
+// Print a string on two lines if it is too long.
+//
+// Input: width - width of the line
+//        s     - the string
+//
+void PrintStringTwoLines(char* s,uint8_t width){
+  uint8_t orgWndWidth = PEEK(WNDWDTH);
+  POKE(WNDWDTH,width);
+  cputs(s);
+  POKE(WNDWDTH,orgWndWidth);
+}
+
+//////////////////////////////////////////////////////////////////
+// print a string to screen up to num characters.
+// If the string is longer than num, the last char is replaced with
+// ellipsis.
+//
+// Input: s     - the string
+//        num   - max number of characters to be printed
+//
+void cputs_n(char *s,uint8_t num) {
+  static_local uint8_t i;
+  static_local char c;
+  static_local uint8_t num_minus1;
+  num_minus1=num-1;
+  
+  for(i=0;i<num;++i) {
+    c = s[i];
+    if (c=='\0') return;
+    if (i==num_minus1 && s[num]!='\0') c=ELLIPSIS;
+    cputc(c);
+  }
+}  
+  
+//////////////////////////////////////////////////////
+// Reset text screen to power on status
+//  
+void ResetScreen() {
+  wnd_ResetScrollWindow();
+  clrscr();
+  setvid(); 
+}  
+
+

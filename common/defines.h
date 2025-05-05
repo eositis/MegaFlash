@@ -17,6 +17,7 @@
 #define CMD_DISABLEROMDISK      0x07
 #define CMD_LOAD_CPANEL         0x08
 #define CMD_TESTWIFI            0x09
+#define CMD_GETINFOSTR          0x0a
 
 #define CMD_GETDEVINFO          0x10
 #define CMD_GETDEVSTATUS        0x11
@@ -34,13 +35,14 @@
 #define CMD_FORMATDISK          0x1d
 #define CMD_ERASEDISK           0x1e
 
-#define CMD_SAVEUSERCONFIG      0x20
-#define CMD_GETUSERCONFIG       0x21
-#define CMD_SAVEWIFISETTING     0x22
+#define CMD_SAVEUSERSETTINGS    0x20
+#define CMD_GETUSERSETTINGS     0x21
+#define CMD_SAVEWIFISETTINGS    0x22
 #define CMD_GETCONFIGBYTES      0x23
-#define CMD_ERASEUSERCONFIG     0x24
-#define CMD_ERASEWIFISETTING    0x25
-#define CMD_ERASEALLCONFIG      0x26
+#define CMD_ERASEUSERSETTINGS   0x24
+#define CMD_ERASEWIFISETTINGS   0x25
+#define CMD_ERASEADVSETTINGS    0x26
+#define CMD_ERASEALLSETTINGS    0x27
 
 #define CMD_FADD                0x30
 #define CMD_FMUL                0x31
@@ -65,7 +67,7 @@
 
 #define CMD_TFTPRUN             0x50
 #define CMD_TFTPSTATUS          0x51
-#define CMD_TFTPLOADLASTSERVER  0x52
+#define CMD_TFTPGETLASTSERVER   0x52
 #define CMD_TFTPSAVELASTSERVER  0x53
 
 //MegaFlash Error Code
@@ -85,10 +87,13 @@
 //Write Enable Key
 #define WRITEENABLEKEY  0x71
 
+//Info String Type
+#define INFOSTR_DEVICE  0x00
+
 //Status Registers Fields
 #define BUSYFLAG       0b10000000
 #define ERRORFLAG      0b01000000
-#define ERRORCODEFIELD 0b00001111 /*Last four bits are error code field*/
+#define ERRORCODEFIELD 0b00011111 /*Last five bits are error code field*/
 
 //Board Type
 //MSB is set if Wifi is supported
@@ -100,16 +105,22 @@ typedef enum {
 } BoardType;
 
 
+/*********************************************************
 
+The UserSetting_t and WifiSetting_t structure is used to
+pass data between Apple and MegaFlash.
+
+***********************************************************/
 
 //*****************************************************
 //
-//               User Configuration
+//               User Settings
 //
 //*****************************************************
-#define USERCONFIGVER              1       //Version starts at 1
-#define TIMEZONEIDVER              1
-#define USERCONFIG_CHKBYTECOMP     0x5A
+//
+#define USERSETTINGSVER              1       //Version starts at 1
+#define TIMEZONEIDVER                1
+#define USERSETTINGS_CHKBYTECOMP     0x5A
 
 //Bits definition of configbyte1
 #define CPUSPEEDFLAG   0b10000000 //1=Normal(1MHz), 0=Fast
@@ -122,12 +133,12 @@ typedef enum {
 
 typedef struct  {
   uint8_t  version;
-  uint8_t  checkbyte;   //=version^USERCONFIG_CHKBYTECOMP to indicate the structure data is valid    
+  uint8_t  checkbyte;   //=version^USERSETTINGS_CHKBYTECOMP to indicate the structure data is valid    
   uint8_t  configbyte1;
   uint8_t  configbyte2; //=0, reserved for future
   uint8_t  timezoneidver;  
   uint8_t  timezoneid;
-} UserConfig_t;
+} UserSettings_t;
 
 
 //*****************************************************
@@ -138,6 +149,7 @@ typedef struct  {
 #define WIFISETTINGVER           1
 #define WIFISETTING_CHKBYTECOMP  0x46
 #define WIFIAUTHTYPE             0
+#define WIFIOPTIONS              0
 #define SSIDLEN                  32
 #define WPAKEYLEN                63
 
@@ -145,7 +157,7 @@ typedef struct {
   uint8_t version;          //Version ID of the structure
   uint8_t checkbyte;        //=version^WIFISETTING_CHKBYTECOMP to indicate the structure data is valid    
   uint8_t authType;         //WIFI Authentication Type. Currently unused and should be 0
-  uint8_t reserved;         //Reserved. should be 0
+  uint8_t options;          //Reserved for manual IP Address configuration. should be 0
   uint32_t ipaddr;          //Reserved for manual IP Address configuration
   uint32_t netmask;         //Reserved for manual IP Address configuration
   uint32_t gateway;         //Reserved for manual IP Address configuration
@@ -153,31 +165,6 @@ typedef struct {
   char wpakey[WPAKEYLEN+1]; //Wifi Password. +1 for null character  
   char ssid[SSIDLEN+1];     //SSID. +1 for null character
 } WifiSetting_t; //len=117 bytes
-
-//*****************************************************
-//
-//           Network Setting
-//
-//*****************************************************
-#define NETWORKSETTINGVER 1
-#define NETWORKSETTING_CHKBYTECOMP 0x35
-#define TFTP_LASTSERVERLEN         31
-#define NTPSERVERORLEN             31
-
-typedef struct {
-  uint8_t version;            //Version ID of the structure
-  uint8_t checkbyte;          //=version^NETWORKSETING_CHKBYTECOMP to indicate the structure data is valid
-  uint8_t reserved;           //=0, reserved for future use
-  uint8_t tftp_maxattempt;    //TFTP maxattempt
-  uint8_t tftp_serverport_l;  //low byte of TFTP server port
-  uint8_t tftp_serverport_h;  //high byte of TFTP server port
-  uint8_t tftp_timeout_l;     //low byte of TFTP timeout
-  uint8_t tftp_timeout_h;     //high byte of TFTP timeout
-  bool    tftp_enable1kblock; //TFTP enable1kblock
-  char tftp_lastserver[TFTP_LASTSERVERLEN+1]; //+1 for NULL char. TFTP Last Server Hostname/IP Addr
-  char ntpserver_override[NTPSERVERORLEN+1];  //+1 for NULL char. NTP Server Override
-} NetworkSetting_t;
-
 
 
 

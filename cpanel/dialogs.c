@@ -45,7 +45,7 @@ bool ShowSaveConfirmDialog() {
   
   if (mnu_currentMenuItem == 0) {
     DrawSaveConfirmWindow();
-    cputs("strSaving");
+    cputs(strSaving);
   }
 
   //true if mnu_currentMenuItem==0
@@ -85,8 +85,9 @@ void ShowEraseSettingsDialog() {
     DrawEraseSettingsWindow();    
     cputs(strErasing);
     
-    EraseAllConfig();
+    EraseAllSettings();
     LoadConfig();   //Reload Config
+    DisplayTime();  //Timezone may have changed. Update the clock
     
     cputs(strDone);  
     gotoxy(18,6);

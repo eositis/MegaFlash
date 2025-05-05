@@ -4,7 +4,7 @@
                 ; Constants Definitions
                 ; The .inc file is shared with Firmware Project
                 ;                
-                .include "../common/megaflash_defines.inc"
+                .include "../common/defines.inc"
                 
                 .code
                 .importzp sreg,sp
@@ -15,7 +15,7 @@
                 
                 .export _cputchar_direct,_fillchar_direct,_cgetchar
                 .export _newlinex,_newline,_newline2,_cursordown,_cursorup,_cursorupx,_cursorupx_m1,_cursorleft
-                .export _gotoxy00,_clreol,_setwndlft,_resetwndlft
+                .export _gotoxy00,_clreol,_set40,_set80,_setvid 
 
 
 ;/////////////////////////////////////////////////////////
@@ -87,11 +87,11 @@ _cgetchar:
                 stx prevchar            ; Store in prevchar			
 
                 ;Wait for keyboard strobe while blinking cursor
-loop:           ;Delay loop, no need to initalize x register since
+@loop:          ;Delay loop, no need to initalize x register since
                 ;it only affects the first run of inner loop
                 ldy #80         ;blinking delay
 :               lda KBD
-                bmi keypressed
+                bmi @keypressed
                 dex
                 bne :-          ;inner loop
 .ifndef TESTBUILD                
@@ -106,19 +106,19 @@ loop:           ;Delay loop, no need to initalize x register since
                 eor #$01            ;toggle it
                 sta whichchar
         
-                beq showchecker     
+                beq @showchecker     
                 lda cursorchar
                 bra :+
         
-showchecker:    ;Update Clock before show checkerboard char
+@showchecker:   ;Update Clock before show checkerboard char
                 jsr _DisplayTime
 
                 lda #$7F | $80          ;Checkerboard
 :               jsr putchardirect	
 
-                bra loop
+                bra @loop
         
-keypressed:     ; Restore old character.
+@keypressed:    ; Restore old character.
                 pha                     ;save keycode
                 lda prevchar            ;Restore original character
                 jsr putchardirect
@@ -135,14 +135,14 @@ keypressed:     ; Restore old character.
 ; void __fastcall__ newline();
 ; void __fastcall__ newline2();
 ; void __fastcall__ newlinex(uint8_t x);
-; void __fastcall__ newliney();
+; void __fastcall__ cursordown();
 ; 
-; newline()    - Move cursor to next line, set cursor x postion to 0
-; newline2()   - Call newline() twice
+; newline()    - Move cursor to next line, set cursor x position to 0
+; newline2()   - Move cursor down two lines, set cursor x position to 0
 ; newlinex()   - Move cursor to next line, set cursor x position
 ; cursordown() - Move cursor to next line, cursor x position unchanged
 ;
-_newline2:      jsr _newline
+_newline2:      jsr _cursordown
 _newline:       lda #0
 _newlinex:      sta CH     
 _cursordown:    lda CV
@@ -195,17 +195,17 @@ _clreol:
                 bit $c080       ;Restore to LC bank 2
                 rts
      
+;//////////////////////////////////////////////////////////
+; ROM routine to switch 40/80 columns mode
+;
+_set40          := $cdc0
+_set80          := $cdbe
 
-
-;/////////////////////////////////////////////////////////
-;void __fastcall__ setwndlft(uint8_t x);
-;void __fastcall__ resetwndlft();
+;///////////////////////////////////////////////////////////
+; Init Video as after cold start   
 ;
-; setwndlft: Set WNDLFT variable
-;
-; resetwndlft: Reset WNDLFT variable to 0
-;
-_resetwndlft:   lda #0        
-_setwndlft:     sta WNDLFT
-                jmp VTABZ
-                   
+_setvid:         
+                bit $c082       ;Switch in ROM
+                jsr $fe93       ;setvid routine in Monitor ROM 
+                bit $c080       ;Restore to LC bank 2
+                rts

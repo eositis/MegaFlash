@@ -31,6 +31,7 @@
 #define RIGHT_BAR 218
 #define TOP_BAR 204     //'\314'
 #define BOTTOM_BAR '_'
+#define DUAL_BAR 220
 #define WHITE_BLOCK 160
 #define TICK     196    //'\304'
 #define CHECKER1 214
@@ -41,6 +42,8 @@
 #define LTARROW  200    //'\310'
 #define RTARROW  213    //'\325'
 #define CDASH    211    //'\323'
+#define ELLIPSIS 201    //'\311'
+
 
 //Scroll Window Zero Page
 #define WNDLFT  0x20   //Range: 0-39, Default 0
@@ -83,11 +86,14 @@ typedef enum {
 //
 enum ERROR {
   ERR_CONFIG_INVALID,
-  ERR_SaveConfigReboot_FAIL,
+  ERR_GETDEVINFOSTR_FAIL,
+  ERR_LOADSETTING_FAIL,
+  ERR_SAVECONFIGREBOOT_FAIL,
   ERR_UINTCOUNT_ZERO,
   ERR_GETVOLINFO_FAIL,
   ERR_GETBLOCKCOUNT_FAIL,
-  ERR_GETBLOCKCOUNT_INVALID
+  ERR_GETBLOCKCOUNT_INVALID,
+  ERR_TFTPRUN_FAIL
 };
 
 //Function Prototypes

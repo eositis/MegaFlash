@@ -207,7 +207,7 @@ static void DrawMainMenuWindowFrame(bool isActive) {
 // Input: uint8_t item - The array index of the item to be removed.
 //
 // Note: Remove menu items in reverse order. ie. from the highest 
-// array index to 0. Then, we can use the ID_XXXX constants to identiy
+// array index to 0. Then, we can use the ID_XXXX constants to identify
 // the item.
 static void RemoveMenuItem(uint8_t item) {
   uint8_t i;  //change to static_local does not reduce code size
@@ -255,7 +255,7 @@ void DoMainMenu() {
     }
 
     do {
-      //Restore current Item
+      //Restore current item
       mnu_currentMenuItem = selectedItem;
 
       key=DoMenu((const char**)mainMenuItems,mainMenuItemCount,MENU_XPOS,MENU_YPOS);

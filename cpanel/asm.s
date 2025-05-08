@@ -22,7 +22,6 @@
 ;
 appleii         :=      $FB60   ;Clear screen and show Apple IIc
         
-
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ Reboot()
 ; Reboot the machine immediately

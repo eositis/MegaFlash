@@ -19,12 +19,6 @@
 #include "tftp.h"
 
 
-//Variables
-//=1 if running on IIc
-//=0 if running on IIc+
-//for adjusting position of menu items
-static uint8_t isAppleIIc;
-
 //
 // Defined in main.c
 //
@@ -41,21 +35,55 @@ static const char strNA []="n/a";
 
 static char mmTitle[] = "MegaFlash Control Panel";
 static char mmPrompt[] ="Cancel:esc   Select:\310 \325 \312 \313 \315";
-static const char* mainMenuItems[] = {
+
+enum COMMANDS {
+  ID_POWERONSPEED,
+  ID_BOOTMF,
+  ID_RAMDISK,
+  ID_FPU,
+  ID_NTPCLIENT,
+  ID_TIMEZONE,
+  ID_WIFISETTINGS,
+  ID_TESTWIFI,
+  ID_TFTP,
+  ID_FORMAT,
+  ID_ERASESETTINGS,
+  ID_SAVEANDREBOOT
+};
+
+static char* mainMenuItems[] = {
   "Power on CPU Speed",
   "Boot MegaFlash",
   "RAM Disk",
-  "Applesoft BASIC FPU",
+  "Applesoft BASIC FPU\0",  //When Wifi Settings is removed, we need to move the /n char to this item. \0 is the placeholder of the /n char
   "Network Time Sync",
   "Time Zone",
   "Wifi Settings >\n",
+  
   "Test Wifi/NTP >",
   "Disk Image Transfer via WIFI >",
   "Format >",
   "Erase All Settings\n",
+  
   "Save and Reboot"
 };
-#define MMITEMCOUNT 12
+static uint8_t mainMenuIDs[] = {
+  ID_POWERONSPEED,
+  ID_BOOTMF,
+  ID_RAMDISK,
+  ID_FPU,
+  ID_NTPCLIENT,
+  ID_TIMEZONE,
+  ID_WIFISETTINGS,
+  ID_TESTWIFI,
+  ID_TFTP,
+  ID_FORMAT,
+  ID_ERASESETTINGS,
+  ID_SAVEANDREBOOT
+};
+#define MMITEMCOUNT (sizeof(mainMenuItems)/sizeof((mainMenuItems)[0]))
+static uint8_t mainMenuItemCount = MMITEMCOUNT;
+
 
 //Window Position and Size
 #define XPOS 4
@@ -74,7 +102,7 @@ static void ShowNA() {
 }
 
 static void ShowCPUSpeed() {
-  gotoxy(24,MENU_YPOS);
+  gotox(24);
   if (config.configbyte1 & CPUSPEEDFLAG) cputs("Normal");
   else cputs("  Fast");
 }
@@ -85,7 +113,7 @@ static void ToggleCPUSpeed() {
 }
 
 static void ShowAutoBoot() {
-  gotoxy(27,MENU_YPOS+1-isAppleIIc);
+  gotox(27);
   if (config.configbyte1 & AUTOBOOTFLAG) cputs(strChecked);
   else cputs(strNotChecked);
 }
@@ -96,7 +124,7 @@ static void ToggleAutoBoot() {
 }
 
 static void ShowRamdisk() {
-  gotoxy(27,MENU_YPOS+2-isAppleIIc);
+  gotox(27);
   if (config.configbyte1 & RAMDISKFLAG) cputs(strChecked);
   else cputs(strNotChecked);   
 }
@@ -107,7 +135,7 @@ static void ToggleRamdisk() {
 }
 
 static void ShowFPU() {
-  gotoxy(27,MENU_YPOS+3-isAppleIIc);
+  gotox(27);
   if (HasFPUSupport()) {
     if (config.configbyte1 & FPUFLAG) cputs(strChecked);
     else cputs(strNotChecked);   
@@ -124,7 +152,7 @@ static void ToggleFPU() {
 }
 
 static void ShowNTPClient() {
-  gotoxy(27,MENU_YPOS+4-isAppleIIc);
+  gotox(27);
 
   if (!isWifiSupported) {
     ShowNA();
@@ -142,7 +170,7 @@ static void ToggleNTPClient() {
 }
   
 static void ToggleTimezone(uint8_t key) {
-  gotoxy(21,MENU_YPOS+5-isAppleIIc);
+  gotox(21);
   if (!isWifiSupported) {
     ShowNA();
   } else {
@@ -155,36 +183,62 @@ static void ShowTimezone() {
 }
 
 static void ShowAllOptions() {
-  if (isAppleIIcplus) ShowCPUSpeed();
-  ShowAutoBoot();
-  ShowRamdisk();
-  ShowFPU();
-  ShowNTPClient();
-  ShowTimezone(); 
+  //The order must be the same as mainMenuItems
+  gotoxy(0,MENU_YPOS);
+  if (isAppleIIcplus) {
+    ShowCPUSpeed(); cursordown();
+  }
+  ShowAutoBoot();  cursordown();
+  ShowRamdisk();   cursordown();
+  ShowFPU();       cursordown();
+  if (isWifiSupported) {
+    ShowNTPClient(); cursordown();
+    ShowTimezone();
+  }
 }
 
 static void DrawMainMenuWindowFrame(bool isActive) {
   wnd_DrawWindow(XPOS,YPOS,WIDTH,HEIGHT,mmTitle,isActive,false);
 }
 
+///////////////////////////////////////////////////////////
+// To remove an item from menu
+//
+// Input: uint8_t item - The array index of the item to be removed.
+//
+// Note: Remove menu items in reverse order. ie. from the highest 
+// array index to 0. Then, we can use the ID_XXXX constants to identiy
+// the item.
+static void RemoveMenuItem(uint8_t item) {
+  uint8_t i;  //change to static_local does not reduce code size
+  
+  //Use MMITEMCOUNT constant instead of mainMenuItemCount
+  //to reduce code size
+  for(i=item;i<MMITEMCOUNT-1;++i) {
+    mainMenuItems[i] = mainMenuItems[i+1];
+    mainMenuIDs[i] = mainMenuIDs[i+1];
+  }
+  --mainMenuItemCount;
+}
 
 void DoMainMenu() {
-  static_local uint8_t itemCount;
-  static_local uint8_t selectedItem;
-  static_local const char** menuItems;
   static_local bool redrawAll = true;
-  uint8_t key;    //Making it static_local results in longer code
-  
-  if (isAppleIIcplus) {
-    itemCount = MMITEMCOUNT;
-    menuItems = mainMenuItems;
-    isAppleIIc = 0;
+  static_local uint8_t key; 
+  static_local uint8_t selectedItem;
+
+  //
+  //Remove unwanted menu items. 
+  //The order is from highest ID number to 0
+  if (!isWifiSupported) {
+    RemoveMenuItem(ID_TFTP);
+    RemoveMenuItem(ID_TESTWIFI);
+    mainMenuItems[ID_FPU][strlen(mainMenuItems[ID_FPU])]='\n'; //move the new line char from WIFI Settings to FPU
+    RemoveMenuItem(ID_WIFISETTINGS);
+    RemoveMenuItem(ID_TIMEZONE);
+    RemoveMenuItem(ID_NTPCLIENT);
   }
-  else {
-    //Don't display the first item on IIc: CPU Speed
-    itemCount = MMITEMCOUNT  -1; 
-    menuItems = mainMenuItems+1;
-    isAppleIIc = 1;   //Move some items up
+  if (!isAppleIIcplus) {
+    RemoveMenuItem(ID_POWERONSPEED);
   }
   
   selectedItem = 0;
@@ -199,46 +253,49 @@ void DoMainMenu() {
       ShowAllOptions();
       DisplayTime();
     }
-    
-    do {
-      mnu_currentMenuItem = selectedItem; //Restore last selected item
-      key=DoMenu(menuItems,itemCount,MENU_XPOS,MENU_YPOS);
-      if (key==KEY_ESC) return;
-      
-      selectedItem = mnu_currentMenuItem;
-      //On IIc, the first item is AutoBoot. So, add 1 to selectedItem      
-      if (!isAppleIIcplus) ++selectedItem;
 
-      switch (selectedItem) {
-        case 0:
+    do {
+      //Restore current Item
+      mnu_currentMenuItem = selectedItem;
+
+      key=DoMenu((const char**)mainMenuItems,mainMenuItemCount,MENU_XPOS,MENU_YPOS);
+      if (key==KEY_ESC) return;
+
+      //Save current Item since mnu_currentMenuItem may be changed by
+      //command handler such as ShowEraseSettingsDialog()
+      selectedItem = mnu_currentMenuItem;
+
+      //Move the cursor to selected item
+      gotoy(selectedItem+MENU_YPOS);
+
+      //Convert selected menu item to ID
+      switch (mainMenuIDs[selectedItem]) {
+        case ID_POWERONSPEED:
           ToggleCPUSpeed();
           break;
-        case 1:
+        case ID_BOOTMF:
           ToggleAutoBoot();
           break;
-        case 2:  
+        case ID_RAMDISK:  
           ToggleRamdisk();
           break;
-        case 3:
+        case ID_FPU:
           ToggleFPU();
           break;
-        case 4:
+        case ID_NTPCLIENT:
           ToggleNTPClient();
           break;
-        case 5:
-          //TimeZone
+        case ID_TIMEZONE:
           ToggleTimezone(key);
           break;
-        case 6:
-          //Wifi Setting
+        case ID_WIFISETTINGS:
           if (key!=KEY_ENTER) break;
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;        
           if (isWifiSupported) DoWifiSetting();
           else ShowPicoWNeededDialog();
           break;
-        case 7:
-          //Test Wifi/NTP
+        case ID_TESTWIFI:
           //The Test window covers the main menu window completely.
           //No need to Inactivate main menu window 
           if (key!=KEY_ENTER) break;          
@@ -247,29 +304,26 @@ void DoMainMenu() {
           if (isWifiSupported) DoTestWifi();
           else ShowPicoWNeededDialog();
           break;
-        case 8:  
-          //Disk Image Transfer
+        case ID_TFTP:  
           if (key!=KEY_ENTER) break;             
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           DoTFTPImageTransfer();
           redrawAll = true;   
           break;
-        case 9:
+        case ID_FORMAT:
           //Format Megaflash Drive
           if (key!=KEY_ENTER) break;       
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window           
           redrawAll = true;       
           DoFormat();
           break;
-        case 10:
-          //Erase All Settings
+        case ID_ERASESETTINGS:
           if (key!=KEY_ENTER) break;     
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;
           ShowEraseSettingsDialog();
           break;
-        case 11:
-          //Save and Reboot
+        case ID_SAVEANDREBOOT:
           if (key!=KEY_ENTER) break;          
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           redrawAll = true;

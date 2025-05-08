@@ -58,7 +58,4 @@ bool __fastcall__ HasFPUSupport();
 bool __fastcall__ ReadOpenAppleButton();
 void __fastcall__ Delay(uint8_t n);
 
-
-
-
 #endif

@@ -6550,6 +6550,12 @@
 		(uuid "ba316cb5-94c1-4c8d-af3c-dcc422eca303")
 	)
 	(junction
+		(at 168.91 99.06)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c8f9d748-fb34-41cb-adc9-19650102b4a2")
+	)
+	(junction
 		(at 43.18 171.45)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -6622,16 +6628,8 @@
 		(uuid "51dd13a9-232f-4b5a-a247-27998c39ac03")
 	)
 	(no_connect
-		(at 168.91 114.3)
-		(uuid "5459ff8b-1c18-4cc1-8163-6b0322e2a982")
-	)
-	(no_connect
 		(at 229.87 50.8)
 		(uuid "59bebf2c-14c0-4b2c-9e46-0201e138f4b3")
-	)
-	(no_connect
-		(at 168.91 99.06)
-		(uuid "67fafaef-c5cb-4fc3-9b23-db390b833710")
 	)
 	(no_connect
 		(at 58.42 63.5)
@@ -6873,6 +6871,16 @@
 	)
 	(wire
 		(pts
+			(xy 156.21 120.65) (xy 168.91 120.65)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "140aca8b-1a5e-465c-9be1-92c0b3e1ab93")
+	)
+	(wire
+		(pts
 			(xy 95.25 53.34) (xy 101.6 53.34)
 		)
 		(stroke
@@ -7033,6 +7041,16 @@
 	)
 	(wire
 		(pts
+			(xy 166.37 99.06) (xy 166.37 101.6)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "24c8c617-1c84-464c-9469-5c025c422651")
+	)
+	(wire
+		(pts
 			(xy 67.31 116.84) (xy 71.12 116.84)
 		)
 		(stroke
@@ -7140,16 +7158,6 @@
 			(type default)
 		)
 		(uuid "3379cd1c-63d7-41dd-8412-26569b2c9994")
-	)
-	(wire
-		(pts
-			(xy 168.91 111.76) (xy 168.91 114.3)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "34ab6abb-f693-4ce3-bdc4-46cb55e3ee6a")
 	)
 	(wire
 		(pts
@@ -7280,16 +7288,6 @@
 			(type default)
 		)
 		(uuid "463511ba-abba-4eec-ade6-9c4601b5af73")
-	)
-	(wire
-		(pts
-			(xy 166.37 97.79) (xy 166.37 101.6)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4752b0d1-df82-446c-a1c2-ef5331511280")
 	)
 	(wire
 		(pts
@@ -8723,6 +8721,16 @@
 	)
 	(wire
 		(pts
+			(xy 168.91 99.06) (xy 166.37 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c3c6ac57-e3bc-401e-a1b2-514aa94e8133")
+	)
+	(wire
+		(pts
 			(xy 224.79 30.48) (xy 231.14 30.48)
 		)
 		(stroke
@@ -8790,6 +8798,16 @@
 			(type default)
 		)
 		(uuid "cf667e6b-5423-4595-9956-1a75f22ee9e9")
+	)
+	(wire
+		(pts
+			(xy 168.91 111.76) (xy 168.91 120.65)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cf83131b-6d0e-4575-9c55-4df976c27099")
 	)
 	(wire
 		(pts
@@ -9003,16 +9021,6 @@
 	)
 	(wire
 		(pts
-			(xy 168.91 99.06) (xy 168.91 101.6)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e29d2d2a-bba4-479f-be81-a2506288c454")
-	)
-	(wire
-		(pts
 			(xy 53.34 43.18) (xy 59.69 43.18)
 		)
 		(stroke
@@ -9030,6 +9038,26 @@
 			(type default)
 		)
 		(uuid "e538ce61-3305-4ff8-b9a7-ef3237e2b6f1")
+	)
+	(wire
+		(pts
+			(xy 168.91 99.06) (xy 168.91 101.6)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e556d0d3-1a32-4c22-9f5f-2f9b4fc12e68")
+	)
+	(wire
+		(pts
+			(xy 168.91 97.79) (xy 168.91 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e5c65ed5-d8fb-4347-8ed9-63655d4497ec")
 	)
 	(wire
 		(pts
@@ -9341,7 +9369,7 @@
 		)
 		(uuid "ffd1e576-092a-417c-a1da-9b2c3d9b8c8c")
 	)
-	(text "1) Power can be supplied to USB port of Pico. The diodes make sure \nthe current from Pico USB port cannot flow into Apple.\n2) The flash chips are powered by 3.3V from Pico so that\nthey can be accessed in Terminal mode.\n3) A 3.3V regulator provides power to 5V-to-3.3V level shifter\nto make sure the level  shifter is powered when Pico is removed."
+	(text "1) Power can be supplied to USB port of Pico. The diodes make sure \nthe current from Pico USB port cannot flow into Apple.\n2) The flash chips are powered by 3.3V from Pico so that\nthey can be accessed when Apple is turned off but Pico is powered \nby USB port.\n3) A 3.3V regulator provides power to 5V-to-3.3V level shifter\nto make sure the level  shifter is powered when Pico is removed."
 		(exclude_from_sim no)
 		(at 88.138 182.372 0)
 		(effects
@@ -9821,6 +9849,16 @@
 			(justify left bottom)
 		)
 		(uuid "7c044908-4214-4475-b50a-21fde88f5fdc")
+	)
+	(label "~{DEVSEL}#"
+		(at 156.21 120.65 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "7d8273c4-b6bb-4892-9808-09cc007bf6b1")
 	)
 	(label "SPI0_TX"
 		(at 176.53 38.1 0)
@@ -10931,6 +10969,72 @@
 		)
 	)
 	(symbol
+		(lib_name "+5V_1")
+		(lib_id "power:+5V")
+		(at 168.91 97.79 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "14a6e1e3-cb32-4ef2-9c01-c93bb0ab52c3")
+		(property "Reference" "#PWR32"
+			(at 168.91 101.6 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+5V"
+			(at 169.926 93.726 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 168.91 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 168.91 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+5V\""
+			(at 168.91 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "e8cff1d9-e7c3-4b03-bfa0-f65f2ebce884")
+		)
+		(instances
+			(project "megaflash"
+				(path "/3749e4b7-e77b-4408-a9b5-e158199b3d7e"
+					(reference "#PWR32")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_name "GND_5")
 		(lib_id "power:GND")
 		(at 148.59 152.4 0)
@@ -11166,72 +11270,6 @@
 			(project "iic_storage"
 				(path "/3749e4b7-e77b-4408-a9b5-e158199b3d7e"
 					(reference "J1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_name "+3.3V_2")
-		(lib_id "power:+3.3V")
-		(at 166.37 97.79 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "24a2ce63-0999-41ce-bb98-695047440e8f")
-		(property "Reference" "#PWR31"
-			(at 166.37 101.6 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+3.3V"
-			(at 166.37 93.726 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 166.37 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 166.37 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 166.37 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "43457f39-a442-49ad-abd3-1cf7e48da6f7")
-		)
-		(instances
-			(project "megaflash"
-				(path "/3749e4b7-e77b-4408-a9b5-e158199b3d7e"
-					(reference "#PWR31")
 					(unit 1)
 				)
 			)

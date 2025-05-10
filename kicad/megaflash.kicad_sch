@@ -10580,7 +10580,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "128MB NOR Flash"
+		(property "Description" "128MB NOR Flash, WSON-8 Package"
 			(at 252.73 107.95 0)
 			(effects
 				(font

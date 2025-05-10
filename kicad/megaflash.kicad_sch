@@ -6388,6 +6388,12 @@
 		(uuid "19598466-0c98-46e1-b807-8b22ec9c64ac")
 	)
 	(junction
+		(at 33.02 133.35)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "1fb86762-3ae3-4732-bc3e-077e3aa25f48")
+	)
+	(junction
 		(at 33.02 63.5)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -6422,6 +6428,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "2e6551cb-4122-4e70-ac21-73a1a389e67d")
+	)
+	(junction
+		(at 30.48 116.84)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "372bbafc-edab-476f-bede-437318317e7a")
 	)
 	(junction
 		(at 101.6 140.97)
@@ -6608,10 +6620,6 @@
 		(uuid "2945b192-1a99-40fc-b223-56145972cb78")
 	)
 	(no_connect
-		(at 36.83 114.3)
-		(uuid "372f4138-086a-4781-acdb-86693f0c6f68")
-	)
-	(no_connect
 		(at 179.07 53.34)
 		(uuid "402c3b42-5604-45fa-a72d-54447c0ad906")
 	)
@@ -6650,10 +6658,6 @@
 	(no_connect
 		(at 209.55 85.09)
 		(uuid "a799c9ec-6d1d-4c3b-b3f7-4c790bd0fe6d")
-	)
-	(no_connect
-		(at 36.83 116.84)
-		(uuid "a95f7702-67fb-4eea-bd49-c8a5522e7e57")
 	)
 	(no_connect
 		(at 71.12 116.84)
@@ -6718,6 +6722,16 @@
 			(type default)
 		)
 		(uuid "04b89cd3-30e3-4a32-83e8-e0e24576f6c0")
+	)
+	(wire
+		(pts
+			(xy 30.48 116.84) (xy 30.48 114.3)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0507878b-87e5-4b0c-8991-8ffcaa2fc3ac")
 	)
 	(wire
 		(pts
@@ -7231,16 +7245,6 @@
 	)
 	(wire
 		(pts
-			(xy 36.83 114.3) (xy 44.45 114.3)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "3cdbdc2a-efac-4e1e-a32b-15e1647a8fa2")
-	)
-	(wire
-		(pts
 			(xy 233.68 101.6) (xy 252.73 101.6)
 		)
 		(stroke
@@ -7378,6 +7382,16 @@
 			(type default)
 		)
 		(uuid "4d11a2a1-5c4d-4ca8-ab1d-482c98da71d1")
+	)
+	(wire
+		(pts
+			(xy 30.48 116.84) (xy 44.45 116.84)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4d798142-f152-4669-8837-3ce08e77f912")
 	)
 	(wire
 		(pts
@@ -7948,6 +7962,16 @@
 			(type default)
 		)
 		(uuid "7ae65620-7687-4521-94f3-c2be7121e374")
+	)
+	(wire
+		(pts
+			(xy 30.48 116.84) (xy 30.48 133.35)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7b463e6a-5daf-4117-b674-dff627f3cfe6")
 	)
 	(wire
 		(pts
@@ -8831,6 +8855,16 @@
 	)
 	(wire
 		(pts
+			(xy 30.48 114.3) (xy 44.45 114.3)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d2520889-dca1-41c7-9fcd-20d33687df6d")
+	)
+	(wire
+		(pts
 			(xy 101.6 151.13) (xy 101.6 152.4)
 		)
 		(stroke
@@ -8931,6 +8965,16 @@
 	)
 	(wire
 		(pts
+			(xy 30.48 133.35) (xy 33.02 133.35)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d8a4f592-2c60-4904-bb5c-3fd931d64a67")
+	)
+	(wire
+		(pts
 			(xy 113.03 31.75) (xy 113.03 33.02)
 		)
 		(stroke
@@ -8968,16 +9012,6 @@
 			(type default)
 		)
 		(uuid "dcf6e7db-e4f8-423e-b462-1d8e272a630d")
-	)
-	(wire
-		(pts
-			(xy 36.83 116.84) (xy 44.45 116.84)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ddb4d6e6-7829-4ffe-91f0-16de2b9314c5")
 	)
 	(wire
 		(pts
@@ -11999,7 +12033,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "PLD"
+		(property "Description" "GAL16V8 PLCC-20 Package"
 			(at 113.03 49.53 0)
 			(effects
 				(font
@@ -14020,7 +14054,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "128MB NOR Flash"
+		(property "Description" "128MB NOR Flash, WSON-8 Package"
 			(at 207.01 107.95 0)
 			(effects
 				(font
@@ -14117,7 +14151,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "4 resistor network, parallel topology"
+		(property "Description" "4 resistor network, 4x0603"
 			(at 171.45 106.68 0)
 			(effects
 				(font

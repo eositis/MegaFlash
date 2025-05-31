@@ -9,7 +9,7 @@ Go to the MegaFlash `pico` source directory. Execute the shell script file by
 ```
 ./cmakeall.sh
 ```
-If everything is correct, 5 directories should be created.
+If everything is correct, the following sub-directories should be created.
 
 ```
 pico_debug

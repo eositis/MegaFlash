@@ -1,8 +1,8 @@
-#Control Panel
+# Control Panel
 
 Control Panel is a sub-project of MegaFlash. Since there is not enough space to store the control panel program in the ROM, the control panel program is stored in Pico.  To execute the control panel program, the program code is copied to Apple RAM memory and executed from there.
 
-##Build Environment
+## Build Environment
 
 The project is built on Linux with CC65 compiler.  Follow [the instruction](https://cc65.github.io/getting-started.html) to compile CC65. Make sure to add cc65 binaries directory to PATH variable by running 
 
@@ -16,11 +16,11 @@ If it is not installed, try to instal Java Runtime Environment by
 
 ```sudo apt install default-jre```
 
-##Build Instruction
+## Build Instruction
 
 Execute `make` to build the project.
 
-##Build Target
+## Build Target
 
 There are two build targets, `release` and `test`.
 

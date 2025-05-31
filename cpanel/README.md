@@ -12,7 +12,7 @@ Java runtime is also needed to build the test target.  Check if Java is installe
 
 ```java -version```
 
-If it is not installed, try to instal Java Runtime Environment by
+If it is not installed, try to install Java Runtime Environment by
 
 ```sudo apt install default-jre```
 

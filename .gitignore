@@ -15,7 +15,7 @@
 /pico/pico_release
 /pico/pico2_debug
 /pico/pico2_release
-/pico/pictool
+/pico/picotool
 
 /kicad/**/*.bak
 

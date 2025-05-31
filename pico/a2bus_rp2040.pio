@@ -1,0 +1,173 @@
+; Ver 3 - Registers value are prefetched to PIO, support up to 16 registers
+; CPU doesn't need to do anything for 6502 read cycle
+;
+; Ver 3.1 - Try to pull regvalue from FIFO again before outputting data
+;
+; Ver 3.2 - Support system clock >125MHz
+;         - IRQ0 as a flag to indicate a pending bus operation
+;
+;
+; The usual implementation is that the PIO program informs the CPU when 6502 
+; is reading from us. The CPU then sends the data to PIO program. The PIO program 
+; outputs the data to 6502. But the CPU only has 450ns, which equals to 56 cycles,
+; to process the request. 
+
+; But MegaFlash is just a device at slot 4. It only has 16 I/O registers from $C0C0 
+; to $C0CF. The current values of those registers can be stored in PIO state machine 
+; memory. The state machine can response 6502 read request without the help from CPU.
+
+; Each state machine has 4 32-bit registers. Only one 32-bit register is used to 
+; store 6502 8-bit registers. So, all 4 state machines are needed. State machine 0 
+; is responsible for $C0C0 to $C0C3 and so on.
+
+; The state machines run the same program. The CPU assign an ID (0-3) to each state 
+; machine so it responses to different 6502 addresses.
+
+; To further simplify the PIO program, Bit 2, RnW bit, is set when CPU assign the IDs. 
+
+.pio_version RP2040
+
+; Pin Allocations
+;   9-6: Apple Address Bus A3-0
+;    10: R/nW
+; 18-11: Apple Data Bus D7-D0
+;    19: PHI0
+;    20: nDEVSEL, Active Low
+;    22: nPICOWR, Output, Active Low
+
+.define public A2BUS_BASE   6   ; Apple Bus at GPIO 06-18
+.define public A2DBUS_BASE  11  ; Apple Data Bus at GPIO11-18
+.define public A2BUS_WIDTH  13  ; A3-A0 + R/nW + 8-bit Databus
+.define public R_NW_GPIO    10  ; R/nW at GPIO 10
+.define public PHI0_GPIO    19  ; PHI0 at GPIO 19
+.define public nDEVSEL_GPIO 20  ; DEVSEL at GPIO 20, Active Low
+.define public nPICOWR_GPIO 22  ; Indicate Pico is outputting data
+
+.program a2bus
+
+.side_set 1 opt         ; sideset pin is picowr_n
+
+    
+  pull block side 1     ; Read State Machine ID (0-3) with RnW bit set from CPU
+  mov y,osr             ; Then, copy it to y
+
+.wrap_target
+  mov x,isr             ; move 6502 registers values (regval) to x
+
+  ;
+  ; Busy waiting new registers value from CPU or nDEVSEL signal
+  ;
+loop:
+  pull noblock          ; New 6502 regval from CPU?
+                        ; If FIFO empty, perform mov osr, x to reuse the last value
+  mov x, osr            ; Store regval to x
+  
+  jmp PIN, loop         ; JMP Pin is nDEVSEL
+
+cycle_start:
+  mov isr, null [7]     ; Clear ISR and delay awhile before reading data from 6502
+  nop           [7]     ; Don't remove this nop. It doesn't work without the delay.
+  in pins, A2BUS_WIDTH  ; Read Apple Bus
+  push noblock          ; Don't use auto-push since auto-push is blocking
+  
+  ;Is 6502 reading from this State Machine?
+  ;Check if [A3:A2]==Our State Machine ID and RnW==1
+  mov isr,x             ; save regval to ISR
+  mov osr, pins         ; Read Apple Bus to OSR
+  out null, 2           ; Discard A1-0
+  out x, 3              ; x=[RnW,A3,A2]
+  jmp x!=y, cycle_end   ; jmp if not access this state machine or RnW==0
+     
+  ;----------------------------------
+  ;Read cycle
+  ;Pico -> 6502
+  
+  ;Read Address
+  mov osr, pins         ; Read Apple Bus to OSR          
+  out x, 2              ; x=[A1:0]
+
+  ; Copy regval to osr
+  mov osr, isr      
+  
+  ; Select the byte based on x which is [A1:0]
+  ; May loop up to 4 times
+byte_select:
+  out pins,8            ; Send lowest byte out
+  jmp x--, byte_select  ; jmp if x!=0, prior to decrement
+  
+  ; Switch Pin to output
+  mov osr, ~NULL  
+  out pindirs, 8 side 0 ;Switch pindir to output, side 0 to switch transeiver directon
+  ;Timing: Max 39 cycles or 312ns from nDEVSEL is activated.
+  
+cycle_end:
+  ; Wait until Phi0 goes low and switch pin direction to input
+  mov osr, null         ; osr = all-zeros, for setting pindirs
+  wait 0 gpio PHI0_GPIO ; wait unti PHI0 goes low
+  out pindirs, 8 side 1 ; Switch pindirs to input  
+  
+  ; Wait until nDEVSEL_GPIO is inactive
+  ; When the Apple II side is un-powered, both nDEVSEL and PHI0 is low
+  ; even the built-in pull-up resistors are enabled.
+  ; So, an access to us is continuously triggered.
+  ; Adding this instruction prevents that.
+  wait 1 gpio nDEVSEL_GPIO
+.wrap
+
+
+
+% c-sdk {
+static void a2bus_program_init(PIO pio,uint sm,uint offset) {
+  //setup wrap target and return the state machine config struct
+  pio_sm_config c = a2bus_program_get_default_config(offset);
+
+	//The timing is for 125MHz clock speed
+	//Setup clock divider if system speed > 125MHz
+  #if SYS_CLK_MHZ>125
+  sm_config_set_clkdiv(&c, SYS_CLK_MHZ/125.0f);
+  #endif
+
+  //IN instruction PINS mapping
+  sm_config_set_in_pins(&c, A2BUS_BASE);
+
+  //OUT instruction PINS and PINSDIR mapping
+  sm_config_set_out_pins(&c, A2DBUS_BASE, 8);
+  
+  //Sideset PIN mapping
+  sm_config_set_sideset_pins(&c, nPICOWR_GPIO);  
+
+  //JMP instruction PIN mapping
+  sm_config_set_jmp_pin(&c, nDEVSEL_GPIO); 
+
+  //shift_right: false (data go to LSB)
+  //autopush: false
+  //push_threashold: 0
+  sm_config_set_in_shift(&c, false, false, 0);
+  
+  //shift_right: true
+  //autopull: false
+  //pull_threshold: 0
+  sm_config_set_out_shift(&c, true, false, 0);
+
+  //GPIO:PICOWR pin as output
+  pio_sm_set_consecutive_pindirs(pio, sm, nPICOWR_GPIO, 1, true /*=out*/);
+  pio_gpio_init(pio, nPICOWR_GPIO);
+  
+  //GPIO: Address Bus, RnW, Data bus as input
+  pio_sm_set_consecutive_pindirs(pio, sm, A2BUS_BASE, 8, false /*=in*/); 
+  for (int pin=A2BUS_BASE; pin<A2BUS_BASE+A2BUS_WIDTH; ++pin) {
+    pio_gpio_init(pio, pin);
+    gpio_pull_down(pin);    //Enable Pull down resistor, to avoid floating of LVC4245 inputs
+  }
+  
+  //GPIO: Set PHI0 and nDEVSEL pin to PIO
+  pio_gpio_init(pio,PHI0_GPIO);
+  pio_gpio_init(pio,nDEVSEL_GPIO);
+
+  //Load configuration to State Machine and
+  //setup Program Counter
+  pio_sm_init(pio, sm, offset, &c);
+}
+
+%}
+

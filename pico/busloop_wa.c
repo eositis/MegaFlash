@@ -1,0 +1,110 @@
+#include "pico/stdio.h"
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/pio.h"
+#include "a2bus.h"
+#include "defines.h"
+#include "busloop_wa.h"
+
+//---------------------------------------------------------------------
+//After Power on reset, MegaFlash is not activated since it is possible
+//that the Apple II may be running stock firmware. The firmware
+//may accidentally corrupt the data in MegaFlash.
+//MegaFlash can be activated by reading the following addresses in sequence.
+//
+//$C0C2
+//$C0C0
+//$C0C0
+//$C0C3
+//$C0C1
+//
+//Then, MegaFlash is activated and this function returns.
+//
+//Note: The stock firmware has serious bugs in testsize and makecat
+//routines. Both routines use the slinky address registers as loop
+//counters. The problem is if there is no card, those registers
+//do not exist.  The code can get out of the loop because the floating
+//bus can have any random value. By chance, the loop exits.
+//
+//After studying the firmware code, it is found that the following
+//criteria is required to avoid dead-loop. 
+//  $C0C0 == 0
+//  Upper Nibble of $C0C1 != 0
+//  Lower Nibble of $C0C2 == 0
+//
+//Also, the boot code try to load block 0 to $800. If address $801 is not 0,
+//the code assumes a valid boot block is loaded and execute the code at $801.
+//Thus, data register $C0C3 should be initalize to 0
+//
+//So, we initialize slinky registers to 0x00f0f000.
+
+//--------------------------------------------------------------
+//The definitions below must be the same as the ones in a2bus.c
+extern union {
+  uint8_t  r[16];     //Individual 8-bit registers
+  uint32_t i32[4];    //Chunks of 4 32-bit registers
+} registers;
+//--------------------------------------------------------------
+
+
+
+void __no_inline_not_in_flash_func(BusLoopWaitActiviation)() {
+  const uint32_t REGINITVAL = 0x00f0f000;
+  
+  enum {
+    STATENULL,
+    STATE2,   //$C0C2 accessed
+    STATE20,  //$C0C2, $C0C0 accessed
+    STATE200, //and so on
+    STATE2003,
+    STATE20031
+  } state = STATENULL;
+    
+  const uint READFLAG = (1<<4); //Read flag is at bit 4
+
+  registers.i32[0] = REGINITVAL;
+  UpdateMegaFlashRegisters(0,REGINITVAL);
+  
+  do {
+    //8-bit data from Apple + RnW Flag + 4-bit address from Apple
+    uint32_t busdata = GetAppleBusBlocking();
+    uint32_t addr = busdata & 0b1111;     //Lower nibble of Apple Address
+    uint32_t data = (busdata >>5) & 0xff; //8-bit data from Apple
+    
+    if (busdata & READFLAG) {
+      //6502 is reading from us
+
+      switch(state) {
+        case STATENULL:
+          if (addr==2) state=STATE2;
+          break;
+        case STATE2:
+          if (addr==0) state=STATE20;
+          else if (addr==2) state=STATE2;
+          else state=STATENULL;
+          break;
+        case STATE20:
+          if (addr==0) state=STATE200;
+          else if (addr==2) state=STATE2;
+          else state=STATENULL;
+          break;
+        case STATE200:
+          if (addr==3) state=STATE2003;
+          else if (addr==2) state=STATE2;
+          else state=STATENULL;
+          break;
+        case STATE2003:
+          if (addr==1) state=STATE20031;
+          else if (addr==2) state=STATE2;
+          else state=STATENULL;
+          break;          
+        default:
+          state = STATENULL;
+      }
+    } else {
+        //6502 is writing to us
+        state = STATENULL;
+    }   
+  } while(state!=STATE20031); 
+}
+

@@ -11,6 +11,12 @@
 /cpanel/relbuild
 /cpanel/testbuild
 
+/pico/pico_debug
+/pico/pico_release
+/pico/pico2_debug
+/pico/pico2_release
+/pico/pictool
+
 /kicad/**/*.bak
 
 **/*:Zone.Identifier

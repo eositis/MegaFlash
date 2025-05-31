@@ -1,0 +1,16 @@
+/acc
+
+/firmware/slinky.s
+/firmware/iic
+/firmware/iicplus
+/firmware/iic.bin
+/firmware/iicplus.bin
+/firmware/rom4.bin
+/firmware/rom5.bin
+
+/cpanel/relbuild
+/cpanel/testbuild
+
+/kicad/**/*.bak
+
+**/*:Zone.Identifier

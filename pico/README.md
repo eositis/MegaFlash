@@ -19,7 +19,7 @@ pico2_release
 picotool
 ```
 
-Note: You need to execute the shell script only once.
+Note: You need to execute the shell script only once unless `CMakeLists.txt` file is changed or you want to recreate the build directories.
 
 `pico_debug` and `pico_release` are the build directories for Pico Board (RP2040).  `pico2_debug` and `pico2_release` are the build directories for Pico2 Board (RP2350).
 

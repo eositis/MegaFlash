@@ -2,6 +2,8 @@
 
 MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 
+![Image of MegaFlash PCB](/images/megaflash_rev1_s.jpg)
+
 ## Feature List
 
 - 128MB/256MB Capacity, divided into 4/8 ProDOS Drives

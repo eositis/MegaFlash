@@ -26,7 +26,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 System ROM replacement is required for MegaFlash to function.
 
 ## Hardware
-The hardware is quite simple.  All the hardwork is handled by Pi Pico.  Apple 6502 CPU only needs to copy data from/to Pico.
+The hardware is quite simple.  All the hardwork is handled by Pi Pico.  Apple 65C02 CPU only needs to copy data between RAM and Pico.
 
 - Raspberry Pi Pico2 W
 - Winbond 25Q01 NOR Flash memory

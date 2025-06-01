@@ -36,9 +36,9 @@ The hardware is quite simple.  All the hardwork is handled by Pi Pico.  Apple 65
 
 There are 3 software projects. There is not enough space in Apple ROM to store the Control Panel program.  The program is stored in Pico flash memory. 
 
-`firmware` Project Directory of Apple ROM Patches
-`cpanel` Control Panel project
-`pico` Raspberry Pi Pico firmware
+`firmware` Project Directory of Apple ROM Patches\
+`cpanel` Control Panel project\
+`pico` Raspberry Pi Pico firmware\
 `common` Common header files used by all 3 projects
 
 

@@ -8,6 +8,8 @@ FWVERSION         =       $01                ;Version of this Firmware, Stored a
 .else
 .define TITLESTR "MegaFlash Firmware V1.0"   ;Shown on boot menu screen
 .endif
+; $01 = Version 1.0 13-Jul-2025
+
 .define IDSTR   "MEGAFLASH DRV N "           ;ID String Padded to 16 bytes
 IDSTRLEN          =       15
 IDSTR_DN_OFFSET   =       14                 ;Offset to Drive Number Char

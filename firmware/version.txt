@@ -1,4 +1,4 @@
 
-Version 1.0 Jul-13-2025 (FWVERSION = $01)
+Version 1.0 13-Jul-2025 (FWVERSION = $01)
 - First Public Release
 - Switch to Main ROM bank when boot menu is executed.

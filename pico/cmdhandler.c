@@ -127,7 +127,6 @@ static void Reconfig() {
 /////////////////////////////////////////////////////////////
 // Report Device Information
 // For isonline driver routine
-// Transfer mode is set to linear
 //
 // Parameter Output:
 //   Device Signature Byte 1
@@ -137,6 +136,10 @@ static void Reconfig() {
 //   Firmware Version High Byte
 //   Pico Board Type
 //   Hardware Type
+//   Number of Flash Drive Enabled
+//   Number of Flash Drive that actually exist
+//   Flash Capacity in MB Low Byte
+//   Flash Capacity in MB High Byte
 //   Reserved = 0
 //
 static void DoGetDeviceInfo() {
@@ -159,9 +162,20 @@ static void DoGetDeviceInfo() {
   //Hardware Type
   parameterBuffer[6] = 0; //0=MegaFlash
   
-  //Reserved for future use
-  parameterBuffer[7] = 0;
+  //Number of Flash Drive Enabled
+  parameterBuffer[7] = GetUnitCountFlash();
   
+  //Number of Flash Drive that Acutally Exist
+  parameterBuffer[8] = GetUnitCountFlashActual();
+  
+  //Total Capacity of Flash Memory in MB
+  uint16_t flashSize = GetFlashSize();
+  parameterBuffer[9]  = flashSize & 0xff;         //Low Byte
+  parameterBuffer[10] = (flashSize>>8) & 0xff;    //High Byte
+  
+  //Reserved for future use
+  parameterBuffer[11] = 0;
+    
   ResetParamPointer();
   ResetDataPointer();
   ClearError();

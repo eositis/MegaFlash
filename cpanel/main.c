@@ -60,6 +60,7 @@ void ShowDeviceInfoString() {
   //Request System Information
   if (!GetInfoString(INFOSTR_DEVICE)) FatalError(ERR_GETDEVINFOSTR_FAIL);  
   PrintStringFromDataBuffer();
+  cprintf("Control Panel Build Timestamp = %s %s",__DATE__,__TIME__);
   newline2();
   cputs(strPressanykeyto_);
   cputs(strcontinue);
@@ -81,7 +82,7 @@ void main() {
   SendCommand(CMD_GETDEVINFO);
   boardType = GetParam8Offset(5);                     //Read board type
   isWifiSupported = boardType & 0x80;                 //MSB set if Wifi is supported
-  if (ReadOpenAppleButton()) ShowDeviceInfoString();  //Device Info String already in data buffer
+  if (ReadOpenAppleButton()) ShowDeviceInfoString();  
 #else
   boardType = BRD_PICO2W;
   isWifiSupported = true;

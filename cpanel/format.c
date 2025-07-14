@@ -41,8 +41,6 @@ static void DrawFormatWindowFrame(char page) {
 }
 
 
-
-
 /////////////////////////////////////////////////////////////////////
 // The routine to drive the formatting process
 //

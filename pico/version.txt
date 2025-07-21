@@ -1,3 +1,4 @@
 
-Version 1.0 14-Jul-2025
+Version 1.0 21-Jul-2025
 - First Public Release
+- Supported Winbond W25Q02JV-DTR flash chip

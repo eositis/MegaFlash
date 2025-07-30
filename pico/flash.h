@@ -30,7 +30,7 @@ void EraseSecurityRegister(const uint32_t regnum);
 void ReadSecurityRegister(const uint32_t regnum,uint8_t* dest,const uint8_t offset,const size_t len);
 void WriteSecurityRegister(const uint32_t regnum,uint8_t* src,const uint8_t offset,const size_t len);
 
-uint32_t GetUnitCountFlash();
+
 uint32_t GetUnitCountFlashActual();
 uint32_t GetBlockCountFlash(const uint unitNum);
 uint32_t GetBlockCountFlashActual(const uint unitNum);

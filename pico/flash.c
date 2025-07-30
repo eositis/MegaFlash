@@ -70,9 +70,6 @@ static const uint FLASH_BUSYFLAG = 0b00000001;  //Busy Flash in Flash Status Reg
 static uint8_t __attribute__((aligned(4))) sectorBuffer[SECTORSIZE];
 static uint8_t __attribute__((aligned(4))) blockBuffer[BLOCKSIZE]; 
 
-//Limit number of units to 8
-#define MAXFLASHUNITCOUNT 8
-
 //Number of units (ProDOS drives) on Flash chip
 static uint32_t unitCountFlash0 = 0;
 static uint32_t unitCountFlash1 = 0;
@@ -215,6 +212,40 @@ static uint8_t __no_inline_not_in_flash_func(ReadStatus1)(const uint deviceNum) 
   return buffer[1];
 }
 
+////////////////////////////////////////////////////////////////////
+// Read Status Register-3 from Flash Chip
+//
+// Input: Device Number
+//
+// Output: Status Register-3
+//
+static uint8_t ReadStatus3(const uint deviceNum) {
+  uint8_t buffer[2]={0x15};  //Read Status Register-3 Command + 1 Byte Result
+  
+  enable_spi0(deviceNum);
+  spi_write_read_blocking(spi0, buffer, buffer, 2); 
+  disable_spi0();
+  
+  return buffer[1];
+}
+
+////////////////////////////////////////////////////////////////////
+// Write to Status Register-3 
+//
+// Input: Device Number
+//        Value to be written
+//
+static uint8_t WriteStatus3(const uint deviceNum, const uint8_t value) {
+  uint8_t msg[2];  
+  
+  msg[0]=0x11;  //Write Status Register-3 command
+  msg[1]=value; //8-bit value to be written
+  
+  WriteEnable(deviceNum);
+  enable_spi0(deviceNum);
+  spi_write_blocking(spi0, msg, 2);
+  disable_spi0();
+}
 
 ////////////////////////////////////////////////////////////////////
 // Program Security Register
@@ -389,6 +420,9 @@ void WriteSecurityRegister(const uint32_t regnum,uint8_t* src,const uint8_t offs
 //
 blockloc_t __no_inline_not_in_flash_func(GetBlockLoc)(uint unitNum, const uint blockNum) {
   blockloc_t blockLoc;
+
+  //Make sure unitNum != 0
+  if (unitNum == 0) panic("GetBlockLoc() unitNum==0");
   
   if (unitNum<=unitCountFlash0) {
     blockLoc.deviceNum = DEVICE0;
@@ -908,8 +942,15 @@ void InitSpi(){
   //SPI does not work at 100MHz on the devboard.
   //Set the max speed to 75MHz
   spi_init(spi0,75000000);    //Max Speed = 75MHz
-  //spi_init(spi0, clock_get_hz(clk_peri)/2);  
-  
+
+  //Set slew rate of SPI output pins to fast to make
+  //SPI work reliably at 75MHz
+  gpio_set_slew_rate(CS0_PIN,  GPIO_SLEW_RATE_FAST);
+  gpio_set_slew_rate(CS1_PIN,  GPIO_SLEW_RATE_FAST);
+  gpio_set_slew_rate(SCK_PIN,  GPIO_SLEW_RATE_FAST);
+  gpio_set_slew_rate(MOSI_PIN, GPIO_SLEW_RATE_FAST); //TX
+
+  //Set GPIO functions
   gpio_set_function(SCK_PIN,  GPIO_FUNC_SPI);
   gpio_set_function(MOSI_PIN, GPIO_FUNC_SPI);
   gpio_set_function(MISO_PIN, GPIO_FUNC_SPI); 
@@ -935,7 +976,6 @@ void InitSpi(){
    Enable4BytesAddressing(DEVICE0);
    Enable4BytesAddressing(DEVICE1);   
 }
-
 
 //////////////////////////////////////////////////////
 // Convert supported Flash chip ID to capacity in MB
@@ -1122,27 +1162,6 @@ uint32_t GetUnitCountFlashActual(){
 }
 
 
-//////////////////////////////////////////////////////
-// Return the unit count of Flash reported to users
-//
-// Note: The report numbers may be less than the acutal number.
-// Smartport can support up to 14 drives, 2 drives per slot. But
-// some slots are reserved for other purpose, like slot 5/6 for
-// floppy drives. So, we cap the number of flash drive to 
-// MAXFLASHUNITCOUNT (currently set at 8).
-// Also, the maxflashdrive option of user config also limit the
-// number of flash drive. Some users may find that managing 8 drives
-// is confusing. So, this option allows users to delibrately limit
-// the number of drives
-//
-// Output: uintCount - Number of ProDOS drives
-//
-uint32_t GetUnitCountFlash(){
-  uint32_t actual = GetUnitCountFlashActual();
-  uint32_t maxflashdrive = GetMaxFlashDrive();
-  return MIN3(actual,MAXFLASHUNITCOUNT,maxflashdrive);
-}
-
 ////////////////////////////////////////////////////////////////////
 // Get the total number of block of the unit reported to Prodos
 // Assume unitNum is valid
@@ -1312,21 +1331,24 @@ rwerror_t __no_inline_not_in_flash_func(WriteBlockFlash_Public)(const uint unitN
 // Write Block to Flash and Assume the Flash Chip is already erased.
 // Assume unitNum and blockNum are valid.
 //
-// Input: blockLoc - Block Location
-//        srcBuffer    - Data to be written (512 Bytes)
+// Input: blockLoc  - Block Location
+//        srcBuffer - Data to be written (512 Bytes)
 //
-// Output: SP_NOERR, SP_IOERR
+// Output: bool - true if write operation is successful
 //
 bool WriteOneBlockAlreadyErased_Public(const blockloc_t blockLoc, const uint8_t* srcBuffer){
+  bool success;
   MUTEXLOCK();
 #if BITINVERSION  
   uint8_t __attribute__((aligned(4))) tempWriteBuffer[BLOCKSIZE];  
   CopyBitInversion(tempWriteBuffer,srcBuffer,BLOCKSIZE);
-  WriteOneBlockWithoutErase(blockLoc,tempWriteBuffer);
+  success = WriteOneBlockWithoutErase(blockLoc,tempWriteBuffer);
 #else
-  WriteOneBlockWithoutErase(blockLoc,srcBuffer);
+  success = WriteOneBlockWithoutErase(blockLoc,srcBuffer);
 #endif  
   MUTEXUNLOCK();
+  
+  return success;
 }
 
 

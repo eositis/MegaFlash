@@ -7,7 +7,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 ## Feature List
 
 - 128MB/256MB Capacity, divided into 4/8 ProDOS Drives
-- 400kB RAM Drive
+- 400kB RAM Disk
 - ROM Disk for Disaster Recovery
 - 256kB Slinky Emulation on stock firmware
 - Boot Menu (Similar to ROM4X/5X)
@@ -26,7 +26,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 System ROM replacement is required for MegaFlash to function.
 
 ## Hardware
-The hardware is quite simple.  All the hard work is handled by Pi Pico.  Apple 65C02 CPU only needs to copy data between RAM and Pico. Schematic is available [here](./kicad/schematic.pdf).
+The hardware is quite simple.  All the hard work is handled by Pi Pico.  Apple 65C02 CPU only needs to copy data between RAM and Pico. Schematic is available [here](./kicad/rev1.0/schematic.pdf).
 
 - Raspberry Pi Pico2 W
 - Winbond 25Q01 NOR Flash memory

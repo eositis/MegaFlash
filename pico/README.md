@@ -2,7 +2,7 @@
 
 ## Build Environment
 
-Download and setup Raspberry Pi PICO C/C++ SDK from [github](https://github.com/raspberrypi/pico-sdk "github"). Make sure `PICO_SDK_PATH` variable is set.
+The software is compiled on Linux platform. Download and setup Raspberry Pi PICO C/C++ SDK from [github](https://github.com/raspberrypi/pico-sdk "github"). Make sure `PICO_SDK_PATH` variable is set.
 
 Go to the MegaFlash `pico` source directory. Execute the shell script file by
 

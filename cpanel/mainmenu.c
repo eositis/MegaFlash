@@ -17,6 +17,7 @@
 #include "testwifi.h"
 #include "format.h"
 #include "tftp.h"
+#include "drivesenable.h"
 
 
 //
@@ -39,10 +40,10 @@ static char mmPrompt[] ="Cancel:esc   Select:\310 \325 \312 \313 \315";
 enum COMMANDS {
   ID_POWERONSPEED,
   ID_BOOTMF,
-  ID_RAMDISK,
   ID_FPU,
   ID_NTPCLIENT,
   ID_TIMEZONE,
+  ID_DRIVESENABLE,
   ID_WIFISETTINGS,
   ID_TESTWIFI,
   ID_TFTP,
@@ -54,10 +55,10 @@ enum COMMANDS {
 static char* mainMenuItems[] = {
   "Power on CPU Speed",
   "Boot MegaFlash",
-  "RAM Disk",
-  "Applesoft BASIC FPU\0",  //When Wifi Settings is removed, we need to move the /n char to this item. \0 is the placeholder of the /n char
+  "Applesoft BASIC FPU",  
   "Network Time Sync",
   "Time Zone",
+  "Drives Enable >\0",//When Wifi Settings is removed, we need to move the /n char to this item. \0 is the placeholder of the /n char
   "Wifi Settings >\n",
   
   "Test Wifi/NTP >",
@@ -70,10 +71,10 @@ static char* mainMenuItems[] = {
 static uint8_t mainMenuIDs[] = {
   ID_POWERONSPEED,
   ID_BOOTMF,
-  ID_RAMDISK,
   ID_FPU,
   ID_NTPCLIENT,
   ID_TIMEZONE,
+  ID_DRIVESENABLE,
   ID_WIFISETTINGS,
   ID_TESTWIFI,
   ID_TFTP,
@@ -121,17 +122,6 @@ static void ShowAutoBoot() {
 static void ToggleAutoBoot() {
   config.configbyte1 = config.configbyte1 ^ AUTOBOOTFLAG;
   ShowAutoBoot();
-}
-
-static void ShowRamdisk() {
-  gotox(27);
-  if (config.configbyte1 & RAMDISKFLAG) cputs(strChecked);
-  else cputs(strNotChecked);   
-}
-
-static void ToggleRamdisk() {
-  config.configbyte1 = config.configbyte1 ^ RAMDISKFLAG;
-  ShowRamdisk();
 }
 
 static void ShowFPU() {
@@ -189,7 +179,6 @@ static void ShowAllOptions() {
     ShowCPUSpeed(); cursordown();
   }
   ShowAutoBoot();  cursordown();
-  ShowRamdisk();   cursordown();
   ShowFPU();       cursordown();
   if (isWifiSupported) {
     ShowNTPClient(); cursordown();
@@ -232,7 +221,7 @@ void DoMainMenu() {
   if (!isWifiSupported) {
     RemoveMenuItem(ID_TFTP);
     RemoveMenuItem(ID_TESTWIFI);
-    mainMenuItems[ID_FPU][strlen(mainMenuItems[ID_FPU])]='\n'; //move the new line char from WIFI Settings to FPU
+    mainMenuItems[ID_DRIVESENABLE][strlen(mainMenuItems[ID_DRIVESENABLE])]='\n'; //move the new line char from WIFI Settings to FPU
     RemoveMenuItem(ID_WIFISETTINGS);
     RemoveMenuItem(ID_TIMEZONE);
     RemoveMenuItem(ID_NTPCLIENT);
@@ -276,9 +265,6 @@ void DoMainMenu() {
         case ID_BOOTMF:
           ToggleAutoBoot();
           break;
-        case ID_RAMDISK:  
-          ToggleRamdisk();
-          break;
         case ID_FPU:
           ToggleFPU();
           break;
@@ -288,6 +274,12 @@ void DoMainMenu() {
         case ID_TIMEZONE:
           ToggleTimezone(key);
           break;
+        case ID_DRIVESENABLE:
+          if (key!=KEY_ENTER) break;     
+          DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
+          redrawAll = true;
+          DoDrivesEnable();
+          break;          
         case ID_WIFISETTINGS:
           if (key!=KEY_ENTER) break;
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 

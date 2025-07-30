@@ -1,3 +1,13 @@
+Version 1.1 30-Jul-2025
+Pico Firmware
+- Bug Fix: Failed to download to RAM Disk via WIFI/TFP
+- Bug Fix: Failed to detect of IO Error when TFTP Download
+- Improved SPI Interface Reliability
+- Option to erase the entire drive when formatting through the Control Panel
+- Each drive can be individually enabled/disabled
+
+Apple Firmware
+- No changes
 
 Version 1.0 21-Jul-2025
 - First Public Release

@@ -70,6 +70,13 @@ void ShowDeviceInfoString() {
 }
 
 void main() { 
+  //Destory Reset Vector so that Ctrl-Reset reboot the machine.
+  //It ensures the flash drive mapping are enabled after quitting from Control Panel.
+  //When the machine reboots, CMD_COLDSTART command is sent. This command re-enables
+  //the drive mapping.
+  *(char*)0x3F3 = 0x00;
+  *(char*)0x3F4 = 0x00;
+
 #ifndef TESTBUILD
   //If the user reset the computer during data transfer, the transfer mode may be left at interleaved.
   //So, reset the mode to linear to avoid potential problem.
@@ -77,6 +84,9 @@ void main() {
 
   //Make sure ROMDisk is disabled.
   SendCommand(CMD_DISABLEROMDISK);
+  
+  //Disable Drive Mapping so that we can acces to all drives including RAMDisk
+  DriveMapping(false);    //false = disable
   
   //Read Pico Device Info
   SendCommand(CMD_GETDEVINFO);
@@ -92,6 +102,11 @@ void main() {
   LoadConfig();
   DoMainMenu();
 	
+  //Re-enable Drive mapping before quitting
+  DriveMapping(true);   //true = enable
+  
   ResetScreen();
 	return;
 }
+
+

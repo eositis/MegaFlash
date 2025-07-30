@@ -10,6 +10,7 @@
 #include "busloop.h"
 #include "busloop_wa.h"
 #include "flash.h"
+#include "flashunitmapper.h"
 #include "dmamemops.h"
 #include "misc.h"
 #include "userconfig.h"
@@ -43,7 +44,9 @@ static void EnableAppleResetInterrupt() {
   gpio_set_irq_enabled_with_callback(nRESET_PIN, GPIO_IRQ_EDGE_FALL, true /*enabled*/, &gpio_callback);
 }
 
+//
 //Use Core 1 to run Bus Loop
+//
 void __no_inline_not_in_flash_func(core1Main)() {
   //No interrupt on this core
   //Bus Loop is time critical
@@ -51,7 +54,7 @@ void __no_inline_not_in_flash_func(core1Main)() {
 
   //Initalize data
   CommandHandlerInit();
-  
+   
 #ifdef PICO_RP2040
   //RP2040 does not have enough memory to emulate a slinky (min: 256kB)
   BusLoopWaitActiviation();
@@ -106,7 +109,6 @@ void __no_inline_not_in_flash_func(core0Loop)() {
   }
 }
 
-
 int main() {
   InitPIO();  
   InitSpi();
@@ -133,6 +135,10 @@ int main() {
 
   //Load userConfig and Wifi Settings from security registers
   LoadAllConfigs();  
+  
+  //Setup Flash Units Mapping Data
+  SetupFlashUnitMapping();  
+  EnableFlashUnitMapping();
 
   //Check if we are connecting to Apple IIc
   bool appleConnected = IsAppleConnected();

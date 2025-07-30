@@ -79,6 +79,7 @@ static void InitUserSettings() {
   pConfig->user_configbyte2 = DEFCFGBYTE2;
   pConfig->user_timezoneidver = TIMEZONEIDVER;
   pConfig->user_timezoneid  = DEFAULTTIMEZONE;
+  pConfig->user2_fd_enableflags = DEFFDENFLAGS;
 }
 
 /////////////////////////////////////////////////////
@@ -105,7 +106,6 @@ static void InitAdvancedSettings() {
   pConfig->tftp_enable1kblock = TFTP_ENABLE1KBLOCK_DEFAULT;
   pConfig->tftp_lastserver[0]='\0';
   pConfig->ntpserver_override[0] ='\0';
-  pConfig->maxflashdrive = MAXFLASHDRIVEDEFAULT;
 }
 
 
@@ -143,6 +143,13 @@ void LoadAllConfigs() {
   static_assert(sizeof(Config_t)<=CONFIGBUFFERSIZE);
   ReadDecryptConfigFromFlash();
   
+  //
+  //If the structure of Config_t is modified, we can upgrade the
+  //old structure to the new one here
+  
+  //
+  
+  //Magic is valid?
   if (pConfig->magic != MAGICVALUE) {
     TRACE_PRINTF("LoadAllConfigs() Magic Not correct. Init all configs to to defaults\n");
     settingsNotInFlash = true;
@@ -238,10 +245,11 @@ bool SaveUserSettings(void *settingPtr) {
   
   //
   //Copy data to userConfig
-  pConfig->user_configbyte1   = src->configbyte1;
-  pConfig->user_configbyte2   = src->configbyte2;
-  pConfig->user_timezoneidver = src->timezoneidver;
-  pConfig->user_timezoneid    = src->timezoneid;
+  pConfig->user_configbyte1     = src->configbyte1;
+  pConfig->user_configbyte2     = src->configbyte2;
+  pConfig->user_timezoneidver   = src->timezoneidver;
+  pConfig->user_timezoneid      = src->timezoneid;
+  pConfig->user2_fd_enableflags = src->fd_enableflags;
 
   //Write to flash
   EncryptWriteConfigToFlash();
@@ -358,12 +366,13 @@ int32_t GetTimezoneOffset() {
 //
 void GetUserSettings(uint8_t* destBuffer) {
   UserSettings_t* dest = (UserSettings_t*)destBuffer;
-  dest->version       = USERSETTINGSVER;
-  dest->checkbyte     = USERSETTINGSVER ^ USERSETTINGS_CHKBYTECOMP;
-  dest->configbyte1   = pConfig->user_configbyte1;
-  dest->configbyte2   = pConfig->user_configbyte2;
-  dest->timezoneidver = pConfig->user_timezoneidver;
-  dest->timezoneid    = pConfig->user_timezoneid;
+  dest->version        = USERSETTINGSVER;
+  dest->checkbyte      = USERSETTINGSVER ^ USERSETTINGS_CHKBYTECOMP;
+  dest->configbyte1    = pConfig->user_configbyte1;
+  dest->configbyte2    = pConfig->user_configbyte2;
+  dest->timezoneidver  = pConfig->user_timezoneidver;
+  dest->timezoneid     = pConfig->user_timezoneid;
+  dest->fd_enableflags = pConfig->user2_fd_enableflags;
 }
 
 /////////////////////////////////////////////////////
@@ -507,21 +516,13 @@ bool SaveNTPServerOverride(const char* ntpserver) {
 }
 
 /////////////////////////////////////////////////////
-// Get Maximum Number of Flash Drives
+// Get Flash Drives Enable Flags
 //
-// Output: uint8_t - Maximum number of Flash Drives
+// Output: uint8_t - Flash Drives Enable Flags
 // 
-uint8_t GetMaxFlashDrive(){
-  return pConfig->maxflashdrive;
+uint8_t GetFlashdriveEnableFlag(){
+  return pConfig->user2_fd_enableflags;
 }
 
-/////////////////////////////////////////////////////
-// Set Maximum Number of Flash Drives
-//
-// Input: max - Maximum number of Flash Drives
-// 
-void SaveMaxFlashDrive(const uint8_t maxValue) {
-  pConfig->maxflashdrive = maxValue;
-}
 
 

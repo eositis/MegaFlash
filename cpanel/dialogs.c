@@ -85,7 +85,9 @@ void ShowEraseSettingsDialog() {
     DrawEraseSettingsWindow();    
     cputs(strErasing);
     
-    EraseAllSettings();
+    EraseAllSettings(); 
+    DriveMapping(false);  //EraseAllSettings() disable RAMDisk. Disable drive mapping to make sure we can access
+                          //to all drives
     LoadConfig();   //Reload Config
     DisplayTime();  //Timezone may have changed. Update the clock
     

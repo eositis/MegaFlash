@@ -1,10 +1,10 @@
 #define _TEXTSTRINGS_C
 #include "textstrings.h"
 
-
-
 const char strConfirm[] = "Confirm";
 const char strError[] = "Error";
+//const char strYes[] = "Yes";
+//const char strNo[] = "No";
 const char strOKAnyKey[]="OK:Any Key";
 const char strAborted[] = "Aborted.";
 const char strResult[] = "Result:";
@@ -35,11 +35,14 @@ const char strTime[] = "Time:";
 const char strPressanykeyto_[] ="Press any key to ";
 const char strcontinue[] = "continue";
 const char strreboot[] = "reboot";
+const char strOK_Enter[] = "OK:\315";
+const char strCancelesc[] = "Cancel:esc";
 
 const char strEditPrompt[] = "Cancel:esc   \310\323:delete     Next:\315";
 char strDriveNumberPrompt[]  = "Drive Number (1- )? ";
 const char strVolNameFormat[]   = " Name  = %s\n\r";
 const char strVolSizeFormat[]   = " Size  = %u Blocks\n\r";
+const char strEraseDrive[] = " Erase the drive = ";
 
 const char* yesnoMenuItem[] = {
   "Yes",

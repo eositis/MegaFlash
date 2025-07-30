@@ -7,6 +7,7 @@
 #include "busloop.h"
 #include "mediaaccess.h"
 #include "flash.h"
+#include "flashunitmapper.h"
 #include "romdisk.h"
 #include "ramdisk.h"
 #include "rtc.h"
@@ -104,17 +105,23 @@ static bool __no_inline_not_in_flash_func(CheckWriteEnableKey)(const uint32_t in
 
 
 /////////////////////////////////////////////////////////////////
+// Enable/Disable Ramdisk according to RAMDISKFLAG
+//
+static void ReconfigRamdisk() {
+  if (GetConfigByte1()&RAMDISKFLAG) EnableRamdisk();
+  else DisableRamdisk();  
+}
+
+/////////////////////////////////////////////////////////////////
 // When user config is changed, call this function to make the
 // changes effective.
 //
 static void Reconfig() {
   //RAMDisk
-  if (GetConfigByte1()&RAMDISKFLAG) {
-    EnableRamdisk();
-    FormatRamdiskOnce();
-  } else {
-    DisableRamdisk();
-  }  
+  ReconfigRamdisk();
+  
+  //Flash Drive Mapping
+  SetupFlashUnitMapping();
   
   //Timezone
   SetNewTimezoneOffset(GetTimezoneOffset());
@@ -163,7 +170,7 @@ static void DoGetDeviceInfo() {
   parameterBuffer[6] = 0; //0=MegaFlash
   
   //Number of Flash Drive Enabled
-  parameterBuffer[7] = GetUnitCountFlash();
+  parameterBuffer[7] = GetUnitCountFlashEnabled();
   
   //Number of Flash Drive that Acutally Exist
   parameterBuffer[8] = GetUnitCountFlashActual();
@@ -792,6 +799,34 @@ static void DoEraseAllSettings() {
   ClearError();
 }
 
+///////////////////////////////////////////////////////////////
+// Enable/Disable Drive Mapping
+// This command is for Control Panel to disable drive mapping
+// so that it can access to all drives including RAMDisk.
+//
+// To re-enable the drive mapping, call this command or
+// CMD_COLDSTART command
+//
+// Parameter Input:
+//  Enable Flag !=0 to enable, =0 to disable
+//  Write Enable Key
+//
+static void DoDriveMapping() {
+  //Validate Write Enable Key
+  if (!CheckWriteEnableKey(1)) {
+    return;
+  }
+  
+  if (parameterBuffer[0]) {
+    //Enable Flash Drive Mapping
+    EnableFlashUnitMapping();
+    ReconfigRamdisk();
+  } else {
+    //Disable Flash Drive Mapping and Enable RAMDisk
+    DisableFlashUnitMapping();
+    EnableRamdisk();
+  }
+}
 
 
 /////////////////////////////////////////////////////////////
@@ -822,6 +857,9 @@ static void DoAppleColdStart() {
   
   //Make sure all config changes are effective.
   Reconfig();
+  
+  //Enable Flash Unit Mapping in case the user Reset the machine from Control Panel
+  EnableFlashUnitMapping();
   
   //Same implementation as DoGetConfigBytes()
   DoGetConfigBytes();
@@ -1077,7 +1115,7 @@ exit:
 //   Type = 0 if ProDOS, !=0 if unknown
 //   Block Count (Low)
 //   Block Count (High)
-//   Reserved = 0
+//   MediumType
 //   Volume Name Length
 //   Volume Name String, null terminated.
 //
@@ -1099,16 +1137,21 @@ static void DoGetVolumeInfo() {
     goto exit;
   }
   
+  //Don't want random data in parameter buffer
+  memset(parameterBuffer,0,PARAMBUFFERSIZE);
+  
   //Type
   parameterBuffer[0] = info.type;
   
   //Block Count
   parameterBuffer[1] = (uint8_t) info.blockCount;
   parameterBuffer[2] = (uint8_t) (info.blockCount>>8);  
-  parameterBuffer[3] = 0; //Reserved
+  parameterBuffer[3] = (uint8_t) GetMediumType(unitNum);
   
   parameterBuffer[4] = info.volNameLen;         //Volume Name Length
   strncpy(parameterBuffer+5, info.volName, VOLNAMELENMAX+1); //Volume Name
+
+
 exit: 
   ResetDataPointer();
   ResetParamPointer();   
@@ -1535,6 +1578,9 @@ void __no_inline_not_in_flash_func(DoCommand)(const uint32_t command) {
       break;
     case CMD_ERASEALLSETTINGS:
       DoEraseAllSettings();
+      break;
+    case CMD_DRIVEMAPPING:
+      DoDriveMapping();
       break;
     case CMD_FADD:
       fadd(parameterBuffer);

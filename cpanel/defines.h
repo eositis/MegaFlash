@@ -59,10 +59,10 @@
 /////////////////////////////////////////////////////////
 // Data structure of CMD_GETVOLINFO command result
 //
-// type = 0 if ProDOS,1 = Empty, 2 = Unknown
+// type = 0 if ProDOS,1 = Empty, 2 = Unknown as defined in VolumeType enum
 // Block Count (Low)
 // Block Count (High)
-// =0, Reserved
+// mediumType
 // Volume Name Length
 // Volume Name, null terminated.
 //
@@ -70,16 +70,10 @@
 typedef struct {
   uint8_t type;
   uint16_t blockCount;
-  uint8_t reserved;
+  uint8_t mediumType;
   uint8_t volNameLen;
   char volName[16];
 } VolInfo_t;
-
-typedef enum {
-  TYPE_PRODOS = 0,
-  TYPE_EMPTY = 1,
-  TYPE_UNKNOWN = 2
-} VolumeType;
 
 /////////////////////////////////////////
 // Fatal Errors

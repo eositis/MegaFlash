@@ -30,6 +30,7 @@ void InitConfig() {
   config.configbyte2 = DEFCFGBYTE2;
   config.timezoneidver = TIMEZONEIDVER;
   config.timezoneid  = DEFAULTTIMEZONE;
+  config.fd_enableflags = DEFFDENFLAGS;
 }
 #endif  
 

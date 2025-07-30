@@ -51,6 +51,7 @@ CMD_ERASEUSERSETTINGS   =       $24
 CMD_ERASEWIFISETTINGS   =       $25       
 CMD_ERASEADVSETTINGS    =       $26 
 CMD_ERASEALLSETTINGS    =       $27  
+CMD_DRIVEMAPPING        =       $28
         
 CMD_FADD                =       $30 
 CMD_FMUL                =       $31

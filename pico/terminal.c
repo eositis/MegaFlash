@@ -9,6 +9,7 @@
 #include "mediaaccess.h"
 #include "romdisk.h"
 #include "ramdisk.h"
+#include "flashunitmapper.h"
 
 //--------------------------------------------------------------
 //The definitions below must be the same as the ones in busloop.c
@@ -266,6 +267,9 @@ void UserTerminal() {
   //Disable stdout buffer. Otherwise, printf doesnt send out
   //until a newline character is printed.
   setbuf(stdout, NULL);
+  
+  //Make sure all flash drives are accessible
+  DisableFlashUnitMapping();
   
   //Make sure ROM Disk and RAM Disk are disabled
   DisableRomdisk();

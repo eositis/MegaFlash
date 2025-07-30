@@ -4,6 +4,16 @@
 #include "dmamemops.h"
 #include "mediaaccess.h"
 #include "formatter.h"
+#include "ramdisk.h"
+
+/******************************************************
+After power on, the MegaFlash is in Slinky Emulation mode.
+The content of RAMDisk is random. After switching to
+MegaFlash native mode, Apple sends CMD_COLDSTART command.
+Then, EnableRamdisk() is called if RAMDisk is enabled.
+The RAMDisk is formatted. FormatRamdiskOnce() function
+ensure the RAMDisk is formatted once only.
+*******************************************************/
 
 
 //Smartport DIB ID String padded to 16 bytes long
@@ -30,6 +40,7 @@ bool GetRamdiskEnabled() {
 
 void EnableRamdisk() {
   ramdiskEnabled = true;
+  FormatRamdiskOnce();
 }
 
 void DisableRamdisk() {

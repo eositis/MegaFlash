@@ -1,6 +1,7 @@
 #include "mediaaccess.h"
 #include "debug.h"
 #include "flash.h"
+#include "flashunitmapper.h"
 #include "romdisk.h"
 #include "ramdisk.h"
 #include "misc.h"
@@ -25,7 +26,7 @@ uint GetTotalUnitCount() {
   uint unitCount;
   
   unitCount = GetUnitCountRomdisk() +
-              GetUnitCountFlash()   +
+              GetUnitCountFlashEnabled()   +
               GetUnitCountRamdisk();
   
   return unitCount;
@@ -69,30 +70,30 @@ bool __no_inline_not_in_flash_func(IsValidUnitNum)(const uint unitNum) {
 //For example, if Romdisk is enabled and the Smartport unit number = 2, it will report
 //medium type is Flash and medium unit number is 1 (since it is the first drive of Flash)
 //
-static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, enum MediaType *typeOut, uint *mediumUnitNumOut) {
+static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaType *typeOut, uint *mediumUnitNumOut) {
   assert(IsValidUnitNum(unitNum));
   assert(typeOut!=NULL);
   assert(mediumUnitNumOut!=NULL);
   
   uint romdiskCount = GetUnitCountRomdisk();
   if (unitNum <= romdiskCount) {
-    *typeOut = ROMDISK;
+    *typeOut = TYPE_ROMDISK;
     *mediumUnitNumOut = unitNum;
     return;
   }
   
   unitNum -= romdiskCount;
-  uint flashdiskCount = GetUnitCountFlash();
+  uint flashdiskCount = GetUnitCountFlashEnabled();
   if (unitNum <= flashdiskCount) {
-    *typeOut = FLASH;
-    *mediumUnitNumOut = unitNum;
+    *typeOut = TYPE_FLASH;
+    *mediumUnitNumOut = MapFlashUnitNum(unitNum);   //unitNum;
     return;
   }  
   
   unitNum -= flashdiskCount;
   uint ramdiskCount = GetUnitCountRamdisk();
   if (unitNum <= ramdiskCount) {
-    *typeOut = RAMDISK;
+    *typeOut = TYPE_RAMDISK;
     *mediumUnitNumOut = unitNum;
     return;
   }
@@ -105,12 +106,13 @@ static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, enum M
 // Get the unit number of RAM Disk
 //
 uint GetRamdiskUnitNum() {
-  return GetUnitCountRomdisk() +GetUnitCountFlash() +1;
+  return GetUnitCountRomdisk() +GetUnitCountFlashEnabled() +1;
 }
 
 
 /////////////////////////////////////////////////////////////
 // Check if a unit is writable
+// Assume unitNum is valid
 //
 // Input: unitNum - Unit Number
 //
@@ -118,10 +120,10 @@ bool __no_inline_not_in_flash_func(IsUnitWritable)(const uint unitNum) {
   assert(IsValidUnitNum(unitNum));
   
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
-  return (type!=ROMDISK);
+  return (type!=TYPE_ROMDISK);
 }
 
 
@@ -141,15 +143,15 @@ bool __no_inline_not_in_flash_func(IsUnitWritable)(const uint unitNum) {
 //
 uint32_t __no_inline_not_in_flash_func(GetBlockCount)(const uint unitNum) {
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
   switch(type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       return GetBlockCountRomdisk();
-    case FLASH:
+    case TYPE_FLASH:
       return GetBlockCountFlash(mediumUnitNum);
-    case RAMDISK:
+    case TYPE_RAMDISK:
       return GetBlockCountRamdisk();
   }
   
@@ -167,15 +169,15 @@ uint32_t __no_inline_not_in_flash_func(GetBlockCount)(const uint unitNum) {
 //
 uint32_t GetBlockCountActual(const uint unitNum) {
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
   switch(type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       return GetBlockCountRomdiskActual();
-    case FLASH:
+    case TYPE_FLASH:
       return GetBlockCountFlashActual(mediumUnitNum);
-    case RAMDISK:
+    case TYPE_RAMDISK:
       return GetBlockCountRamdiskActual();
   }
   
@@ -194,17 +196,17 @@ uint32_t GetBlockCountActual(const uint unitNum) {
 //
 void GetDIB(const uint unitNum,uint8_t *destBuffer) {
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
   switch(type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       GetDIBRomdisk(destBuffer);
       return;
-    case FLASH:
+    case TYPE_FLASH:
       GetDIBFlash(mediumUnitNum,destBuffer);
       return;
-    case RAMDISK:
+    case TYPE_RAMDISK:
       GetDIBRamdisk(destBuffer);
       return;
   }
@@ -218,9 +220,9 @@ void GetDIB(const uint unitNum,uint8_t *destBuffer) {
 //
 // Input: unitNum    - Unit Number (1-N)
 //
-int GetMediaType(const uint unitNum) {
+int GetMediumType(const uint unitNum) {
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
   return type;
@@ -260,21 +262,21 @@ uint __no_inline_not_in_flash_func(ReadBlock)(const uint unitNum, const uint blo
   } 
   
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
   
   switch (type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       spResult = ReadBlockRomdisk(blockNum, destBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
       break;
-    case FLASH:
+    case TYPE_FLASH:
       spResult = ReadBlockFlash_Public(mediumUnitNum, blockNum,destBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
       break;
-    case RAMDISK:
+    case TYPE_RAMDISK:
       spResult = ReadBlockRamdisk(blockNum, destBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
@@ -321,19 +323,19 @@ uint __no_inline_not_in_flash_func(WriteBlock)(const uint unitNum, const uint bl
   }   
   
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
 
   switch(type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       spResult = SP_NOWRITEERR;   //ROMDisk is read-only
       retValue = MFERR_RWERROR;
       goto exit;
-    case FLASH:
+    case TYPE_FLASH:
       spResult = WriteBlockFlash_Public(mediumUnitNum, blockNum, srcBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
-    case RAMDISK:
+    case TYPE_RAMDISK:
       spResult = WriteBlockRamdisk(blockNum, srcBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;      
@@ -383,10 +385,10 @@ bool WriteBlockForImageTransfer(uint unitNum, const uint blockNum, const uint8_t
   }   
 
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);
 
-  if (type==FLASH) {
+  if (type==TYPE_FLASH) {
     //
     //Write to Flash
     //
@@ -404,12 +406,12 @@ bool WriteBlockForImageTransfer(uint unitNum, const uint blockNum, const uint8_t
     //Program the block
     success = WriteOneBlockAlreadyErased_Public(blockLoc, srcBuffer);    
   }
-  else if (type==RAMDISK) {
+  else if (type==TYPE_RAMDISK) {
     //
     //Write to RAMDisk
     //
     rwerror_t spResult = WriteBlockRamdisk(blockNum, srcBuffer);
-    if (spResult != SP_NOERR) success = false;
+    success = (spResult == SP_NOERR);
   }
   else {
     success = false;
@@ -467,18 +469,18 @@ bool EraseEntireUnit(const uint unitNum) {
   } 
   
   uint mediumUnitNum;
-  enum MediaType type;
+  MediaType type;
   TranslateUnitNum(unitNum,&type,&mediumUnitNum);  
   
   switch(type) {
-    case ROMDISK:
+    case TYPE_ROMDISK:
       success = false;
       goto exit;
-    case FLASH:
+    case TYPE_FLASH:
       EraseFlashDisk(mediumUnitNum);
       success = true;
       goto exit;
-    case RAMDISK:
+    case TYPE_RAMDISK:
       EraseRamdisk();
       success = true;
       goto exit;      

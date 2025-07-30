@@ -128,6 +128,54 @@ void PrintDriveInfo(uint8_t unit) {
 }
 
 //////////////////////////////////////////////////////////////////
+// Print all flash drives as list for Drive Enable function
+//
+// Input: unitCount - Number of units
+//
+//Format:
+//   01234567890123456789012345678901234
+//   Drive Volume Name     Blocks Enable
+//     1   MEGAFLASH123456  65535   ( )
+//     2                            (X)
+//              ....
+//     8   --non-ProDOS--   655535  (X)
+//     9   -- RAM Disk --     400   (X)
+//
+void PrintDriveList(uint8_t unitCount) {
+  static const char strHeader[] = "Drive Volume Name     Blocks Enable";
+  static const char strRamdisk[]  = "-- RAM Disk --";
+  static const char strNonProdos[]= "--non-ProDOS--";
+  static_local uint8_t unit;
+  
+  cputs(strHeader);
+  newline();
+  for (unit =1;unit<=unitCount;++unit) {
+    if (!GetVolInfo(unit,&volInfo)) FatalError(ERR_GETVOLINFO_FAIL);
+   
+    //Drive Number  
+    gotox(2);
+    cprintf("%u",unit);
+   
+    //Volume Name
+    gotox(6);
+    if (volInfo.mediumType == TYPE_RAMDISK) cputs(strRamdisk);
+    else if (volInfo.type != TYPE_PRODOS)   cputs(strNonProdos);
+    else                                    cputs(volInfo.volName);
+
+    //Block Count
+    gotox(23);
+    cprintf("%5u",volInfo.blockCount); //right-justify
+    
+    //Checkbox
+    gotox(31);
+    cprintf("( )");
+    
+    newline();
+  }
+}
+
+
+//////////////////////////////////////////////////////////////////
 // Print a string on two lines if it is too long.
 //
 // Input: width - width of the line

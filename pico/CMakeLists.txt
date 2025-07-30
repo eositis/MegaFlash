@@ -23,6 +23,7 @@ add_executable(${CMAKE_PROJECT_NAME}
 		busloop_wa.c
 		cmdhandler.c
 		flash.c
+		flashunitmapper.c
 		mediaaccess.c
 		romdisk.c
 		romdisk.s				

@@ -7,21 +7,13 @@
 extern "C" {
 #endif
 
-
-
-enum MediaType {
-  FLASH,
-  ROMDISK,
-  RAMDISK
-};
-
 uint GetTotalUnitCount();
 bool IsValidUnitNum(const uint unitNum);
 bool IsUnitWritable(const uint unitNum);
 uint32_t GetBlockCount(const uint unitNum);
 uint32_t GetBlockCountActual(const uint unitNum);
 void GetDIB(const uint unitNum,uint8_t *destBuffer);
-int GetMediaType(const uint unitNum);
+int GetMediumType(const uint unitNum);
 uint ReadBlock(const uint unitNum, const uint blockNum, uint8_t* destBuffer,uint8_t* spErrorOut);
 uint WriteBlock(const uint unitNum, const uint blockNum, uint8_t* srcBuffer,uint8_t* spErrorOut);
 bool WriteBlockForImageTransfer(uint unitNum, const uint blockNum, const uint8_t* srcBuffer);

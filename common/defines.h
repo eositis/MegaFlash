@@ -43,6 +43,7 @@
 #define CMD_ERASEWIFISETTINGS   0x25
 #define CMD_ERASEADVSETTINGS    0x26
 #define CMD_ERASEALLSETTINGS    0x27
+#define CMD_DRIVEMAPPING        0x28
 
 #define CMD_FADD                0x30
 #define CMD_FMUL                0x31
@@ -104,6 +105,20 @@ typedef enum {
   BRD_PICO2W = BRD_PICO2 | 0x80
 } BoardType;
 
+//Volume Types
+typedef enum {
+  TYPE_PRODOS = 0,
+  TYPE_EMPTY = 1,
+  TYPE_UNKNOWN = 2
+} VolumeType;
+
+//Storage Media Types
+typedef enum {
+  TYPE_FLASH,
+  TYPE_ROMDISK,
+  TYPE_RAMDISK
+} MediaType;
+
 
 /*********************************************************
 
@@ -118,7 +133,7 @@ pass data between Apple and MegaFlash.
 //
 //*****************************************************
 //
-#define USERSETTINGSVER              1       //Version starts at 1
+#define USERSETTINGSVER              2       //Version starts at 1
 #define TIMEZONEIDVER                1
 #define USERSETTINGS_CHKBYTECOMP     0x5A
 
@@ -130,6 +145,7 @@ pass data between Apple and MegaFlash.
 #define FPUFLAG        0b00001000
 #define DEFCFGBYTE1    0b01000000  //Default configbyte1 value
 #define DEFCFGBYTE2    0           //Default configbyte2 value
+#define DEFFDENFLAGS   0xff        //Default value of fd_enableflags   
 
 typedef struct  {
   uint8_t  version;
@@ -138,6 +154,7 @@ typedef struct  {
   uint8_t  configbyte2; //=0, reserved for future
   uint8_t  timezoneidver;  
   uint8_t  timezoneid;
+  uint8_t  fd_enableflags; //Added: version 2
 } UserSettings_t;
 
 

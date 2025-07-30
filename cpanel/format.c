@@ -21,6 +21,9 @@
 #define HEIGHT 15
 
 static char formatWindowTitle[]  = "Format (1/3)";
+static const char strErrorMessage[] = "Error:$%x";
+static const char strFormatCompleted[] = "Disk Format completed.";
+static const char strErasingPrompt[] = "Erasing the drive...\n\n\rIt may take up to 2 minutes.\n\rDon't reset the computer!";
 
 
 //
@@ -48,6 +51,8 @@ void DoFormat() {
   static_local uint8_t unitCount;
   static_local uint8_t error;
   static_local uint16_t maxBlockCount;
+  static_local bool eraseDrive;
+  static_local unsigned char key;
   
   ///////////////////////////////////////////////////////////
   //
@@ -124,6 +129,19 @@ again:
   strcpy(fmt_volName,ti_textBuffer);
   ToUppercase(fmt_volName);
   
+  //
+  //Erase Content?
+  eraseDrive = false; //Default is false
+  cputs("Erase the drives (y/N)?");
+  
+again2:  
+  key = cgetc_showclock();
+  if (key=='Y' || key=='y') eraseDrive=true;
+  else if (key!='N' && key!='n' && key!=KEY_ENTER) {
+    beep();
+    goto again2;
+  }
+  
   ///////////////////////////////////////////////////////////
   //
   //    Page 3
@@ -143,6 +161,8 @@ again:
   newline();
   cprintf(strVolNameFormat,fmt_volName);
   cprintf(strVolSizeFormat,fmt_blockCount);
+  cprintf(strEraseDrive);
+  cputs(eraseDrive?strYes:strNo);
   newline2();
 
   //Ask user to type CONFIRM
@@ -155,12 +175,32 @@ again:
   ///////////////////////////////////////////////////////////
   DrawFormatWindowFrame('3');
   
+  //
+  //Erase the drive
+  if (eraseDrive) {
+    cputs(strErasingPrompt);
+    newline2();
+    error = EraseDisk();  //Execute Erase command
+    if (error!=0) {
+      cprintf(strErrorMessage,error);
+      goto exit;
+    } else {
+      gotoxy(0,2); clreol();  //Clear "It takes 2 min."
+      newline(); clreol();    //Clear "Don't reset"
+      gotoxy(0,2);
+    }
+  }
+  
+  //
+  //Format the drive
   cputs(strFormatting);
   newline2();
-  error = FormatDisk(); //Execute Format
+  error = FormatDisk(); //Execute Format command
   
-  if (error==0) cputs("Disk Format completed.");
-  else cprintf("Error:$%x",error);
+  if (error==0) cputs(strFormatCompleted);
+  else cprintf(strErrorMessage,error);
+  
+exit:  
   gotoxy(26,HEIGHT-1);
   cputs(strOKAnyKey);
   

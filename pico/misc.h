@@ -33,15 +33,8 @@ typedef struct  {
   uint32_t blockCount;
   char volName[VOLNAMELENMAX+1];
   uint8_t volNameLen;
-  uint8_t type; //0=ProDOS, 1=empty, 2=Unknown
+  uint8_t type; //0=ProDOS, 1=empty, 2=Unknown as defined in VolumeType enum
 } VolumeInfo;
-
-typedef enum {
-  TYPE_PRODOS = 0,
-  TYPE_EMPTY = 1,
-  TYPE_UNKNOWN = 2
-} VolumeType;
-
 
 bool GetVolumeInfo(const uint unitNum, VolumeInfo *infoOut);
 void GetDeviceInfoString(char* dest);

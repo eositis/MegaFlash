@@ -125,6 +125,8 @@ static void a2bus_program_init(PIO pio,uint sm,uint offset) {
 	//Setup clock divider if system speed > 125MHz
   #if SYS_CLK_MHZ>125
   sm_config_set_clkdiv(&c, SYS_CLK_MHZ/125.0f);
+	#elif SYS_CLK_MHZ<125
+	#error This PIO program is designed for SYS_CLK_MHZ>=125
   #endif
 
   //IN instruction PINS mapping

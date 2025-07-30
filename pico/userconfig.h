@@ -14,12 +14,12 @@ extern "C" {
 #define NTPSERVERORLEN             47
 
 //Default Values of some settings
-#define MAXFLASHDRIVEDEFAULT       255
+#define FLASHDRIVENABLEFLAGDEFAULT       255
 
 
 /************************************************************************
 This data structure is written to Flash security registers as user configuration
-The structure is divided to first partial_sort
+The structure is divided to four parts
 1) Magic Word - To identify the data in Flash is a valid structure. It
 is also the version identifier of the structure
 
@@ -27,7 +27,7 @@ is also the version identifier of the structure
 
 3) Wifi Settings - For Wifi Settings (ssid, wpakey...)
 
-4) Advanced Settings
+4) Advanced Settings - Currently, no command gives access to these settings.
 
 User Settings and Wifi Settings can be individually erased by commands from Apple
 ************************************************************************/
@@ -58,10 +58,22 @@ typedef struct {
   bool    tftp_enable1kblock; //TFTP enable1kblock
   char    tftp_lastserver[TFTP_LASTSERVERLEN+1]; //+1 for NULL char. TFTP Last Server Hostname/IP Addr
   char    ntpserver_override[NTPSERVERORLEN+1];  //+1 for NULL char. NTP Server Override  
-  uint8_t maxflashdrive;      //maximum number of flashdrive
+  
+  //User Settings (V2) (UserSettings_t version=2)
+  uint8_t user2_fd_enableflags;     //Enable Flags of each individual flash drive
   
   
 } Config_t;
+
+//Note:
+//In version 1.0, this variable is called maxflashdrive. It is the last member
+//of Advanced Settings. It stores the maximum number of flash drive reported to 
+//users. The default value is 0xff. But no user interface is developed to 
+//utilize this variable.
+//In version 1.1, this variable is repurposed as fd_enableflags.
+//It now belongs to User Setting (V2) Group. But the actual position within
+//Config_t is not changed. The default value is also 0xff. So, we don't need
+//any change to the structure of Config_t
 
 
 
@@ -83,8 +95,7 @@ const char* GetTFTPLastServer();
 void SaveTFTPLastServer(const char* hostname);
 const char* GetNTPServerOverride();
 bool SaveNTPServerOverride(const char* ntpserver);
-uint8_t GetMaxFlashDrive();
-void SaveMaxFlashDrive(const uint8_t maxValue);
+uint8_t GetFlashdriveEnableFlag();
 
 void LoadAllConfigs();
 void SaveConfigs();

@@ -13,8 +13,8 @@
                 .import popa,incsp2
                 
 
-                .export _SendCommand,_GetInfoString,_GetUnitCount,_FormatDisk,_GetVolInfo
-                .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DisplayTime
+                .export _SendCommand,_GetInfoString,_GetUnitCount,_EraseDisk,_FormatDisk,_GetVolInfo
+                .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DriveMapping,_DisplayTime
                 .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
                 .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
                 .export _StartTFTP,_GetTFTPStatus
@@ -103,12 +103,40 @@ _GetUnitCount:
                 rts
 .endif
 
+;//////////////////////////////////////////////////////////
+; uint8_t __fastcall__ EraseDisk();
+; Parameter is passed by global variable
+;   fmt_selectedUnit - uint8_t Unit to be erased
+;
+_EraseDisk:
+.ifndef TESTBUILD
+                stz cmdreg              ;Reset buffers pointer
+                
+                lda _fmt_selectedUnit
+                sta paramreg
+                
+                lda #WE_KEY             ;Write Enable Key
+                sta paramreg      
 
+                lda #CMD_ERASEDISK
+                jsr execute
+                
+                ;Get the result code from parameter buffer
+                lda paramreg
+                ldx #0
+                rts      
+.else
+                ;return 0 (No error)
+                lda #0
+                tax
+                rts
+.endif                
+                
 ;/////////////////////////////////////////////////////////		
 ; uint8_t __fastcall__ FormatDisk();
-; Paraeter is passed by global variables
+; Parameters are passed by global variables
 ;   fmt_selectedUnit - uint8_t Unit to be formatted
-;   fmt_blockCount   - uint16_t Number of blocks
+;   fmt_blockCount   - uint16_t Number of bslocks
 ;   fmt_volName      - char[] Volume Name
 ;
 ; Output: uint8_t - ProDOS/SP error code
@@ -183,7 +211,7 @@ _GetVolInfo:
 :               lda paramreg
 @stainst:       sta $ffff,y     ;sta dest,y
                 iny
-                cpy #21
+                cpy #21         ;size of VolInfo_t
                 bne :-
                 
                 ;return 1
@@ -215,7 +243,7 @@ _GetVolInfo:
 @testdata:
                 .byte 0         ;type = ProDOS
                 .word $FFFF     ;blockCount
-                .byte 0         ;Reserved
+                .byte 0         ;Medium = Flash
                 .byte 15        ;volNameLen
                 .byte "MEGAFLASH012345",$00
 .endif
@@ -291,6 +319,27 @@ _GetUnitBlockCount:
                 tax
                 rts
 .endif
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ DriveMapping(bool enable)
+; Enable/Disable Drive Mapping
+;
+_DriveMapping:
+.ifndef TESTBUILD
+                ;Reset buffer pointers    
+                stz cmdreg
+                
+                ldy #WE_KEY             ;Preload Y=WE_KEY
+                sta paramreg            ;Enable Flag
+
+                lda #CMD_DRIVEMAPPING   ;Preload A=CMD_DRIVEMAPPING
+                sty paramreg            ;Write Enable Key
+                jmp execute
+                
+.else
+                rts
+.endif                
+
 
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ DisplayTime()

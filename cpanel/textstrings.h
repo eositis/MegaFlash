@@ -4,6 +4,8 @@
 #ifndef _TEXTSTRINGS_C
 extern const char strConfirm[];
 extern const char strOKAnyKey[];
+//extern const char strYes[];
+//extern const char strNo[];
 extern const char strError[];
 extern const char strAborted[];
 extern const char strResult[];
@@ -34,13 +36,21 @@ extern const char strTime[];
 extern const char strPressanykeyto_[];
 extern const char strcontinue[];
 extern const char strreboot[];
+extern const char strOK_Enter[];
+extern const char strCancelesc[];
 
 extern const char strEditPrompt[];
 extern char strDriveNumberPrompt[];
 extern const char strVolNameFormat[];
 extern const char strVolSizeFormat[];
+extern const char strEraseDrive[];
 
 extern const char* yesnoMenuItem[];
+
+#define strYes (yesnoMenuItem[0])
+#define strNo  (yesnoMenuItem[1])
+
+
 #endif
 
 #endif

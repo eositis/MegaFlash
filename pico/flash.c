@@ -41,16 +41,12 @@
 // To make flash access thread-safe
 #define USEMUTEX 1
 
-
-
-
 //SPI pins
 const uint CS0_PIN  = 5;  //Chip #0 /CS
 const uint CS1_PIN  = 28; //Chip #1 /CS
 const uint SCK_PIN  = 2;
 const uint MOSI_PIN = 3;  //tx
 const uint MISO_PIN = 4;  //rx
-
 
 //Constants
 #define SECTORSIZE 4096
@@ -103,7 +99,6 @@ static void WriteToFlashByDMA(const uint8_t *srcBuffer, const uint32_t len);
 
 
 
-
 //////////////////////////////////////////////////////
 // Return the capacity of flash
 //
@@ -150,6 +145,39 @@ static void Enable4BytesAddressing(const uint deviceNum) {
 //
 static void __no_inline_not_in_flash_func(WriteEnable)(const uint deviceNum) {
   const uint8_t msg[]={0x06};  //Write Enable command
+  
+  enable_spi0(deviceNum);
+  spi_write_blocking(spi0, msg, 1);
+  disable_spi0();
+}
+
+////////////////////////////////////////////////////////////////////
+// Send Write Enable for Volatile Status Register command to Flash Chip
+//
+// Input: Device Number
+//
+//Note:
+//Status Register bits can be both volatile and non-volatile. To write to
+//non-volatile bits, Write Enable command (0x06) is sent. Then, write status
+//register command. To write to non-volatile bit, Write Enable for Volatile
+//Status Register command (0x50) is sent. Then, write status register command. 
+//The Reset command also reset volatile status bits
+//
+static void WriteEnableVSR(const uint deviceNum) {
+  const uint8_t msg[]={0x50};  //Write Enable for Volatile SR command
+  
+  enable_spi0(deviceNum);
+  spi_write_blocking(spi0, msg, 1);
+  disable_spi0();
+}
+
+////////////////////////////////////////////////////////////////////
+// Send Write Disable Command
+//
+// Input: Device Number
+//
+static void WriteDisable(const uint deviceNum) {
+  const uint8_t msg[]={0x04};  //Write Disable command
   
   enable_spi0(deviceNum);
   spi_write_blocking(spi0, msg, 1);
@@ -230,18 +258,19 @@ static uint8_t ReadStatus3(const uint deviceNum) {
 }
 
 ////////////////////////////////////////////////////////////////////
-// Write to Status Register-3 
+// Write to Volatile Status Register-3 
 //
 // Input: Device Number
 //        Value to be written
 //
-static uint8_t WriteStatus3(const uint deviceNum, const uint8_t value) {
+static uint8_t WriteStatus3Volatile(const uint deviceNum, const uint8_t value) {
   uint8_t msg[2];  
   
   msg[0]=0x11;  //Write Status Register-3 command
   msg[1]=value; //8-bit value to be written
   
-  WriteEnable(deviceNum);
+  WriteDisable(deviceNum);    //Make sure we are writing to Volatile register
+  WriteEnableVSR(deviceNum);  //Write Enable Volatile Status Register Command
   enable_spi0(deviceNum);
   spi_write_blocking(spi0, msg, 2);
   disable_spi0();

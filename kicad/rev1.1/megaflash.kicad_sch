@@ -12201,7 +12201,7 @@
 	)
 	(symbol
 		(lib_id "Mechanical:MountingHole")
-		(at 194.31 152.4 0)
+		(at 191.77 151.13 0)
 		(unit 1)
 		(exclude_from_sim yes)
 		(in_bom no)
@@ -12210,7 +12210,7 @@
 		(fields_autoplaced yes)
 		(uuid "5e613766-9f14-4561-ad10-01866146881e")
 		(property "Reference" "H1"
-			(at 196.85 151.1299 0)
+			(at 194.31 149.8599 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12219,7 +12219,7 @@
 			)
 		)
 		(property "Value" "MountingHole"
-			(at 196.85 153.6699 0)
+			(at 194.31 152.3999 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12228,7 +12228,7 @@
 			)
 		)
 		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
-			(at 194.31 152.4 0)
+			(at 191.77 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12237,7 +12237,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 194.31 152.4 0)
+			(at 191.77 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12246,7 +12246,7 @@
 			)
 		)
 		(property "Description" "Mounting Hole without connection"
-			(at 194.31 152.4 0)
+			(at 191.77 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12255,7 +12255,7 @@
 			)
 		)
 		(property "Mouser Part No" ""
-			(at 194.31 152.4 0)
+			(at 191.77 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12264,7 +12264,7 @@
 			)
 		)
 		(property "Manufacturer" ""
-			(at 194.31 152.4 0)
+			(at 191.77 151.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -15118,7 +15118,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Raspberry Pi PicoW2"
+		(property "Description" "Raspberry Pi Pico 2W"
 			(at 207.01 52.07 0)
 			(effects
 				(font

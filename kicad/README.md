@@ -1,6 +1,6 @@
-#MegaFlash PCB
+# MegaFlash PCB
 
-Currently, there are two PCB revisions, 1.0 and 1.1. They are funtionally identical. 
+Currently, there are two PCB revisions, 1.0 and 1.1. They are functionally identical. 
 
 Rev 1.0 board is more compact. It is optimized for machine assembly.
 

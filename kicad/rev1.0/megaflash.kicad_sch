@@ -14380,7 +14380,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Raspberry Pi PicoW2"
+		(property "Description" "Raspberry Pi Pico 2W"
 			(at 207.01 52.07 0)
 			(effects
 				(font

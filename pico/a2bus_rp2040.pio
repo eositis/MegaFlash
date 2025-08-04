@@ -36,6 +36,7 @@
 ;    22: nPICOWR, Output, Active Low
 
 .define public A2BUS_BASE   6   ; Apple Bus at GPIO 06-18
+.define public A2ABUS_BASE  6   ; Apple Address Bus A0-A3 at GPIO 06-09
 .define public A2DBUS_BASE  11  ; Apple Data Bus at GPIO11-18
 .define public A2BUS_WIDTH  13  ; A3-A0 + R/nW + 8-bit Databus
 .define public R_NW_GPIO    10  ; R/nW at GPIO 10
@@ -156,15 +157,25 @@ static void a2bus_program_init(PIO pio,uint sm,uint offset) {
   pio_gpio_init(pio, nPICOWR_GPIO);
   
   //GPIO: Address Bus, RnW, Data bus as input
-  pio_sm_set_consecutive_pindirs(pio, sm, A2BUS_BASE, 8, false /*=in*/); 
+  pio_sm_set_consecutive_pindirs(pio, sm, A2BUS_BASE, A2BUS_WIDTH, false /*=in*/); 
   for (int pin=A2BUS_BASE; pin<A2BUS_BASE+A2BUS_WIDTH; ++pin) {
     pio_gpio_init(pio, pin);
-    gpio_pull_down(pin);    //Enable Pull down resistor, to avoid floating of LVC4245 inputs
   }
   
+	//Enable Pull up resistor of Data Bus to avoid floating of transceiver input
+	for (uint pin=A2DBUS_BASE; pin<A2DBUS_BASE+8; ++pin) {
+		gpio_pull_up(pin);
+	}	
+	
+	//A2 and A3 must be pulled down to set the address at $C0C0-C0C3
+	//Note: On Rev1.0 and 1.1 PCB, A2 and A3 inputs are floating. 
+	gpio_set_pulls(A2ABUS_BASE+2, false, true); //Disable pull-up, Enable pull-down
+	gpio_set_pulls(A2ABUS_BASE+3, false, true); //Disable pull-up, Enable pull-down	
+	
   //GPIO: Set PHI0 and nDEVSEL pin to PIO
   pio_gpio_init(pio,PHI0_GPIO);
   pio_gpio_init(pio,nDEVSEL_GPIO);
+  gpio_pull_up(nDEVSEL_GPIO);	//Enable Pull-up since it is active-low.
 
   //Load configuration to State Machine and
   //setup Program Counter

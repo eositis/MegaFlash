@@ -106,7 +106,7 @@ void DoDrivesEnable() {
   
   //Prompt Messages
   newline2();
-  cprintf(" Key 1-%d to toggle",unitCount);
+  cprintf(" Press key 1-%d to toggle",unitCount);
   gotoxy(1,14);
   cputs(strCancelesc);
   gotox(31);

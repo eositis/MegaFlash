@@ -1,3 +1,12 @@
+Version 1.1.1 04-Aug-2025
+Pico Firmware
+- Recompiled with PICO SDK V2.2.0
+- Minor changes to Control Panel UI Wording
+- Changed Pico PIO output pins from pull-down to pull-up for Rev1.1 PCB
+
+Apple Firmware
+- No changes
+
 Version 1.1 30-Jul-2025
 Pico Firmware
 - Bug Fix: Failed to download to RAM Disk via WIFI/TFP

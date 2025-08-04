@@ -138,13 +138,13 @@ void PrintDriveInfo(uint8_t unit) {
 //     1   MEGAFLASH123456  65535   ( )
 //     2                            (X)
 //              ....
-//     8   --non-ProDOS--   655535  (X)
-//     9   -- RAM Disk --     400   (X)
+//     8   --non-ProDOS--   65535   (X)
+//     9   ---RAM Disk---     400   (X)
 //
 void PrintDriveList(uint8_t unitCount) {
   static const char strHeader[] = "Drive Volume Name     Blocks Enable";
-  static const char strRamdisk[]  = "-- RAM Disk --";
-  static const char strNonProdos[]= "--non-ProDOS--";
+  static const char strRamdisk[]  = "\323\323\323RAM Disk\323\323\323";
+  static const char strNonProdos[]= "\323\323Non-ProDOS\323\323";
   static_local uint8_t unit;
   
   cputs(strHeader);

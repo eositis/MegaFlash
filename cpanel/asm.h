@@ -18,6 +18,7 @@ void __fastcall__ EraseAllSettings();
 uint16_t __fastcall__ GetUnitBlockCount(uint8_t unitNum);
 void __fastcall__ DriveMapping(bool enable);
 void __fastcall__ DisplayTime();
+void __fastcall__ ClearTime();
 bool __fastcall__ SaveSetting(uint8_t cmd, uint8_t len, void* src);
 bool __fastcall__ LoadSetting(uint8_t cmd, uint8_t len, void* dest);
 void __fastcall__ PrintStringFromDataBuffer();

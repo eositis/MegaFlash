@@ -14,7 +14,7 @@
                 
 
                 .export _SendCommand,_GetInfoString,_GetUnitCount,_EraseDisk,_FormatDisk,_GetVolInfo
-                .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DriveMapping,_DisplayTime
+                .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DriveMapping,_DisplayTime,_ClearTime
                 .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
                 .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
                 .export _StartTFTP,_GetTFTPStatus
@@ -372,7 +372,18 @@ _DisplayTime:
                 rts
 @timstr:        .byte "11:50 AM"   
 .endif                
-   
+
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ ClearTime()
+; Clear the time from screen
+;
+_ClearTime:     lda #' '|$80
+                ldx #7
+:               sta $7D0+32,x
+                dex
+                bpl :-
+                rts
 
 ;/////////////////////////////////////////////////////////
 ; bool __fastcall__ SaveSetting(uint8_t cmd, uint8_t len, void* src)

@@ -178,6 +178,7 @@ again2:
   //
   //Erase the drive
   if (eraseDrive) {
+    ClearTime();          //Clear the time from screen because the time cannot be updated during erase
     cputs(strErasingPrompt);
     newline2();
     error = EraseDisk();  //Execute Erase command

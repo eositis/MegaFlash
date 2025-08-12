@@ -1,3 +1,13 @@
+Version 1.1.2 11-Aug-2025
+Pico Firmware
+- Set the drive strength of SPI output pins to 8mA
+- Set the drive strength of Flash Chips to 75%
+- Hide the clock during drive erase in Control Panel
+- Bug Fix: System freeze during TFTP Download since V1.1
+
+Apple Firmware
+- No changes
+
 Version 1.1.1 04-Aug-2025
 Pico Firmware
 - Recompiled with PICO SDK V2.2.0

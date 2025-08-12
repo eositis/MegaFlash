@@ -18,36 +18,36 @@ pico_sdk_init()
 #add source file here
 add_executable(${CMAKE_PROJECT_NAME}
     main.c
-		a2bus.c
-		busloop.c
-		busloop_wa.c
-		cmdhandler.c
-		flash.c
-		flashunitmapper.c
-		mediaaccess.c
-		romdisk.c
-		romdisk.s				
-		ramdisk.c
-		usbserial.c
-		filetransfer.c
-		dmamemops.c
-		formatter.c
-		rtc.c
-		misc.c
-		cpanel.s
-		userconfig.c
-		encryption.c
-		terminal.c
-		slinky.c
-		fpu.c
-		network.cpp
-		udptask.cpp
-		ntptask.cpp
-		testwifitask.cpp
-		tftptask.cpp
-		tftprxtask.cpp
-		tftptxtask.cpp
-		tftpstate.c
+    a2bus.c
+    busloop.c
+    busloop_wa.c
+    cmdhandler.c
+    flash.c
+    flashunitmapper.c
+    mediaaccess.c
+    romdisk.c
+    romdisk.s       
+    ramdisk.c
+    usbserial.c
+    filetransfer.c
+    dmamemops.c
+    formatter.c
+    rtc.c
+    misc.c
+    cpanel.s
+    userconfig.c
+    encryption.c
+    terminal.c
+    slinky.c
+    fpu.c
+    network.cpp
+    udptask.cpp
+    ntptask.cpp
+    testwifitask.cpp
+    tftptask.cpp
+    tftprxtask.cpp
+    tftptxtask.cpp
+    tftpstate.c
 )
 
 #standard C lib printf for FPU fout() function
@@ -76,24 +76,25 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 #linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
-	pico_stdlib
-	pico_multicore		
-  pico_mem_ops	
-	pico_aon_timer
-	pico_float
-	pico_double
-	hardware_pio
-	hardware_spi
-	hardware_dma
-	hardware_divider
-	hardware_adc
-	hardware_watchdog
-	pico_cyw43_arch_lwip_poll
+  pico_stdlib
+  pico_multicore    
+  pico_mem_ops  
+  pico_aon_timer
+  pico_float
+  pico_double
+  hardware_pio
+  hardware_spi
+  hardware_dma
+  hardware_divider
+  hardware_adc
+  hardware_watchdog
+  pico_cyw43_arch_lwip_poll
 )
 
 #RP2040: Set system speed to 150MHz
 #SPI does not work at 100MHz. So, set the speed to 150MHz
 #and run SPI at 75MHz
+#V1.1.2 SPI seems to work at 100MHz after setting the drive strength of Flash Chip to 75%
 if (PICO_BOARD STREQUAL pico_w)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SYS_CLK_MHZ=150)
 endif()

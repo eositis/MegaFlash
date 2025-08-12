@@ -18,7 +18,7 @@
 
 
 //Global Variables
-static dma_channel_config dma_config;
+static dma_channel_config_t dma_config;
 static int channel;
 
 int GetMemoryDMAChannel() {

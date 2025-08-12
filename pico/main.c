@@ -21,8 +21,6 @@
 #include "network.h"
 #include "tftpstate.h"
 
-
-
 static inline void InitActLed() {
   gpio_init(ACT_LED_PIN);
   gpio_set_dir(ACT_LED_PIN, GPIO_OUT);
@@ -124,14 +122,20 @@ int main() {
   gpio_pull_down(26);
   gpio_pull_down(27);  
   
-  #ifndef NDEBUG
-  //Debug Build: Send Debug Message to UART
+  
+#ifndef NDEBUG
+  //For sending Debug Message to UART
   stdio_uart_init();    //Default baud: 115200
-  #endif
 
   //Disable stdout buffering
   //otherwise, text is not printed to uart or usb correctly.
   setbuf(stdout, NULL); 
+#else
+  //Disable stdout for Release Build
+  //Otherwise, TFTP Download freezes occasionally.
+  //Read note below
+  stdio_set_driver_enabled(&stdio_uart, false);
+#endif
 
   //Load userConfig and Wifi Settings from security registers
   LoadAllConfigs();  
@@ -200,6 +204,15 @@ int main() {
   return 0;
 }
 
+/*
+V1.1.2:
+Without stdio_set_driver_enabled() or stdio_uart_int() function call, TFTP Download may 
+freeze randomly. The root cause cannot be identified because
+1) V1.0 does not have the problem. But all changes between V1.1 and V1.0 have nothing to
+do with WIFI, TFTP or stdio.
+2) V1.1 with Pico 1 board does not have the problem.
+3) Debug build does not have the problem. Even stdio_uart_init() function call is removed,
+it works. But Release Build with the same source code has the problem. 
 
-
-
+So, the problem may be caused by Compiler bug/optimization.
+*/

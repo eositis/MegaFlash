@@ -48,6 +48,10 @@ const uint SCK_PIN  = 2;
 const uint MOSI_PIN = 3;  //tx
 const uint MISO_PIN = 4;  //rx
 
+//SPI Speed
+#define SPI_SPEED_INIT    25000000
+#define SPI_SPEED_FINAL   75000000
+
 //Constants
 #define SECTORSIZE 4096
 #define PAGEPERSECTOR 16
@@ -274,6 +278,19 @@ static uint8_t WriteStatus3Volatile(const uint deviceNum, const uint8_t value) {
   enable_spi0(deviceNum);
   spi_write_blocking(spi0, msg, 2);
   disable_spi0();
+}
+
+
+////////////////////////////////////////////////////////////////////
+// Set Flash Drive Strength to 75%
+//
+// Input: Device Number
+//
+static void SetFlashDriveStrength(const uint deviceNum) {
+  uint8_t regvalue = ReadStatus3(deviceNum);
+  regvalue &= 0b10011111; //Clear drv1,drv0 bits
+  regvalue |= 0b00100000; //Set to 75%
+  WriteStatus3Volatile(deviceNum, regvalue);
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -968,16 +985,23 @@ void InitSpi(){
   disable_spi0(); //Set CS pins to high
 
   //SPI Clock speed
-  //SPI does not work at 100MHz on the devboard.
-  //Set the max speed to 75MHz
-  spi_init(spi0,75000000);    //Max Speed = 75MHz
+  //Set the SPI speed to lower value so that
+  //we can send commands to flash reliably.
+  //The InitFlash() function will set the speed
+  //to SPI_SPEED_FINAL after initialization of flash
+  spi_init(spi0,SPI_SPEED_INIT);    
 
-  //Set slew rate of SPI output pins to fast to make
-  //SPI work reliably at 75MHz
+  //Set slew rate of SPI output pins to fast and 
+  //drive strength to 8ma to make SPI work reliably at 75MHz
   gpio_set_slew_rate(CS0_PIN,  GPIO_SLEW_RATE_FAST);
   gpio_set_slew_rate(CS1_PIN,  GPIO_SLEW_RATE_FAST);
   gpio_set_slew_rate(SCK_PIN,  GPIO_SLEW_RATE_FAST);
   gpio_set_slew_rate(MOSI_PIN, GPIO_SLEW_RATE_FAST); //TX
+  
+  gpio_set_drive_strength(CS0_PIN,  GPIO_DRIVE_STRENGTH_8MA);
+  gpio_set_drive_strength(CS1_PIN,  GPIO_DRIVE_STRENGTH_8MA);
+  gpio_set_drive_strength(SCK_PIN,  GPIO_DRIVE_STRENGTH_8MA);
+  gpio_set_drive_strength(MOSI_PIN, GPIO_DRIVE_STRENGTH_8MA);
 
   //Set GPIO functions
   gpio_set_function(SCK_PIN,  GPIO_FUNC_SPI);
@@ -996,14 +1020,6 @@ void InitSpi(){
    //Do a dummy read to set SCLK high
    uint8_t dummy;
    spi_read_blocking(spi0, REPEATED_TX_DATA, &dummy, 1);
-   
-   //Reset Flash Chip
-   ResetChip(DEVICE0,false);  //false = without delay
-   ResetChip(DEVICE1,true);   //true  = with delay
-   
-   //Enable 4-Byte Addressing
-   Enable4BytesAddressing(DEVICE0);
-   Enable4BytesAddressing(DEVICE1);   
 }
 
 //////////////////////////////////////////////////////
@@ -1039,8 +1055,8 @@ static uint32_t __no_inline_not_in_flash_func(ReadFromFlashByDMA)(uint8_t *destB
   static int rxChannel;
   
   static bool alreadyConfigured = false;
-  static dma_channel_config tx_config;
-  static dma_channel_config rx_config;
+  static dma_channel_config_t tx_config;
+  static dma_channel_config_t rx_config;
   
   uint8_t src[] = {REPEATED_TX_DATA}; //Tx data source  
 
@@ -1104,8 +1120,8 @@ static void __no_inline_not_in_flash_func(WriteToFlashByDMA)(const uint8_t *srcB
   static int rxChannel;
   
   static bool alreadyConfigured = false;
-  static dma_channel_config tx_config;
-  static dma_channel_config rx_config;
+  static dma_channel_config_t tx_config;
+  static dma_channel_config_t rx_config;
   
   uint32_t dest[1]; //dummy data destination  
 
@@ -1157,22 +1173,32 @@ static void __no_inline_not_in_flash_func(WriteToFlashByDMA)(const uint8_t *srcB
 // Initalize Flash related data
 //
 void InitFlash() {
+  //Init Flash chip #0
   uint32_t id = ReadJEDECID(DEVICE0);
   flashSize0 = ChipIDToCapacity(id);
   unitCountFlash0 = flashSize0 / SIZEPERUNIT_MB;
-
-  //Either Single Flash Chip in Flash #0
-  //or Two Flash Chips.
-  //Single Flash chip in Flash #1 is not supported.
-  //So, if flash chip #0 is not present, set flashSize1 to 0.
   if (flashSize0 != 0) {
-    id = ReadJEDECID(DEVICE1);
-    flashSize1 = ChipIDToCapacity(id);
-    unitCountFlash1 = flashSize1 / SIZEPERUNIT_MB;
+    SetFlashDriveStrength(DEVICE0);
+    Enable4BytesAddressing(DEVICE0);
   } else {
+    //Single Flash chip in Flash #1 is not supported.
+    //So, if flash chip #0 is not present, set flashSize1 to 0.
     flashSize1 = 0;
     unitCountFlash1 = 0;
+    return; 
   }
+
+  //Init Flash Chip #1
+  id = ReadJEDECID(DEVICE1);
+  flashSize1 = ChipIDToCapacity(id);
+  unitCountFlash1 = flashSize1 / SIZEPERUNIT_MB;
+  if (flashSize1 != 0) {
+    SetFlashDriveStrength(DEVICE1);
+    Enable4BytesAddressing(DEVICE1);
+  }
+  
+  //Set SPI Speed to SPI_SPEED_FINAL
+  spi_set_baudrate(spi0, SPI_SPEED_FINAL);
 }
 
 //******************************************************************

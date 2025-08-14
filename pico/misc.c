@@ -366,7 +366,7 @@ void GetDeviceInfoString(char* dest) {
   //
   // Firmware Version
   //
-  dest += sprintf(dest,"Megaflash Pico Firmware Version = %s",FIRMWAREVERSTR);
+  dest += sprintf(dest,"MegaFlash Pico Firmware Version = %s",FIRMWAREVERSTR);
   #ifndef NDEBUG
   dest += sprintf(dest," (DEBUG)");
   #endif
@@ -378,8 +378,8 @@ void GetDeviceInfoString(char* dest) {
   //
   uint32_t flashSize = GetFlashSize();
   dest += sprintf(dest,"Total Flash Capacity = %dMB\n\r", flashSize);
-  dest += sprintf(dest,"Flash Chip #0 JEDEC ID = 0x%X\n\r", ReadJEDECID(0));
-  dest += sprintf(dest,"Flash Chip #1 JEDEC ID = 0x%X\n\r", ReadJEDECID(1));
+  dest += sprintf(dest,"Flash Chip #0 JEDEC ID = %Xh\n\r", ReadJEDECID(0));
+  dest += sprintf(dest,"Flash Chip #1 JEDEC ID = %Xh\n\r", ReadJEDECID(1));
 }
 
 

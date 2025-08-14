@@ -246,13 +246,15 @@ static uint8_t DieSelect(const uint deviceNum, const uint8_t dieID) {
 // Output: Status Register-1
 //
 static uint8_t __no_inline_not_in_flash_func(ReadStatus1)(const uint deviceNum) {
-  uint8_t buffer[2]={0x05};  //Read Status Register-1 Command + 1 Byte Result
+  //Read Status Register-1 Command + 1 Byte Result
+  uint8_t txbuffer[2]={0x05};  
+  uint8_t rxbuffer[2];
   
   enable_spi0(deviceNum);
-  spi_write_read_blocking(spi0, buffer, buffer, 2); 
+  spi_write_read_blocking(spi0, txbuffer, rxbuffer, 2); 
   disable_spi0();
   
-  return buffer[1];
+  return rxbuffer[1];
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -263,13 +265,15 @@ static uint8_t __no_inline_not_in_flash_func(ReadStatus1)(const uint deviceNum) 
 // Output: Status Register-3
 //
 static uint8_t ReadStatus3(const uint deviceNum) {
-  uint8_t buffer[2]={0x15};  //Read Status Register-3 Command + 1 Byte Result
+  //Read Status Register-3 Command + 1 Byte Result
+  uint8_t txbuffer[2]={0x15};  
+  uint8_t rxbuffer[2];
   
   enable_spi0(deviceNum);
-  spi_write_read_blocking(spi0, buffer, buffer, 2); 
+  spi_write_read_blocking(spi0, txbuffer, rxbuffer, 2); 
   disable_spi0();
   
-  return buffer[1];
+  return rxbuffer[1];
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -949,15 +953,17 @@ static bool __no_inline_not_in_flash_func(WriteOneBlock)(const blockloc_t blockL
 //   JEDEC ID
 //
 uint32_t tsReadJEDECID(const uint deviceNum) {
-  uint8_t buffer[4]={0x9f}; //Command + 3 Bytes Result
+  //Command + 3 Bytes Result
+  uint8_t txbuffer[4]={0x9f}; 
+  uint8_t rxbuffer[4];
   
   MUTEXLOCK();
   enable_spi0(deviceNum);
-  spi_write_read_blocking(spi0, buffer,buffer, 4);
+  spi_write_read_blocking(spi0, txbuffer,rxbuffer, 4);
   disable_spi0();
   MUTEXUNLOCK();
 
-  return (buffer[1]<<16)|(buffer[2]<<8)|buffer[3];
+  return (rxbuffer[1]<<16)|(rxbuffer[2]<<8)|rxbuffer[3];
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -970,16 +976,18 @@ uint32_t tsReadJEDECID(const uint deviceNum) {
 // Output: Unique 64-bit ID
 //
 uint64_t tsReadUniqueID(const uint deviceNum) {
-  uint8_t __attribute__((aligned(8))) buffer[16]={0,0,0x4b}; //2-Bytes Padding + Command + 5 Dummy Bytes + 8-Bytes Result
+  //2-Bytes Padding + Command + 5 Dummy Bytes + 8-Bytes Result
+  uint8_t __attribute__((aligned(8))) txbuffer[16]={0,0,0x4b}; 
+  uint8_t __attribute__((aligned(8))) rxbuffer[16]={0,0,0x4b}; 
   //2-bytes padding so that the result is 64-bit aligned
   
   MUTEXLOCK();
   enable_spi0(deviceNum);
-  spi_write_read_blocking(spi0,buffer+2,buffer+2,14);
+  spi_write_read_blocking(spi0,txbuffer+2,rxbuffer+2,14);
   disable_spi0();
   MUTEXUNLOCK();
   
-  uint64_t id = *(uint64_t*)(buffer+8);
+  uint64_t id = *(uint64_t*)(rxbuffer+8);
   
   return __builtin_bswap64(id);  //Endian Conversion
 }

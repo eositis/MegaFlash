@@ -117,17 +117,24 @@ uint32_t GetFlashSize() {
 //
 // Input: Device Number
 //
+// Some Rev 1.0 PCB does not work reliably at 75MHz. Adding nop solve the problem
 static inline void enable_spi0(const uint deviceNum) {
   assert(deviceNum <= 1);
+  
+  //do not need nop since the ?: operator already needs additional processing time
   gpio_clr_mask(deviceNum==0?1ul<<CS0_PIN:1ul<<CS1_PIN); 
+  asm volatile("nop");
 }
 
 
 ////////////////////////////////////////////////////////////////////
 // Disable SPI All CS lines
 //
+// Some Rev 1.0 PCB does not work reliably at 75MHz. Adding nop solve the problem
 static inline void disable_spi0() {
+  asm volatile("nop");
   gpio_set_mask(1ul<<CS0_PIN|1ul<<CS1_PIN);
+  asm volatile("nop");
 }
 
 
@@ -1002,6 +1009,12 @@ void InitSpi(){
   gpio_set_drive_strength(CS1_PIN,  GPIO_DRIVE_STRENGTH_8MA);
   gpio_set_drive_strength(SCK_PIN,  GPIO_DRIVE_STRENGTH_8MA);
   gpio_set_drive_strength(MOSI_PIN, GPIO_DRIVE_STRENGTH_8MA);
+
+  //disable pull resisotrs of output pins
+  gpio_set_pulls(CS0_PIN, false,false);
+  gpio_set_pulls(CS1_PIN, false,false);
+  gpio_set_pulls(SCK_PIN, false,false);
+  gpio_set_pulls(MOSI_PIN,false,false);
 
   //Set GPIO functions
   gpio_set_function(SCK_PIN,  GPIO_FUNC_SPI);

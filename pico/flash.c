@@ -39,7 +39,10 @@
 // Mutex
 //
 // To make flash access thread-safe.
-// Thread-safe is needed because both core may access to flash at the same time if TFTP is running
+// Thread-safe is needed because both core may access to flash at the same
+// time if TFTP is running.
+//
+// Note: All functions which are thread-safe and access flash are prefix with ts
 #define USEMUTEX 1
 
 //SPI pins
@@ -824,7 +827,8 @@ exit:
 // Output: true if write operation is successful
 //
 static bool __no_inline_not_in_flash_func(tsWriteOneBlockWithErase)(const blockloc_t blockLoc, const uint8_t* srcBuffer) {
-  MUTEXLOCK();  //Mutex Lock is needed because Memory DMA is not thread-safe.
+  //Mutex Lock is needed because Memory DMA is not thread-safe.
+  MUTEXLOCK();  
   
   //
   //Step 1: Read the entire 4kB sector to sectorBuffer
@@ -878,7 +882,8 @@ static bool __no_inline_not_in_flash_func(tsWriteOneBlockWithErase)(const blockl
 // Output: true if write operation is successful
 //
 static bool __no_inline_not_in_flash_func(tsWriteOneBlockWithoutErase)(const blockloc_t blockLoc, const uint8_t* srcBuffer) {
-  MUTEXLOCK();  //Mutex Lock is needed because Memory DMA is not thread-safe.
+  //Mutex Lock is needed because Memory DMA is not thread-safe.
+  MUTEXLOCK();  
   
   //
   //Step 1: Calculate the CRC32 of the data in srcBuffer in Background by DMA

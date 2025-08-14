@@ -117,46 +117,8 @@ static void PrintAllPartitions() {
 
 
 static void DeviceInfo() {
-#if 0  
-  printf("Device Information\n");
-  printf("==================\n\n");
-
-  //
-  // Pico Board
-  //
-  printf("Pico Board = ");  
-  #ifdef PICO_RP2040
-  printf("Pico RP2040\n");
-  #else
-  printf("Pico 2 RP2350\n");
-  #endif
-  
-  printf("Wifi Supported = ");
-  if (CheckPicoW()) printf("Yes\n");
-  else printf("No\n");  
-  
-  //
-  // Firmware Version
-  //
-  printf("Megaflash Pico Firmware Version = %s",FIRMWAREVERSTR);
-  #ifndef NDEBUG
-  printf(" (DEBUG)");
-  #endif
-  printf("\n");
-  printf("Firmware Build Timestamp = %s %s\n",__DATE__,__TIME__);
-  printf("Pico SDK Version = %s\n",  PICO_SDK_VERSION_STRING);
-  
-  //
-  // Flash Information
-  //
-  uint32_t flashSize = GetFlashSize();
-  printf("Total Flash Capacity = %d MB\n", flashSize);
-  printf("Flash Chip #0 JEDEC ID = 0x%X\n", ReadJEDECID(0));
-  printf("Flash Chip #1 JEDEC ID = 0x%X\n", ReadJEDECID(1));
-#endif
   GetDeviceInfoString(dataBuffer);
   printf("%s",dataBuffer);
-
 
   //
   // Parition Information
@@ -178,7 +140,7 @@ static void EraseFlash() {
     printf("\nErasing... Please wait.");
     TurnOnActLed();
     TurnOnPicoLed();
-    EraseEverything();
+    tsEraseEverything();
     TurnOffActLed();
     TurnOffPicoLed();
     printf("\nDone!\n");

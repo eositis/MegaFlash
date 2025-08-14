@@ -272,7 +272,7 @@ uint __no_inline_not_in_flash_func(ReadBlock)(const uint unitNum, const uint blo
       goto exit;
       break;
     case TYPE_FLASH:
-      spResult = ReadBlockFlash_Public(mediumUnitNum, blockNum,destBuffer);
+      spResult = tsReadBlockFlash_Public(mediumUnitNum, blockNum,destBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
       break;
@@ -332,7 +332,7 @@ uint __no_inline_not_in_flash_func(WriteBlock)(const uint unitNum, const uint bl
       retValue = MFERR_RWERROR;
       goto exit;
     case TYPE_FLASH:
-      spResult = WriteBlockFlash_Public(mediumUnitNum, blockNum, srcBuffer);
+      spResult = tsWriteBlockFlash_Public(mediumUnitNum, blockNum, srcBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
     case TYPE_RAMDISK:
@@ -398,13 +398,13 @@ bool WriteBlockForImageTransfer(uint unitNum, const uint blockNum, const uint8_t
     if (blockNum<8192 && blockNum%16 == 0) {
       assert( (blockLoc.blockAddress&0xffff) == 0);  //Block Address should be 64k-aligned
       
-      if (!IsSector64kErased(blockLoc.deviceNum, blockLoc.blockAddress)) {
-        EraseSector64k(blockLoc.deviceNum,blockLoc.blockAddress);
+      if (!tsIsSector64kErased(blockLoc.deviceNum, blockLoc.blockAddress)) {
+        tsEraseSector64k(blockLoc.deviceNum,blockLoc.blockAddress);
       }
     }
 
     //Program the block
-    success = WriteOneBlockAlreadyErased_Public(blockLoc, srcBuffer);    
+    success = tsWriteOneBlockAlreadyErased_Public(blockLoc, srcBuffer);    
   }
   else if (type==TYPE_RAMDISK) {
     //
@@ -477,7 +477,7 @@ bool EraseEntireUnit(const uint unitNum) {
       success = false;
       goto exit;
     case TYPE_FLASH:
-      EraseFlashDisk(mediumUnitNum);
+      tsEraseFlashDisk(mediumUnitNum);
       success = true;
       goto exit;
     case TYPE_RAMDISK:

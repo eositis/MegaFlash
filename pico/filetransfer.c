@@ -88,7 +88,7 @@ bool  PacketReceived(const uint8_t *packetData,const uint32_t packetNumber,const
   static uint32_t blockNum;
   static uint32_t partsAlreadyInBuffer;
   
-  //First Packet! Initalize static variables
+  //First Packet==0 Initialize static variables
   if (packetNumber==0) {
     blockNum = 0;
     partsAlreadyInBuffer = 0;
@@ -323,11 +323,20 @@ const uint TXPACKETSIZE128 = 128 + TXOVERHEAD;
 const uint TXPACKETSIZE1K  = 1024 + TXOVERHEAD;
 const uint TXBUFFERSIZE = TXPADDING + TXPACKETSIZE1K;
 
-
+//
+// The static variable blockInBuffer needs to be reset before each download session
+// The protocol is if packetBuffer is NULL, reset the variable then return
 static void SendPacket128(uint8_t* packetBuffer,uint32_t unitNum, uint32_t packetNumber,uint8_t packetOrderByte,bool crcMode) {
-  //const uint PACKETSIZE = 1+ 2 +128 +2; //1 SOH + 2 Packet Order Bytes and 2-Bytes CRC
+  const uint32_t UNKNOWNBLOCK=0xffffffff;
   
-  static uint32_t blockInBuffer = 0xffffffff;
+  //To store the block number of the block already stored in dataBuffer
+  static uint32_t blockInBuffer = UNKNOWNBLOCK;
+  
+  //Initialize static variable if packetBuffer == NULL and then return
+  if (NULL==packetBuffer) {
+    blockInBuffer = UNKNOWNBLOCK;
+    return; 
+  }
   
   uint32_t block = packetNumber /4;
   if (block!=blockInBuffer) {
@@ -394,7 +403,7 @@ static void SendPacket1k(uint8_t* packetBuffer,uint32_t unitNum, uint32_t packet
   //Calculate CRC16
   uint32_t crc=CRC16Aligned(dest, BLOCKSIZE*2);
   packetBuffer[TXPADDING+1024+4] = (uint8_t) crc; crc>>=8; //Low Byte
-  packetBuffer[TXPADDING+1024+3] = (uint8_t) crc;         //High Byte
+  packetBuffer[TXPADDING+1024+3] = (uint8_t) crc;          //High Byte
   
   //Send the packet
   usb_putraw(packetBuffer+TXPADDING,TXPACKETSIZE1K);
@@ -431,6 +440,8 @@ int xmodemtx(const uint32_t unitNum, const uint32_t blockCount,enum TxProtocol p
   uint8_t __attribute__((aligned(4))) packetBuffer[TXBUFFERSIZE];
   #endif 
  
+  //Reset static variable
+  SendPacket128(NULL,0,0,0,false); //NULL means reset static variable
  
   do {
     switch (state) {

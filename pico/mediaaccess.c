@@ -392,7 +392,7 @@ bool WriteBlockForImageTransfer(uint unitNum, const uint blockNum, const uint8_t
     //
     //Write to Flash
     //
-    blockloc_t blockLoc = GetBlockLoc(unitNum,blockNum);
+    blockloc_t blockLoc = GetBlockLoc(mediumUnitNum,blockNum);
     
     //Erase 64kB sector every 16 blocks and block number <8192
     if (blockNum<8192 && blockNum%16 == 0) {

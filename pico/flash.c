@@ -295,6 +295,27 @@ static uint8_t WriteStatus3Volatile(const uint deviceNum, const uint8_t value) {
   disable_spi0();
 }
 
+////////////////////////////////////////////////////////////////////
+// Wait until busy flag is cleared
+//
+// Input: Device Number
+//
+static void WaitUntilBusyClear(const uint deviceNum) {
+  uint8_t txbuffer[1] = {0x05}; //Read Status Register-1 Command
+  uint8_t rxbuffer[1];
+
+  enable_spi0(deviceNum);
+  spi_write_blocking(spi0,txbuffer,1);  //Send Read Status Register-1 command
+  
+  //keep reading status register 1 until busy flag is cleared
+  do{
+    spi_read_blocking(spi0, REPEATED_TX_DATA, rxbuffer, 1);
+    if (0==rxbuffer[0] & FLASH_BUSYFLAG) break;
+    busy_wait_us_32(2);  //wait 2us before next polling
+  }while(1);
+  
+  disable_spi0();
+}
 
 ////////////////////////////////////////////////////////////////////
 // Set Flash Drive Strength to 75%
@@ -342,9 +363,7 @@ static void tsProgramSecurityRegister(const uint32_t regnum,const uint8_t* src,c
   
   //wait until programming finishes
   //It takes about 0.7-3.5ms
-  while(ReadStatus1(DEVICE0) & FLASH_BUSYFLAG){
-    tight_loop_contents(); //Do Nothing
-  } 
+  WaitUntilBusyClear(DEVICE0);
   MUTEXUNLOCK();
 }
 
@@ -380,9 +399,7 @@ void tsEraseSecurityRegister(const uint32_t regnum) {
   //Actual Test:50ms
   //Wait until the operation is completed.
   sleep_ms(40);
-  while(ReadStatus1(DEVICE0) & FLASH_BUSYFLAG){
-    tight_loop_contents(); //Do Nothing
-  }
+  WaitUntilBusyClear(DEVICE0);
   MUTEXUNLOCK();
 } 
 
@@ -567,9 +584,7 @@ static void tsEraseSector(const uint deviceNum, uint32_t address) {
   //Actual Test: 55-60ms
   //Wait until the operation is completed.
   sleep_ms(40);
-  while(ReadStatus1(deviceNum) & FLASH_BUSYFLAG){
-    tight_loop_contents(); //Do Nothing
-  }
+  WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
 
@@ -601,9 +616,7 @@ void tsEraseSector64k(const uint deviceNum, uint32_t address) {
   //Actual Test: 220-250ms
   //Wait until the operation is completed.
   sleep_ms(140);
-  while(ReadStatus1(deviceNum) & FLASH_BUSYFLAG){
-    tight_loop_contents(); //Do Nothing
-  }
+  WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
   
@@ -708,9 +721,7 @@ static void __no_inline_not_in_flash_func(tsProgramOnePage)(const uint deviceNum
   
   //wait until programming finishes
   //It takes about 0.7-3.5ms
-  while(ReadStatus1(deviceNum) & FLASH_BUSYFLAG){
-    tight_loop_contents(); //Do Nothing
-  } 
+  WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
 

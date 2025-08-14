@@ -94,7 +94,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 #RP2040: Set system speed to 150MHz
 #SPI does not work at 100MHz. So, set the speed to 150MHz
 #and run SPI at 75MHz
-#V1.1.2 SPI seems to work at 100MHz after setting the drive strength of Flash Chip to 75%
 if (PICO_BOARD STREQUAL pico_w)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SYS_CLK_MHZ=150)
 endif()

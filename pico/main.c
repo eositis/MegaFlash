@@ -131,9 +131,7 @@ int main() {
   //otherwise, text is not printed to uart or usb correctly.
   setbuf(stdout, NULL); 
 #else
-  //Disable stdout for Release Build
-  //Otherwise, TFTP Download freezes occasionally.
-  //Read note below
+  //Disable stdio_uart for Release Build
   stdio_set_driver_enabled(&stdio_uart, false);
 #endif
 
@@ -205,14 +203,8 @@ int main() {
 }
 
 /*
-V1.1.2:
-Without stdio_set_driver_enabled() or stdio_uart_int() function call, TFTP Download may 
-freeze randomly. The root cause cannot be identified because
-1) V1.0 does not have the problem. But all changes between V1.1 and V1.0 have nothing to
-do with WIFI, TFTP or stdio.
-2) V1.1 with Pico 1 board does not have the problem.
-3) Debug build does not have the problem. Even stdio_uart_init() function call is removed,
-it works. But Release Build with the same source code has the problem. 
-
-So, the problem may be caused by Compiler bug/optimization.
+V1.1.3:
+The root cause of the system freeze is identified.
+Adding NOP to enable_spi0() and disable_spi0() solve
+the problem. 
 */

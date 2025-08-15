@@ -308,18 +308,16 @@ static uint8_t WriteStatus3Volatile(const uint deviceNum, const uint8_t value) {
 // Input: Device Number
 //
 static void WaitUntilBusyClear(const uint deviceNum) {
-  uint8_t txbuffer[1] = {0x05}; //Read Status Register-1 Command
-  uint8_t rxbuffer[1];
+  uint8_t buffer[1] = {0x05}; //Read Status Register-1 Command
 
   enable_spi0(deviceNum);
-  spi_write_blocking(spi0,txbuffer,1);  //Send Read Status Register-1 command
+  spi_write_blocking(spi0,buffer,1);  //Send Read Status Register-1 command
   
   //keep reading status register 1 until busy flag is cleared
   do{
-    spi_read_blocking(spi0, REPEATED_TX_DATA, rxbuffer, 1);
-    if (0==rxbuffer[0] & FLASH_BUSYFLAG) break;
-    busy_wait_us_32(2);  //wait 2us before next polling
-  }while(1);
+    busy_wait_us_32(2);  //wait 2us before next polling    
+    spi_read_blocking(spi0, REPEATED_TX_DATA, buffer, 1);
+  }while(buffer[0] & FLASH_BUSYFLAG);
   
   disable_spi0();
 }
@@ -444,7 +442,7 @@ void tsReadSecurityRegister(const uint32_t regnum,uint8_t* dest,const uint8_t of
   MUTEXLOCK();
   enable_spi0(DEVICE0);
   spi_write_blocking(spi0, msg, 6);
-  spi_read_blocking(spi0, 0, dest, len);  //No need to use DMA
+  spi_read_blocking(spi0, REPEATED_TX_DATA, dest, len);  //No need to use DMA
   disable_spi0();
   MUTEXUNLOCK();
 }

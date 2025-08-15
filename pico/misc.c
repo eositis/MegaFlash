@@ -4,6 +4,7 @@
 #include "hardware/sync.h"
 #include "hardware/adc.h"
 #include "hardware/watchdog.h"
+#include "hardware/spi.h"
 #include <malloc.h>
 #include <string.h>
 #include <ctype.h>
@@ -342,7 +343,7 @@ bool GetVolumeInfo(const uint unitNum, VolumeInfo *infoOut) {
 }
 
 ////////////////////////////////////////////////////////////////////
-// Print a Device Information to a destinatio Buffer
+// Print a Device Information to a destination Buffer
 //
 // Input: dest - pointer to destination buffer
 //
@@ -362,6 +363,9 @@ void GetDeviceInfoString(char* dest) {
   
   dest += sprintf(dest,"Wifi Supported = ");
   dest += sprintf(dest,CheckPicoW()?"Yes\n\r":"No\n\r");
+  
+  //CPU Speed and SPI Speed
+  dest += sprintf(dest,"CPU Speed = %.0fMHz, SPI Speed = %.1fMHz\n\r",clock_get_hz(clk_sys)/1000000.0f,spi_get_baudrate(spi0)/1000000.0f);
   
   //
   // Firmware Version

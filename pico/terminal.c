@@ -118,6 +118,7 @@ static void PrintAllPartitions() {
 
 static void DeviceInfo() {
   GetDeviceInfoString(dataBuffer);
+  assert(strlen(dataBuffer)<DATABUFFERSIZE);
   printf("%s",dataBuffer);
 
   //

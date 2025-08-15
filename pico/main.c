@@ -202,9 +202,3 @@ int main() {
   return 0;
 }
 
-/*
-V1.1.3:
-The root cause of the system freeze is identified.
-Adding NOP to enable_spi0() and disable_spi0() solve
-the problem. 
-*/

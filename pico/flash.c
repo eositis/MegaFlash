@@ -39,7 +39,7 @@
 // Mutex
 //
 // To make flash access thread-safe.
-// Thread-safe is needed because both core may access to flash at the same
+// Thread-safe is needed because both cores may access to flash at the same
 // time if TFTP is running.
 //
 // Note: All functions which are thread-safe and access flash are prefix with ts
@@ -83,6 +83,8 @@ static uint32_t flashSize0 = 0;
 static uint32_t flashSize1 = 0;
 
 //Mutex
+//Recursive Mutex is used because the functions are calling one another
+//Recursive Mutex avoid dead lock
 #if USEMUTEX
   auto_init_recursive_mutex(flashMutex);
   #define MUTEXLOCK()   recursive_mutex_enter_blocking(&flashMutex)
@@ -121,11 +123,14 @@ uint32_t GetFlashSize() {
 //
 // Input: Device Number
 //
-// Some Rev 1.0 PCB does not work reliably at 75MHz. Adding nop solve the problem
+// Don't remove nop instruction.
+// Otherwise, TFTP Download may freeze and
+// Flash Read/Write error may occur when SPI is running at 75MHz
 static inline void enable_spi0(const uint deviceNum) {
   assert(deviceNum <= 1);
   
-  //do not need nop since the ?: operator already needs additional processing time
+  //do not need nop before gpio_clr_mask() since the ?: operator already
+  //acts as a delay.
   gpio_clr_mask(deviceNum==0?1ul<<CS0_PIN:1ul<<CS1_PIN); 
   asm volatile("nop");
 }
@@ -134,7 +139,9 @@ static inline void enable_spi0(const uint deviceNum) {
 ////////////////////////////////////////////////////////////////////
 // Disable SPI All CS lines
 //
-// Some Rev 1.0 PCB does not work reliably at 75MHz. Adding nop solve the problem
+// Don't remove nop instruction.
+// Otherwise, TFTP Download may freeze and
+// Flash Read/Write error may occur when SPI is running at 75MHz
 static inline void disable_spi0() {
   asm volatile("nop");
   gpio_set_mask(1ul<<CS0_PIN|1ul<<CS1_PIN);
@@ -588,8 +595,6 @@ static void tsEraseSector(const uint deviceNum, uint32_t address) {
   MUTEXUNLOCK();
 }
 
-
-
 ////////////////////////////////////////////////////////////////////
 // Erase one 64-kB Sector
 // Note: It takes at least 150ms to complete. 
@@ -620,8 +625,6 @@ void tsEraseSector64k(const uint deviceNum, uint32_t address) {
   MUTEXUNLOCK();
 }
   
-
-
 
 ////////////////////////////////////////////////////////////////////
 // Erase everything on chip
@@ -953,8 +956,6 @@ static bool __no_inline_not_in_flash_func(WriteOneBlock)(const blockloc_t blockL
     }     
 }
 
-
-
 ////////////////////////////////////////////////////////////////////
 // Read JEDEC ID and return it as a 32-bit integer
 // Note: SPI Interface returns MSB first. ie. It is big-endian.
@@ -1043,7 +1044,7 @@ void InitSpi(){
   gpio_set_drive_strength(SCK_PIN,  GPIO_DRIVE_STRENGTH_8MA);
   gpio_set_drive_strength(MOSI_PIN, GPIO_DRIVE_STRENGTH_8MA);
 
-  //disable pull resisotrs of output pins
+  //disable pull resistors of output pins
   gpio_set_pulls(CS0_PIN, false,false);
   gpio_set_pulls(CS1_PIN, false,false);
   gpio_set_pulls(SCK_PIN, false,false);

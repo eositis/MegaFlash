@@ -5,6 +5,7 @@ Pico Firmware
 - Improved SPI reliability by adding NOP to enable/disable_spi0() function
 - Changed Mutex in flash.c to Recursive Mutex
 - Added Mutex to ramdisk.c
+- Show CPU and SPI speed on Device Information Screen
 
 Apple Firmware
 - No changes (V1.0)

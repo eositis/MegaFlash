@@ -15,7 +15,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 - Real Time Clock with ProDOS clock driver
 - Network Time Sync (NTP Client)
 - Upload/Download ProDOS Image file via WIFI and TFTP Server
-- Upload/Download ProDOS Image file by XModem
+- Upload/Download ProDOS Image file via XModem and USB serial port
 - FPU for Applesoft BASIC
 - Bug fixes of System ROM and Applesoft
 

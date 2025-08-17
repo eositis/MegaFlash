@@ -129,8 +129,7 @@ uint32_t GetFlashSize() {
 static inline void enable_spi0(const uint deviceNum) {
   assert(deviceNum <= 1);
   
-  //do not need nop before gpio_clr_mask() since the ?: operator already
-  //acts as a delay.
+  asm volatile("nop");
   gpio_clr_mask(deviceNum==0?1ul<<CS0_PIN:1ul<<CS1_PIN); 
   asm volatile("nop");
 }
@@ -219,6 +218,7 @@ static void ResetChip(const uint deviceNum,const bool withDelay) {
   enable_spi0(deviceNum);
   spi_write_blocking(spi0, msg1, 1);
   disable_spi0();
+  busy_wait_us_32(1); //Wait 1us before sending Reset command
 
   //Send Reset Command
   enable_spi0(deviceNum);
@@ -368,7 +368,8 @@ static void tsProgramSecurityRegister(const uint32_t regnum,const uint8_t* src,c
   
   //wait until programming finishes
   //It takes about 0.7-3.5ms
-  WaitUntilBusyClear(DEVICE0);
+  busy_wait_us_32(300); //At least 50ns delay is needed after erase/write command (CS deselect time)
+  WaitUntilBusyClear(DEVICE0); 
   MUTEXUNLOCK();
 }
 
@@ -403,7 +404,7 @@ void tsEraseSecurityRegister(const uint32_t regnum) {
   //Accoridng to datasheet, Sector Erase needs at least 50ms.
   //Actual Test:50ms
   //Wait until the operation is completed.
-  sleep_ms(40);
+  sleep_ms(40);   //At least 50ns delay is needed after erase/write command (CS deselect time)
   WaitUntilBusyClear(DEVICE0);
   MUTEXUNLOCK();
 } 
@@ -588,7 +589,7 @@ static void tsEraseSector(const uint deviceNum, uint32_t address) {
   //Accoridng to datasheet, Sector Erase needs at least 50ms.
   //Actual Test: 55-60ms
   //Wait until the operation is completed.
-  sleep_ms(40);
+  sleep_ms(40); //At least 50ns delay is needed after erase/write command (CS deselect time)
   WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
@@ -618,7 +619,7 @@ void tsEraseSector64k(const uint deviceNum, uint32_t address) {
   //Accoridng to datasheet, Sector Erase needs at least 150ms.
   //Actual Test: 220-250ms
   //Wait until the operation is completed.
-  sleep_ms(140);
+  sleep_ms(140); //At least 50ns delay is needed after erase/write command (CS deselect time)
   WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
@@ -722,6 +723,7 @@ static void __no_inline_not_in_flash_func(tsProgramOnePage)(const uint deviceNum
   
   //wait until programming finishes
   //It takes about 0.7-3.5ms
+  busy_wait_us_32(300); //At least 50ns delay is needed after erase/write command (CS deselect time)
   WaitUntilBusyClear(deviceNum);
   MUTEXUNLOCK();
 }
@@ -813,6 +815,7 @@ bool tsIsSector64kErased(const uint deviceNum, uint32_t address) {
     uint32_t crc32=tsReadSector(deviceNum, address);
     if (crc32 != 0xf154670a) {
       //Checksum not match. It is not erased.
+      retValue = false;
       goto exit;
     }
     address += SECTORSIZE;  //Next Sector Address
@@ -821,6 +824,7 @@ bool tsIsSector64kErased(const uint deviceNum, uint32_t address) {
     const uint32_t* srcData = (const uint32_t*)sectorBuffer;
     for(uint j=SECTORSIZE/4;j!=0;--j) {   
       if (*srcData != 0xffffffff) {
+        retValue = false;
         goto exit;
       }
       ++srcData;
@@ -1019,9 +1023,10 @@ void InitSpi(){
   // Initialize CS pins
   gpio_init(CS0_PIN);
   gpio_init(CS1_PIN);
-  gpio_set_dir(CS0_PIN, GPIO_OUT);
-  gpio_set_dir(CS1_PIN, GPIO_OUT);
-  disable_spi0(); //Set CS pins to high
+  
+  //Set CS pins to high and set them to output
+  gpio_set_mask(1ul<<CS0_PIN|1ul<<CS1_PIN); 
+  gpio_set_dir_out_masked(1ul<<CS0_PIN|1ul<<CS1_PIN);
 
   //SPI Clock speed
   //Set the SPI speed to lower value so that
@@ -1451,6 +1456,23 @@ bool tsWriteOneBlockAlreadyErased_Public(const blockloc_t blockLoc, const uint8_
   return success;
 }
 
+//////////////////////////////////////////////////////
+// Abort Erase Flash Disk Process
+//
+// EraseFlashDisk takes up to 2 minutes and it is used
+// by Control Panel. If Apple is reset during the erase,
+// the erase process should be aborted. Otherwise, MegaFlash
+// does not respond any requests from Apple.
+//
+// The method is abortEraseFlashDisk is reset to false when
+// tsEraseFlashDisk() is called. If Apple is reset, an interrupt
+// is generated. The ISR calls AbortEraseFlashDisk() and  
+// abortEraseFlashDisk is set. Then, the process is aborted.
+//
+static volatile bool abortEraseFlashDisk;
+void AbortEraseFlashDisk() {
+  abortEraseFlashDisk = true;
+}
 
 ////////////////////////////////////////////////////////////////////
 // Erase entire unit
@@ -1459,18 +1481,24 @@ bool tsWriteOneBlockAlreadyErased_Public(const blockloc_t blockLoc, const uint8_
 // Input: Unit Number
 //
 void tsEraseFlashDisk(const uint unitNum){
+  abortEraseFlashDisk = false;
   MUTEXLOCK();
-  
+
   //Erase 64kB sector every 16 blocks and block number <8192
   for(uint blockNum=0;blockNum<8192;blockNum+=16) {
     blockloc_t blockLoc = GetBlockLoc(unitNum,blockNum);
+
+    if (abortEraseFlashDisk) break;
     
     if (!tsIsSector64kErased(blockLoc.deviceNum, blockLoc.blockAddress)) {
+      if (abortEraseFlashDisk) break;
       tsEraseSector64k(blockLoc.deviceNum,blockLoc.blockAddress);
     }
   }
   MUTEXUNLOCK();
 }
+
+
 
 
 

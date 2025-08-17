@@ -30,7 +30,6 @@ void tsEraseSecurityRegister(const uint32_t regnum);
 void tsReadSecurityRegister(const uint32_t regnum,uint8_t* dest,const uint8_t offset,const size_t len);
 void tsWriteSecurityRegister(const uint32_t regnum,uint8_t* src,const uint8_t offset,const size_t len);
 
-
 uint32_t GetUnitCountFlashActual();
 uint32_t GetBlockCountFlash(const uint unitNum);
 uint32_t GetBlockCountFlashActual(const uint unitNum);
@@ -45,8 +44,11 @@ rwerror_t tsReadBlockFlash_Public(const uint unitNum, const uint blockNum, uint8
 rwerror_t tsWriteBlockFlash_Public(const uint unitNum, const uint blockNum, const uint8_t* srcBuffer);
 bool tsWriteOneBlockAlreadyErased_Public(const blockloc_t blockLoc, const uint8_t* srcBuffer);
 
+//
+// Erase Flash Disk
+//
 void tsEraseFlashDisk(const uint unitNum);
-
+void AbortEraseFlashDisk();
 
 #ifdef __cplusplus
 }

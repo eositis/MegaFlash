@@ -23,7 +23,7 @@
 static char formatWindowTitle[]  = "Format (1/3)";
 static const char strErrorMessage[] = "Error:$%x";
 static const char strFormatCompleted[] = "Disk Format completed.";
-static const char strErasingPrompt[] = "Erasing the drive...\n\n\rIt may take up to 2 minutes.\n\rDon't reset the computer!";
+static const char strErasingPrompt[] = "Erasing the drive...\n\n\rIt may take up to 2 minutes.\n\rPlease wait...";
 
 
 //

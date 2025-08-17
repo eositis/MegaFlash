@@ -27,19 +27,29 @@ static inline void InitActLed() {
   gpio_put(ACT_LED_PIN, 1); //turn it off
 }
 
-void gpio_callback(uint gpio, uint32_t events){
-  //Abort the network task if Apple is reset.
-  if (gpio==nRESET_PIN && IsUDPTaskRunning()) {
-    //Kill any running UDPTask except NTPTask
-    if (!IsNTPTaskRunning()) {
+//
+//GPIO Interrupt call back. 
+
+void gpio_intr_callback(uint gpio, uint32_t events){
+  if (gpio==nRESET_PIN) {
+    //Abort TFTP network task if Apple is reset
+    //during TFTP transfer
+    if (IsUDPTaskRunning() && !IsNTPTaskRunning()) {
       UDPTask_RequestAbortIfRunning(); 
     }
+    
+    //Abort Erase Flash Disk
+    //Read the note at AbortEraseFlashDisk() for more info
+    AbortEraseFlashDisk();
   }
 }
 
+//
+// Interrupt if Apple Reset signal is active and calloc
+// gpio_intr_callback()
 static void EnableAppleResetInterrupt() {
   gpio_init(nRESET_PIN);
-  gpio_set_irq_enabled_with_callback(nRESET_PIN, GPIO_IRQ_EDGE_FALL, true /*enabled*/, &gpio_callback);
+  gpio_set_irq_enabled_with_callback(nRESET_PIN, GPIO_IRQ_EDGE_FALL, true /*enabled*/, &gpio_intr_callback);
 }
 
 //
@@ -68,15 +78,14 @@ void __no_inline_not_in_flash_func(core1Main)() {
 
 volatile bool updateNTPNow = false;
 
-
+//
+//Use Core 0 to run background task such as TFTP or NTP Time sync
+//
 void __no_inline_not_in_flash_func(core0Loop)() {
   const uint32_t NEXTUPDATE_SUCCESS = (24*60*60*1000);  //If last NTP update is successful, re-sync in 24hr
   const uint32_t NEXTUPDATE_FAILED  = (5*60*1000);      //If last NTP update failed, try again in 5 min
   absolute_time_t nextUpdateTime;
   
-  //wait awhile for core 1 to load user configuration
-  sleep_ms(100);  
-
   if (CheckPicoW()) {
     do {
       updateNTPNow = false;
@@ -114,7 +123,6 @@ int main() {
   InitActLed();
   InitDMAChannel();
   InitTFTPState();
-  EnableAppleResetInterrupt();
   
   //Enable Pull-down resistors of unused GPIOs
   gpio_pull_down(0);
@@ -144,6 +152,15 @@ int main() {
 
   //Check if we are connecting to Apple IIc
   bool appleConnected = IsAppleConnected();
+  
+  //Enable Apple Reset Interrupt only if we are connected to Apple IIc
+  //The /Reset signal at the expansion slot connector is floating if
+  //MegaFlash is not connected to Apple. There is no pull-up resistor
+  //at the transceiver input on Rev 1.0PCB. So, enable interrupt only 
+  // when appleConnected is true
+  if (appleConnected) {
+    EnableAppleResetInterrupt();
+  }
   
   //
   // Core1: Apple Bus Loop

@@ -31,13 +31,13 @@ Original ROM image files for Apple IIc and IIc plus are needed.  For Apple IIc, 
 
 Execute `make` to build the project.
 
-## Build Target
+## Build Targets
 
 There are two build targets, `a2c` and `a2cp`.
 
 Target `a2c` is for Apple IIc. The output file is `iic.bin`. Target `a2cp` is for Apple IIc plus. The output file is `iicplus.bin`.
 
-The linker of CC65 is capable of patching a binary file. So, no additional tools are needed to generate the output file.
+The linker of CC65 is capable of patching a binary file. So, no additional tools are needed to generate the output files.
 
 ## Development Guide
 The makefile generates the output files in two steps. Step 1 generates the new binary codes. Step 2 merges the new codes to the orginal ROM files.

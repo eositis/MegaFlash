@@ -18,9 +18,9 @@ If it is not installed, try to install Java Runtime Environment by
 
 ## Build Instruction
 
-Execute `make` to build the project.
+Execute `make release` to build the project.
 
-## Build Target
+## Build Targets
 
 There are two build targets, `release` and `test`.
 

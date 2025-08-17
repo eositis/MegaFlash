@@ -134,6 +134,7 @@ static void EraseFlash() {
   printf("Erase Flash Content\n");
   printf("===================\n\n");
   
+  printf("!!!! WARNING !!!!\n");
   printf("All data stored in MegaFlash will be destroyed.\n");
   printf("It takes at least 200 seconds to complete.\n\n");
  

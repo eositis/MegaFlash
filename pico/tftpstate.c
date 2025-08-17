@@ -71,17 +71,19 @@ void TFTPCopyFilename(const char* filename) {
 //      this situation.
 //
 uint8_t TFTPCalcProgressBarValue(uint32_t pbValueMax,const uint32_t blockTransferred,const uint32_t tsize) {
-  #define INVALID_PBVALUE (-1)
+  const uint8_t INVALID_PBVALUE = 0xff;
   uint8_t result = INVALID_PBVALUE;
   if (blockTransferred == TFTPSTATE_INVALIDBLOCKCOUNT || tsize == TFTPSTATE_INVALIDTSIZE) goto exit;
   
   //Calculate Total Number of blocks
   uint32_t totalBlocks = tsize/PRODOS_BLOCKSIZE;
   if (totalBlocks==0) goto exit;    //Avoid division by 0
-  if (blockTransferred>totalBlocks) return pbValueMax;
   
-  float fresult = (float)blockTransferred/totalBlocks*pbValueMax+0.5f;
-  result = (uint8_t)fresult;
+  if (blockTransferred>=totalBlocks) result = pbValueMax; //completed
+  else {
+    float fresult = (float)blockTransferred/totalBlocks*pbValueMax;
+    result = (uint8_t)fresult;    
+  }
   
 exit:
     return result;

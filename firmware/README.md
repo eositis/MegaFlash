@@ -40,11 +40,11 @@ Target `a2c` is for Apple IIc. The output file is `iic.bin`. Target `a2cp` is fo
 The linker of CC65 is capable of patching a binary file. So, no additional tools are needed to generate the output files.
 
 ## Development Guide
-The makefile generates the output files in two steps. Step 1 generates the new binary codes. Step 2 merges the new codes to the orginal ROM files.
+The makefile generates the output files in two steps. Step 1 generates the new binary codes. Step 2 merges the new codes to the original ROM files.
 
 ### Step 1 Code Generation
 
-To add a new code segment, you need to edit `iic.cfg` and `iicplus.cfg` files. A new segment and a new output file should be added.  The naming of segment and output file is same as ROM4X project. i.e. `B0_C123` means address $C123 at ROM Bank 0.
+To add a new code segment, you need to edit `iic.cfg` and `iicplus.cfg` files. A new segment and a new output file should be added.  The naming of segments and output files is same as ROM4X project. i.e. `B0_C123` means address $C123 at ROM Bank 0.
 
 ### Step 2 Patching the ROM files
 

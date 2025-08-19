@@ -1,3 +1,11 @@
+Version 1.1.4 18-Aug-2025
+Pico Firmware
+- Abort Erase Flash Disk if Apple is reset during the process
+- Minor clean up of source code
+
+Apple Firmware
+- No changes (V1.0)
+
 Version 1.1.3 15-Aug-2025
 Pico Firmware
 - Bug Fix: Last ProDOS block may contain incorrect data when transferring disk image to PC via XMODEM-1k

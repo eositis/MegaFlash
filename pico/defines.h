@@ -10,8 +10,8 @@
 
 ****************************************************/
 
-#define FIRMWAREVER     0x0007
-#define FIRMWAREVERSTR  "V1.1.3"
+#define FIRMWAREVER     0x0008
+#define FIRMWAREVERSTR  "V1.1.4"
 // 0x0000 = V0.1
 // 0x0001 = V0.2   18-Apr-2025
 // 0x0002 = V0.3   05-May-2025
@@ -20,6 +20,7 @@
 // 0x0005 = V1.1.1 04-Aug-2025
 // 0x0006 = V1.1.2 11-Aug-2025
 // 0x0007 = V1.1.3 15-Aug-2025
+// 0x0008 = V1.1.4 18-Aug-2025
 
 //Deivce Signature Bytes
 #define SIGNATURE1 0x88
@@ -64,7 +65,7 @@
 
 //I/O Pins
 #define PHI0_PIN 19
-#define nRESET_PIN   21  /* Apple Reset PIN, active low*/
+#define nRESET_PIN   21  /* Apple /Reset PIN, active low */
 #define ACT_LED_PIN  26
 #define PICO_LED_PIN 25  /* Pico Onboard LED */
 

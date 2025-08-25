@@ -1,3 +1,10 @@
+Version 1.1.5 25-Aug-2025
+Pico Firmware
+- ADTPro VSDRIVE drivers are included in ROM Disk
+
+Apple Firmware
+- No changes (V1.0)
+
 Version 1.1.4 18-Aug-2025
 Pico Firmware
 - Abort Erase Flash Disk if Apple is reset during the process

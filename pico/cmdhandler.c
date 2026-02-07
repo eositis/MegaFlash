@@ -852,8 +852,9 @@ static void DoAppleColdStart() {
   //Reset data transfer mode in case the computer is reset during data transfer
   dataBufferTransferMode = MODE_LINEAR;   
   
-  //ROM Disk is disabled by default
-  DisableRomdisk();
+  //ROM Disk: always available at last unit unless user chose "Boot to ROM Disk"
+  EnableRomdisk();
+  SetRomdiskFirst(false);
   
   //Make sure all config changes are effective.
   Reconfig();
@@ -1495,6 +1496,7 @@ void __no_inline_not_in_flash_func(DoCommand)(const uint32_t command) {
       break;
     case CMD_ENABLEROMDISK:
       EnableRomdisk();
+      SetRomdiskFirst(parameterBuffer[0] != 0);  /* 1 = first (boot), 0 = last */
       ClearError();
       break;
     case CMD_DISABLEROMDISK:

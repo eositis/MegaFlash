@@ -12,10 +12,10 @@ extern const uint32_t romdiskImageLen[];
 #define IDSTR "ROMDISK         "
 #define IDSTRLEN 7
 
-//ROMDisk Enable Flag
-static bool romdiskEnabled = false;
-
-
+//ROMDisk Enable Flag (true = always available to ProDOS)
+static bool romdiskEnabled = true;
+// When true, ROM disk is first SmartPort unit (for boot); when false, last unit.
+static bool romdiskFirst = false;
 
 ///////////////////////////////////////
 // Getter /Setter function
@@ -30,6 +30,14 @@ void EnableRomdisk() {
 
 void DisableRomdisk() {
   romdiskEnabled = false;
+}
+
+bool GetRomdiskFirst(void) {
+  return romdiskFirst;
+}
+
+void SetRomdiskFirst(bool first) {
+  romdiskFirst = first;
 }
 
 uint32_t GetUnitCountRomdisk() {

@@ -52,23 +52,12 @@ bool __no_inline_not_in_flash_func(IsValidUnitNum)(const uint unitNum) {
 //        mediumUnitNumOut - Pointer to variable to receive Medium Unit Number
 //
 //Currently, there are 3 different storage medium, Romdisk, Flash and Ramdisk.
-//The order of their unit numbers are
-// 1) Romdisk
-// 2) Flash
-// 3) Ramdisk
+//Unit order depends on GetRomdiskFirst():
+//  - ROM disk first (boot): Romdisk, Flash, Ramdisk
+//  - ROM disk last (default): Flash, Ramdisk, Romdisk
 //
-//When Romdisk is disabled/enabled, the unit numbers of Flash Disk and Ramdisk 
-//also change.
-//
-//For example, when Romdisk is disabled, the first drive in Flash is unit 1. But
-//when Romdisk is enabled, the same drive becomes unit 2.
-//
-//This routine translate the logical unit number to the unit number of the medium.
-//It also reports the medium type so that ReadBlock/WriteBlock routines can dispatch
-//the call to specific handler.
-//
-//For example, if Romdisk is enabled and the Smartport unit number = 2, it will report
-//medium type is Flash and medium unit number is 1 (since it is the first drive of Flash)
+//This routine translates the logical unit number to the medium type and
+//medium unit number so ReadBlock/WriteBlock can dispatch to the right handler.
 //
 static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaType *typeOut, uint *mediumUnitNumOut) {
   assert(IsValidUnitNum(unitNum));
@@ -76,37 +65,58 @@ static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaT
   assert(mediumUnitNumOut!=NULL);
   
   uint romdiskCount = GetUnitCountRomdisk();
-  if (unitNum <= romdiskCount) {
-    *typeOut = TYPE_ROMDISK;
-    *mediumUnitNumOut = unitNum;
-    return;
-  }
-  
-  unitNum -= romdiskCount;
   uint flashdiskCount = GetUnitCountFlashEnabled();
-  if (unitNum <= flashdiskCount) {
-    *typeOut = TYPE_FLASH;
-    *mediumUnitNumOut = MapFlashUnitNum(unitNum);   //unitNum;
-    return;
-  }  
-  
-  unitNum -= flashdiskCount;
   uint ramdiskCount = GetUnitCountRamdisk();
-  if (unitNum <= ramdiskCount) {
-    *typeOut = TYPE_RAMDISK;
-    *mediumUnitNumOut = unitNum;
-    return;
-  }
   
-  //Should not happen
+  if (GetRomdiskFirst()) {
+    // Order: Romdisk, Flash, Ramdisk
+    if (unitNum <= romdiskCount) {
+      *typeOut = TYPE_ROMDISK;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
+    unitNum -= romdiskCount;
+    if (unitNum <= flashdiskCount) {
+      *typeOut = TYPE_FLASH;
+      *mediumUnitNumOut = MapFlashUnitNum(unitNum);
+      return;
+    }
+    unitNum -= flashdiskCount;
+    if (unitNum <= ramdiskCount) {
+      *typeOut = TYPE_RAMDISK;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
+  } else {
+    // Order: Flash, Ramdisk, Romdisk (ROM disk last)
+    if (unitNum <= flashdiskCount) {
+      *typeOut = TYPE_FLASH;
+      *mediumUnitNumOut = MapFlashUnitNum(unitNum);
+      return;
+    }
+    unitNum -= flashdiskCount;
+    if (unitNum <= ramdiskCount) {
+      *typeOut = TYPE_RAMDISK;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
+    unitNum -= ramdiskCount;
+    if (unitNum <= romdiskCount) {
+      *typeOut = TYPE_ROMDISK;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
+  }
   assert(false);
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// Get the unit number of RAM Disk
+// Get the unit number of RAM Disk (first RAM disk unit)
 //
 uint GetRamdiskUnitNum() {
-  return GetUnitCountRomdisk() +GetUnitCountFlashEnabled() +1;
+  if (GetRomdiskFirst())
+    return GetUnitCountRomdisk() + GetUnitCountFlashEnabled() + 1;
+  return GetUnitCountFlashEnabled() + 1;
 }
 
 

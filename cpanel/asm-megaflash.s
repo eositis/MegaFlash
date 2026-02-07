@@ -18,6 +18,8 @@
                 .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
                 .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
                 .export _StartTFTP,_GetTFTPStatus
+                .export _EnableRomdiskAtLast,_BootToRomdisk
+                .import _Reboot
                 .export _GetParam8Offset,_GetParam8,_GetParam16
 
 
@@ -666,5 +668,37 @@ _GetTFTPStatus:
                 
                 lda #CMD_TFTPSTATUS     
                 jmp execute
+
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ EnableRomdiskAtLast(void)
+; Enable ROM disk at last SmartPort unit (for Control Panel)
+;
+_EnableRomdiskAtLast:
+.ifndef TESTBUILD
+                stz cmdreg
+                stz paramreg            ;0 = last unit
+                lda #CMD_ENABLEROMDISK
+                jmp execute
+.else
+                rts
+.endif
+
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ BootToRomdisk(void)
+; Set ROM disk to first unit and reboot so machine boots from ROM disk. No return.
+;
+_BootToRomdisk:
+.ifndef TESTBUILD
+                stz cmdreg
+                lda #1
+                sta paramreg            ;1 = first unit (for boot)
+                lda #CMD_ENABLEROMDISK
+                jsr execute
+                jmp _Reboot
+.else
+                rts
+.endif
 
 

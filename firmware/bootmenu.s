@@ -382,14 +382,16 @@ chkmegaflash:   lda idreg
                 rts
 
 ;------------------------------------------------------------------------------
-; Enable ROM Risk
-; Function: Tell MegaFlash to enable ROM Disk
-; For Boot Menu Only since ROM Disk is at unit number 1. The unit number of 
-; all disks are changed. So, it is expected that the computer to reboot.
+; Enable ROM Disk at first unit (for boot)
+; Tell MegaFlash to enable ROM Disk at unit 1 so the machine can boot from it.
+; Parameter 1 = first unit. Unit numbers change; reboot is expected.
 enableromdisk:
                 lda mfexist
                 bne rts1
 
+                stz cmdreg             ;Reset param pointer
+                lda #1
+                sta paramreg           ;1 = ROM disk first (for boot)
                 lda #CMD_ENABLEROMDISK
                 ;Fall-into execute
 

@@ -29,6 +29,8 @@ uint8_t  __fastcall__ GetParam8();
 uint16_t __fastcall__ GetParam16();
 uint8_t __fastcall__ StartTFTP(uint8_t flag,uint8_t dir,uint8_t unitNum);
 void  __fastcall__ GetTFTPStatus(uint8_t pbMaxValue);
+void __fastcall__ EnableRomdiskAtLast(void);  /* ROM disk at last SmartPort unit */
+void __fastcall__ BootToRomdisk(void);        /* ROM disk first, then reboot (no return) */
 
 //
 // asm-conio.s

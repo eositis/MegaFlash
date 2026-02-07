@@ -82,9 +82,9 @@ void main() {
   //So, reset the mode to linear to avoid potential problem.
   SendCommand(CMD_MODELINEAR);
 
-  //Make sure ROMDisk is disabled.
-  SendCommand(CMD_DISABLEROMDISK);
-  
+  //ROM disk at last SmartPort unit so flash/ram are first (unless user chooses "Boot to ROM Disk")
+  EnableRomdiskAtLast();
+
   //Disable Drive Mapping so that we can acces to all drives including RAMDisk
   DriveMapping(false);    //false = disable
   

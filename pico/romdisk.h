@@ -9,6 +9,10 @@ bool GetRomdiskEnabled();
 void EnableRomdisk();
 void DisableRomdisk();
 
+/** When true, ROM disk is unit 1 (for boot). When false, ROM disk is last unit. */
+bool GetRomdiskFirst(void);
+void SetRomdiskFirst(bool first);
+
 uint32_t GetUnitCountRomdisk();
 uint32_t GetBlockCountRomdisk();
 uint32_t GetBlockCountRomdiskActual();

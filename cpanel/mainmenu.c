@@ -40,6 +40,7 @@ static char mmPrompt[] ="Cancel:esc   Select:\310 \325 \312 \313 \315";
 enum COMMANDS {
   ID_POWERONSPEED,
   ID_BOOTMF,
+  ID_BOOTROMDISK,
   ID_FPU,
   ID_NTPCLIENT,
   ID_TIMEZONE,
@@ -55,6 +56,7 @@ enum COMMANDS {
 static char* mainMenuItems[] = {
   "Power on CPU Speed",
   "Boot MegaFlash",
+  "Boot to ROM Disk",
   "Applesoft BASIC FPU",  
   "Network Time Sync",
   "Time Zone",
@@ -71,6 +73,7 @@ static char* mainMenuItems[] = {
 static uint8_t mainMenuIDs[] = {
   ID_POWERONSPEED,
   ID_BOOTMF,
+  ID_BOOTROMDISK,
   ID_FPU,
   ID_NTPCLIENT,
   ID_TIMEZONE,
@@ -264,6 +267,10 @@ void DoMainMenu() {
           break;
         case ID_BOOTMF:
           ToggleAutoBoot();
+          break;
+        case ID_BOOTROMDISK:
+          if (key != KEY_ENTER) break;
+          BootToRomdisk();  /* no return */
           break;
         case ID_FPU:
           ToggleFPU();

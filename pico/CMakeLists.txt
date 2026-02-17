@@ -40,6 +40,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     terminal.c
     slinky.c
     fpu.c
+    uthernet2.c
+    uthernet2_net.c
     network.cpp
     udptask.cpp
     ntptask.cpp

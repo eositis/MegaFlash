@@ -70,6 +70,10 @@
 #define ACT_LED_PIN  26
 #define PICO_LED_PIN 25  /* Pico Onboard LED */
 
+/* Address decode only (no GPIO slot select): C0x0–C0x3 = MegaFlash; C0x4–C0x7 = Uthernet II W5100.
+ * The bus is presented when the card’s slot is addressed; no pin 27 or other slot-select input. */
+#define U2_C0X_OFFSET     4   /* Uthernet II responds at C0x4–C0x7 only */
+
 static inline void TurnOnActLed() {
   gpio_clr_mask(1ul<<ACT_LED_PIN); //Turn on
 }

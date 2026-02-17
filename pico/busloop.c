@@ -7,6 +7,7 @@
 #include "busloop.h"
 #include "cmdhandler.h"
 #include "dmamemops.h"
+#include "uthernet2.h"
 
 //--------------------------------------------------------------------
 //Accessing buffers from Apple IIc
@@ -93,11 +94,29 @@ void __no_inline_not_in_flash_func(BusLoopDataInit)() {
 void __no_inline_not_in_flash_func(BusLoop)() {
   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
   const uint READFLAG = (1<<4); //Read flag is at bit 4
+  uint u2_poll_counter = 0;
 
   while(true) {
     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
     uint32_t busdata = GetAppleBusBlocking();
     uint32_t addr = busdata & 0b1111;     //Lower nibble of Apple Address
+
+    /* Address decode: C0x4–C0x7 = Uthernet II ($C0C4–$C0C7); C0x0–C0x3 = MegaFlash ($C0C0–$C0C3). No GPIO slot select. */
+    if (addr >= U2_C0X_OFFSET) {
+      uint8_t u2_read_byte;
+      U2_HandleBusAccess(busdata, &u2_read_byte);
+      if (busdata & READFLAG) {
+        uint32_t u2_addr = busdata & 3;
+        uint32_t merged = registers.i32[0] & ~(0xFFu << (u2_addr * 8));
+        merged |= (uint32_t)u2_read_byte << (u2_addr * 8);
+        UpdateMegaFlashRegisters(0, merged);
+      }
+      if (++u2_poll_counter >= 500) {
+        u2_poll_counter = 0;
+        U2_Poll();
+      }
+      continue;
+    }
 
     if (busdata & READFLAG) {
       //6502 is reading from us

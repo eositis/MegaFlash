@@ -1,0 +1,11 @@
+---
+description: Keep the session log updated with all activity data (per project)
+alwaysApply: true
+---
+
+# Session log (per project)
+
+- **File**: `SESSION_LOG.md` in **this project’s root directory** (workspace root). Each project has its own log; do not use a global or shared log.
+- **When**: Update the log **before ending your turn** whenever you have: made code or config edits, run build/terminal commands, or completed a multi-step task in this project. Do not skip this step.
+- **Format**: Add a dated section (e.g. `## YYYY-MM-DD`) if it’s a new day; under it add a bullet with what was changed or done and key file/command names. Keep entries brief (one to three lines per activity).
+- **Placement**: Insert new entries above the line that says "Append new entries above this line" so the log reads chronologically (newest first under each date).

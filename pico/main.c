@@ -20,6 +20,7 @@
 #include "ipc.h"
 #include "network.h"
 #include "tftpstate.h"
+#include "uthernet2.h"
 
 static inline void InitActLed() {
   gpio_init(ACT_LED_PIN);
@@ -128,9 +129,9 @@ int main() {
   gpio_pull_down(0);
   gpio_pull_down(1);
   gpio_pull_down(26);
-  gpio_pull_down(27);  
-  
-  
+
+  U2_Init();
+
 #ifndef NDEBUG
   //For sending Debug Message to UART
   stdio_uart_init();    //Default baud: 115200

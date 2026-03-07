@@ -1,0 +1,33 @@
+---
+description: Always document reasoning and thought process for future reference and learning
+alwaysApply: true
+---
+
+# Document your thinking
+
+When working on this project, **always document your thought process** so the user (and future you) can look back, understand why decisions were made, and learn from the reasoning.
+
+## When to document
+
+- **Session log (`SESSION_LOG.md`)**: Before ending your turn, add a brief entry for any code/config change, build, or multi-step task (per the session-log rule). Include **one line on the reasoning or outcome** when it’s non-obvious (e.g. “Fixed X so that Y” or “Reverted Z because …”).
+- **Implementation notes (`docs/Implementation-notes-and-reasoning.md`)**: For non-trivial work, add or update a **numbered section** that records:
+  - **What** was the requirement, symptom, or question.
+  - **Why** (root cause, design rationale, or “we tried X because …”).
+  - **What we did** (the fix or change) and **what we didn’t do** (dead ends, reverted attempts).
+  - **Takeaway** or **open issue** if relevant.
+  - **References** (key files, symbols, or line areas).
+
+## What to capture
+
+- **Root-cause reasoning**: Why you believe the bug or behaviour is X, not Y (e.g. “PIO only pushes when nDEVSEL goes low, so if the CPU never sees the cycle, nDEVSEL likely never went low”).
+- **Dead ends**: What you tried that didn’t work and why you reverted or abandoned it (e.g. “Inverted nDEVSEL sense; reverted at user request”).
+- **Script/bug fixes**: Not just “fixed the script” but *what* was wrong (e.g. “grep matched two lines so CURRENT_HEX had two tokens; fixed by adding trailing space to the pattern”).
+- **Design choices**: Why a constant, pin, or chunk was chosen (e.g. “C0C4–C0C7 are chunk 1 because the PIO maps [A3:A2]=01 to SM1”).
+
+## Format
+
+- Use clear headings and short paragraphs in `Implementation-notes-and-reasoning.md`.
+- Keep a **Summary table** (or equivalent) near the end for quick lookup of “where is X” and “what was decided”.
+- When adding a new section, place it in logical order (e.g. after related sections) and update the summary table and any “Open / unresolved” section.
+
+Do not skip documentation because the change was “small”; even small fixes often have non-obvious reasoning that is valuable later.

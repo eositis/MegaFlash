@@ -41,7 +41,7 @@ So the **C0x register layout for the first four locations is the same**; the **s
    One 16-byte block per slot in the C0xx page.
 
 2. **Same decoding for the first 4 locations**  
-   Only the bottom 2 bits of the address select the register (0–3). So e.g. $C0C0/$C0C4/$C0C8/$C0CC all map to reg 0 on MegaFlash when A2–A3 are ignored; Uthernet II only ever decodes 2 bits, so it has exactly 4 ports.
+   Only the bottom 2 bits of the address select the register (0–3). So e.g. $C0C0/$C0C4/$C0C8/$C0CC all map to reg 0 on MegaFlash when A2–A3 are ignored; Uthernet II only ever decodes 2 bits, so it has exactly 4 ports. On MegaFlash Pico, U2 is only at $C0C4–$C0C7 (addr 4–7); $C0C8–$C0CF are not U2.
 
 3. **Register 0 = control**  
    U2: mode (MR); MF: command/status.
@@ -138,6 +138,6 @@ Ways to **merge** without conflict would require a **new, unified protocol**, fo
    e.g. “If bit 6 set on write, treat as MegaFlash command; else treat as W5100 MR.” Then you’d reserve that bit for U2 (W5100 MR doesn’t use 0x40) and restrict MF command encoding. Doable but not backward‑compatible with existing MF command set (0x09, 0x0a, etc. would need redefinition).
 
 3. **Keep separate slots**  
-   No protocol change: U2 and MegaFlash both in slot 4; U2 at C0x4–C0x7 ($C0C4–$C0C7), MegaFlash at C0x0–C0x3 ($C0C0–$C0C3). Same slot, no address conflict.
+   No protocol change: U2 and MegaFlash both in slot 4; U2 at C0x4–C0x7 only ($C0C4–$C0C7), MegaFlash at C0x0–C0x3 ($C0C0–$C0C3). On MegaFlash Pico firmware, Uthernet II is limited to these four addresses; $C0C8–$C0CF are not U2. Same slot, no address conflict.
 
 **Summary**: There **is** address overlap at register 0 (same C0x index), but **no** compatible syntax overlap: read/write roles and value meanings differ. You **can** use the same addresses in the two projects only by keeping the cards in **different slots**. To merge both behaviors in one slot without conflict you need an explicit unified protocol (e.g. mode select or reserved bits), not “same addresses as-is.”

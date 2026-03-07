@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/time.h"
 #include "hardware/pio.h"
 #include "a2bus.h"
 #include "defines.h"
@@ -95,21 +96,35 @@ void __no_inline_not_in_flash_func(BusLoop)() {
   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
   const uint READFLAG = (1<<4); //Read flag is at bit 4
   uint u2_poll_counter = 0;
+  static bool c0c4_led_pending = false;
+  static absolute_time_t c0c4_led_off_at;
 
   while(true) {
+    /* Turn off C0C4 diagnostic LED after 1 s (non-blocking) */
+    if (c0c4_led_pending && time_reached(c0c4_led_off_at)) {
+      TurnOffActLed();
+      c0c4_led_pending = false;
+    }
+
     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
     uint32_t busdata = GetAppleBusBlocking();
     uint32_t addr = busdata & 0b1111;     //Lower nibble of Apple Address
 
-    /* Address decode: C0x4–C0x7 = Uthernet II ($C0C4–$C0C7); C0x0–C0x3 = MegaFlash ($C0C0–$C0C3). No GPIO slot select. */
-    if (addr >= U2_C0X_OFFSET) {
+    /* Address decode: ranges are concurrently active (decode by address only).
+     * C0x0–C0x3 = MegaFlash ($C0C0–$C0C3); C0x4–C0x7 = Uthernet II ($C0C4–$C0C7);
+     * C0x8–C0xB / C0xC–C0xF reserved for future ACIA emulation ($C0C8–$C0CB, $C0CC–$C0CF). */
+    if (addr >= U2_C0X_OFFSET && addr <= U2_C0X_LAST) {
+      /* Diagnostic: light activity LED for 1 s on any $C0C4 access */
+      if (addr == U2_C0X_OFFSET) {
+        TurnOnActLed();
+        c0c4_led_off_at = make_timeout_time_ms(1000);
+        c0c4_led_pending = true;
+      }
       uint8_t u2_read_byte;
       U2_HandleBusAccess(busdata, &u2_read_byte);
       if (busdata & READFLAG) {
-        uint32_t u2_addr = busdata & 3;
-        uint32_t merged = registers.i32[0] & ~(0xFFu << (u2_addr * 8));
-        merged |= (uint32_t)u2_read_byte << (u2_addr * 8);
-        UpdateMegaFlashRegisters(0, merged);
+        registers.r[addr] = u2_read_byte;
+        UpdateMegaFlashRegisters(1, registers.i32[1]);  /* 1: for $C0C4-$C0C7 */
       }
       if (++u2_poll_counter >= 500) {
         u2_poll_counter = 0;

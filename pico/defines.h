@@ -10,8 +10,8 @@
 
 ****************************************************/
 
-#define FIRMWAREVER     0x0009
-#define FIRMWAREVERSTR  "V1.1.5"
+#define FIRMWAREVER     0x000c
+#define FIRMWAREVERSTR  "V1.1.8-eo"
 // 0x0000 = V0.1
 // 0x0001 = V0.2   18-Apr-2025
 // 0x0002 = V0.3   05-May-2025
@@ -22,6 +22,9 @@
 // 0x0007 = V1.1.3 15-Aug-2025
 // 0x0008 = V1.1.4 18-Aug-2025
 // 0x0009 = V1.1.5 25-Aug-2025
+// 0x000a = V1.1.6-eo 02-Mar-2026
+// 0x000b = V1.1.7-eo 02-Mar-2026
+// 0x000c = V1.1.8-eo 05-Mar-2026
 
 //Deivce Signature Bytes
 #define SIGNATURE1 0x88
@@ -70,9 +73,10 @@
 #define ACT_LED_PIN  26
 #define PICO_LED_PIN 25  /* Pico Onboard LED */
 
-/* Address decode only (no GPIO slot select): C0x0–C0x3 = MegaFlash; C0x4–C0x7 = Uthernet II W5100.
+/* Address decode only (no GPIO slot select): C0x0–C0x3 = MegaFlash; C0x4–C0x7 only = Uthernet II W5100 ($C0C4–$C0C7). $C0C8–$C0CF are not U2.
  * The bus is presented when the card’s slot is addressed; no pin 27 or other slot-select input. */
-#define U2_C0X_OFFSET     4   /* Uthernet II responds at C0x4–C0x7 only */
+#define U2_C0X_OFFSET     4   /* first Uthernet II address */
+#define U2_C0X_LAST       7   /* last Uthernet II address ($C0C4–$C0C7 only) */
 
 static inline void TurnOnActLed() {
   gpio_clr_mask(1ul<<ACT_LED_PIN); //Turn on

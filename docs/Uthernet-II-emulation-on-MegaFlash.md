@@ -35,7 +35,7 @@ This document describes the Uthernet II (W5100) emulation implemented in the Meg
 | `pico/w5100_regs.h` | W5100/Uthernet II constants: C0x mask, MR/GAR/SUBR/SHAR/SIPR, socket regs, SN_MR/SN_CR/SN_SR, etc. |
 | `pico/defines.h` | `U2_C0X_OFFSET` (4). No GPIO slot select. |
 | `pico/main.c` | `U2_Init()` only (no pin 27 or other slot-select init). |
-| `pico/busloop.c` | When addr ≥ 4: call `U2_HandleBusAccess`, merge read byte into chunk 0 and `UpdateMegaFlashRegisters(0, …)`, then every 500 cycles call `U2_Poll()`. C0x0–C0x3 = MegaFlash; C0x4–C0x7 = Uthernet II. |
+| `pico/busloop.c` | When addr 4–7 only: call `U2_HandleBusAccess`, merge read byte into chunk 0 and `UpdateMegaFlashRegisters(0, …)`, then every 500 cycles call `U2_Poll()`. C0x0–C0x3 = MegaFlash; C0x4–C0x7 = Uthernet II. $C0C8–$C0CF are not U2. |
 
 ### 3.2 Data Flow
 
@@ -108,7 +108,7 @@ RSR (receive size) is **computed** when the Apple reads SN_RX_RSR0/1: `(sn_rx_wr
 
 1. **main.c:** `U2_Init()` (no GPIO slot select).
 2. **U2_Init:** Calls `U2_Net_Init(u2_push_rx)` and then `u2_reset()` (8 KB RAM, default regs, socket base/size from RMSR/TMSR).
-3. **Bus loop:** On each cycle, if address ≥ 4 (C0x4–C0x7):
+3. **Bus loop:** On each cycle, if address is 4–7 only (C0x4–C0x7, i.e. $C0C4–$C0C7):
    - Call `U2_HandleBusAccess(busdata, &u2_read_byte)`.
    - If read cycle: merge `u2_read_byte` into the correct byte of `registers.i32[0]` and call `UpdateMegaFlashRegisters(0, merged)`.
    - Every 500 such cycles, call `U2_Poll()`. C0x0–C0x3 are handled as MegaFlash. No GPIO slot select.

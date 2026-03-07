@@ -167,15 +167,14 @@ static void a2bus_program_init(PIO pio,uint sm,uint offset) {
 		gpio_pull_up(pin);
 	}	
 	
-	//A2 and A3 must be pulled down to set the address at $C0C0-C0C3
-	//Note: On Rev1.0 and 1.1 PCB, A2 and A3 inputs are floating. 
-	gpio_set_pulls(A2ABUS_BASE+2, false, true); //Disable pull-up, Enable pull-down
-	gpio_set_pulls(A2ABUS_BASE+3, false, true); //Disable pull-up, Enable pull-down	
+	//A2 and A3: no pull-ups or pull-downs (inputs driven by Apple bus)
+	gpio_set_pulls(A2ABUS_BASE+2, false, false);
+	gpio_set_pulls(A2ABUS_BASE+3, false, false);	
 	
   //GPIO: Set PHI0 and nDEVSEL pin to PIO
   pio_gpio_init(pio,PHI0_GPIO);
   pio_gpio_init(pio,nDEVSEL_GPIO);
-  gpio_pull_up(nDEVSEL_GPIO);	//Enable Pull-up since it is active-low.
+  gpio_pull_up(nDEVSEL_GPIO);  // Hold high when not selected; required so PIO sees clean low when card is selected
 
   //Load configuration to State Machine and
   //setup Program Counter

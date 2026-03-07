@@ -1,5 +1,39 @@
 #!/bin/bash
 
+# Run from pico directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Bump version and date for this build (append -eo to denote custom build)
+DEFINES="defines.h"
+if [ -f "$DEFINES" ]; then
+  CURRENT_HEX=$(grep '^#define FIRMWAREVER ' "$DEFINES" | awk '{print $3}' | tr -d '\r\n')
+  CURRENT_STR=$(grep '^#define FIRMWAREVERSTR ' "$DEFINES" | sed 's/.*"\(.*\)".*/\1/' | tr -d '\r\n')
+  CURRENT_STR="${CURRENT_STR%-eo}"   # strip existing -eo if present
+  CURRENT_DEC=$((CURRENT_HEX))
+  NEXT_DEC=$((CURRENT_DEC + 1))
+  NEXT_VER=$(printf '0x%04x' "$NEXT_DEC")
+  # Increment patch (e.g. V1.1.5 -> V1.1.6-eo)
+  VER="${CURRENT_STR#V}"
+  PATCH="${VER##*.}"
+  REST="${VER%.*}"
+  [ -z "$REST" ] && REST="$VER" && PATCH="0"
+  NEW_PATCH=$((PATCH + 1))
+  NEW_VER="V${REST}.${NEW_PATCH}-eo"
+  BUILD_DATE=$(date +%d-%b-%Y)
+  sed -i.bak "s|^#define FIRMWAREVER .*|#define FIRMWAREVER     $NEXT_VER|" "$DEFINES"
+  sed -i.bak "s|^#define FIRMWAREVERSTR .*|#define FIRMWAREVERSTR  \"$NEW_VER\"|" "$DEFINES"
+  rm -f "${DEFINES}.bak"
+  LAST_VER_LINE=$(grep -n '^// 0x[0-9a-fA-F]* = ' "$DEFINES" | tail -1 | cut -d: -f1)
+  if [ -n "$LAST_VER_LINE" ]; then
+    sed -i.bak "${LAST_VER_LINE}a\\
+// $NEXT_VER = $NEW_VER $BUILD_DATE
+" "$DEFINES"
+    rm -f "${DEFINES}.bak"
+  fi
+  echo "Build version: $NEW_VER ($NEXT_VER) $BUILD_DATE"
+fi
+
 # Force the ARM toolchain so the same compiler is used (with nosys.specs) and
 # macOS uses arm-none-eabi-ranlib, not Xcode's. Prefer explicit path over PATH.
 #
@@ -34,9 +68,22 @@ if [ -n "$TOOLCHAIN_BIN" ]; then
 fi
 
 #Pico Build
-cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w $CMAKE_ARM_TOOLCHAIN
-cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w $CMAKE_ARM_TOOLCHAIN
+cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
 
 #Pico2 Build
-cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w $CMAKE_ARM_TOOLCHAIN
-cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w $CMAKE_ARM_TOOLCHAIN
+cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+
+# Build release firmware
+make -C pico_release -j4 || exit 1
+make -C pico2_release -j4 || exit 1
+
+# Place resultant UF2 files in a folder named with the release version
+if [ -n "${NEW_VER:-}" ]; then
+  RELEASE_DIR="_releases/$NEW_VER"
+  mkdir -p "$RELEASE_DIR"
+  cp -f pico_release/megaflash.uf2 "$RELEASE_DIR/megaflash-pico.uf2"
+  cp -f pico2_release/megaflash.uf2 "$RELEASE_DIR/megaflash-pico2.uf2"
+  echo "Release files -> $RELEASE_DIR/"
+fi

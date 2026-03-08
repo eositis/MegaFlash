@@ -25,12 +25,13 @@ extern UserSettings_t config;
 #define XPOS 1
 #define YPOS 6
 #define WIDTH 38
-#define HEIGHT 15
+#define HEIGHT 16
 
 //
 //static Global Variables 
 static bool enableFlags[9];  //Enable Flag of each drive
 static bool ramdiskEnableFlag;
+static bool romdiskEnableFlag;
 static uint8_t i;           //Loop counter and array index
 
 
@@ -44,7 +45,7 @@ static void DrawWindowFrame() {
 
 ///////////////////////////////////////////////////////////////////////
 // Unpack fd_enableflags in config variable to enableFlags array
-// and copy RAMDISKFLAG bit from configbyte1 to ramdiskEnableFlag
+// and copy RAMDISKFLAG/ROMDISKFLAG from configbyte1 to ramdiskEnableFlag/romdiskEnableFlag
 //
 static void UnpackFlags() {
   static_local uint8_t flags; 
@@ -55,11 +56,12 @@ static void UnpackFlags() {
     flags <<=1;
   }
   ramdiskEnableFlag = (config.configbyte1 & RAMDISKFLAG);
+  romdiskEnableFlag = (config.configbyte1 & ROMDISKFLAG);
 }
 
 /////////////////////////////////////////////////////////////////////
 // Pack enableFlags array to fd_enableFlags in config variable and
-// copy ramdiskEnabelFlag to RAMDISKFLAG bit of configbyte1
+// copy ramdiskEnableFlag/romdiskEnableFlag to configbyte1
 //
 static void PackFlags() { 
   config.fd_enableflags = enableFlags[8]?0x01:0x00;
@@ -68,8 +70,9 @@ static void PackFlags() {
     if (enableFlags[i]) config.fd_enableflags |= 0x01;
   }  
 
-  config.configbyte1 &= (~RAMDISKFLAG);
+  config.configbyte1 &= ~(RAMDISKFLAG | ROMDISKFLAG);
   if (ramdiskEnableFlag) config.configbyte1 |= RAMDISKFLAG;
+  if (romdiskEnableFlag) config.configbyte1 |= ROMDISKFLAG;
 }
 
 
@@ -100,14 +103,23 @@ void DoDrivesEnable() {
   DrawWindowFrame();
   PrintDriveList(unitCount);
   
+  //ROM Disk line (same style as other devices)
+  gotoxy(2, unitCount + 1);
+  cputs("R");
+  gotoxy(6, unitCount + 1);
+  cputs("\323\323\323ROM Disk\323\323\323");
+  gotoxy(23, unitCount + 1);
+  cputs("  --");
+  
   //Print Checkboxes
   for(i=unitCount-1;i!=0;--i) PrintCheckbox(i,enableFlags[i]);
   PrintCheckbox(unitCount,ramdiskEnableFlag);
+  PrintCheckbox(unitCount + 1, romdiskEnableFlag);
   
-  //Prompt Messages
-  newline2();
-  cprintf(" Press key 1-%d to toggle",unitCount);
-  gotoxy(1,14);
+  //Prompt Messages (one newline to stay within 24-screen line limit)
+  newline();
+  cprintf(" 1-%d or R: toggle  Enter: OK", unitCount);
+  gotoxy(1,15);
   cputs(strCancelesc);
   gotox(31);
   cputs(strOK_Enter);
@@ -115,11 +127,17 @@ void DoDrivesEnable() {
   //Event Loop
   do {
     key = cgetc_showclock();
-    i = key - '0'; //Use i as array index variable    
+    i = key - '0'; //Use i as array index variable
+    
+    //Toggle ROM Disk (key R or r)
+    if (key == 'R' || key == 'r') {
+      romdiskEnableFlag = !romdiskEnableFlag;
+      PrintCheckbox(unitCount + 1, romdiskEnableFlag);
+      continue;
+    }
     
     //Toggle RAMDisk
     if (i == unitCount) {
-      //Toggle ramdiskEnableFlag;
       ramdiskEnableFlag = !ramdiskEnableFlag;
       PrintCheckbox(unitCount,ramdiskEnableFlag);
       continue;
@@ -137,6 +155,9 @@ void DoDrivesEnable() {
     if (key==KEY_ENTER) {
       //Pack the flags and save to config variable
       PackFlags();
+      //Apply ROM disk visibility to Pico immediately
+      if (romdiskEnableFlag) EnableRomdiskAtLast();
+      else DisableRomdisk();
       break;    //exit the loop
     }
   }while (key != KEY_ESC);

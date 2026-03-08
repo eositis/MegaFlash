@@ -143,7 +143,8 @@ pass data between Apple and MegaFlash.
 #define RAMDISKFLAG    0b00100000
 #define NTPCLIENTFLAG  0b00010000
 #define FPUFLAG        0b00001000
-#define DEFCFGBYTE1    0b01000000  //Default configbyte1 value
+#define ROMDISKFLAG    0b00000100  // 1=ROM disk visible (show in SmartPort), 0=hidden
+#define DEFCFGBYTE1    0b01000100  //Default configbyte1 value (AUTOBOOT | ROMDISKFLAG)
 #define DEFCFGBYTE2    0           //Default configbyte2 value
 #define DEFFDENFLAGS   0xff        //Default value of fd_enableflags   
 

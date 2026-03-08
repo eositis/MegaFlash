@@ -1,10 +1,10 @@
 # Pico Firmware
 
-## Build Environment
+## Build environment
 
-The software is compiled on Linux platform. Download and setup Raspberry Pi PICO C/C++ SDK from [github](https://github.com/raspberrypi/pico-sdk "github"). Make sure `PICO_SDK_PATH` variable is set.
+For full requirements (SDK, ARM toolchain, CMake, Control Panel prerequisite, and how to recreate the build on another machine), see **[BUILD-REQUIREMENTS.md](BUILD-REQUIREMENTS.md)**.
 
-Go to the MegaFlash `pico` source directory. Execute the shell script file by
+Summary: set **`PICO_SDK_PATH`** to your Raspberry Pi [Pico SDK](https://github.com/raspberrypi/pico-sdk) directory. From the MegaFlash `pico` directory run:
 
 ```
 ./cmakeall.sh

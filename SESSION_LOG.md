@@ -27,6 +27,11 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-03-05
 
+- **Build V1.1.9-eo and release notes:** Ran `pico/cmakeall.sh`; version bumped to V1.1.9-eo (0x000d). Added `pico/_releases/V1.1.9-eo/CHANGELOG.md` (ROM Disk enable/disable, nDEVSEL pull disabled, ReconfigRomdisk, layout fix).
+- **Storage device activation: ROM Disk enable/disable:** Added ROM Disk line to Drives Enable page (cpanel). New config bit ROMDISKFLAG in configbyte1 (1=show ROM disk, 0=hide). UI: row “R  ROM Disk  --  [ ]”, key R toggles; Enter applies and sends EnableRomdiskAtLast() or DisableRomdisk() to Pico. asm: DisableRomdisk() (CMD_DISABLEROMDISK). Pico: ReconfigRomdisk() in Reconfig() applies ROMDISKFLAG; DoAppleColdStart() no longer forces EnableRomdisk (config controls it). Default DEFCFGBYTE1 includes ROMDISKFLAG so new configs show ROM disk.
+- **nDEVSEL pull disabled:** `pico/a2bus_rp2040.pio` and `pico/a2bus_rp2350.pio`: replaced `gpio_pull_up(nDEVSEL_GPIO)` with `gpio_set_pulls(nDEVSEL_GPIO, false, false)` so nDEVSEL has no internal pull (driven by Apple bus).
+- **Pico build requirements doc:** Added `pico/BUILD-REQUIREMENTS.md` documenting SDK, ARM toolchain, CMake, Control Panel and romdisk prerequisites, build script behaviour, and minimal steps to reproduce the build on another machine. Updated `pico/README.md` to point to it. Added **§1.1 Pico SDK add-ons**: table of required submodules (tinyusb, cyw43-driver, lwip, mbedtls, btstack) and why each is needed for pico_w/pico2_w.
+- **cmakeall.sh uses PICO_SDK_PATH:** Script now uses `PICO_SDK_PATH` from the environment when set, with a fallback default; exits with a clear error if the SDK path is missing so another machine can set only the env var.
 - **Build and release changelog:** Ran `pico/cmakeall.sh`; build produced V1.1.8-eo (0x000c). Added `pico/_releases/V1.1.8-eo/CHANGELOG.md` summarizing concurrent C0xx ranges, U2 C0C4–C0C7 restriction, U2 read-back fix, C0C4 LED, build/release behaviour, and doc/GPIO notes.
 
 ---

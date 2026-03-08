@@ -113,12 +113,26 @@ static void ReconfigRamdisk() {
 }
 
 /////////////////////////////////////////////////////////////////
+// Show/hide ROM disk according to ROMDISKFLAG
+//
+static void ReconfigRomdisk() {
+  if (GetConfigByte1()&ROMDISKFLAG) {
+    EnableRomdisk();
+    SetRomdiskFirst(false);
+  } else {
+    DisableRomdisk();
+  }
+}
+
+/////////////////////////////////////////////////////////////////
 // When user config is changed, call this function to make the
 // changes effective.
 //
 static void Reconfig() {
   //RAMDisk
   ReconfigRamdisk();
+  //ROM Disk visibility
+  ReconfigRomdisk();
   
   //Flash Drive Mapping
   SetupFlashUnitMapping();
@@ -852,11 +866,7 @@ static void DoAppleColdStart() {
   //Reset data transfer mode in case the computer is reset during data transfer
   dataBufferTransferMode = MODE_LINEAR;   
   
-  //ROM Disk: always available at last unit unless user chose "Boot to ROM Disk"
-  EnableRomdisk();
-  SetRomdiskFirst(false);
-  
-  //Make sure all config changes are effective.
+  //Make sure all config changes are effective (ROM disk, RAM disk, flash mapping, etc.)
   Reconfig();
   
   //Enable Flash Unit Mapping in case the user Reset the machine from Control Panel

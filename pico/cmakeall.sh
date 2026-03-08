@@ -67,13 +67,20 @@ if [ -n "$TOOLCHAIN_BIN" ]; then
   echo "Using ARM toolchain: $TOOLCHAIN_BIN"
 fi
 
+# PICO_SDK_PATH: use environment if set, else default (edit default for your machine)
+SDK_PATH="${PICO_SDK_PATH:-/Users/eositis/pico-sdk}"
+if [ ! -d "$SDK_PATH" ]; then
+  echo "Error: Pico SDK not found at $SDK_PATH. Set PICO_SDK_PATH to your pico-sdk directory." >&2
+  exit 1
+fi
+
 #Pico Build
-cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
-cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" $CMAKE_ARM_TOOLCHAIN
+cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" $CMAKE_ARM_TOOLCHAIN
 
 #Pico2 Build
-cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
-cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" $CMAKE_ARM_TOOLCHAIN
+cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" $CMAKE_ARM_TOOLCHAIN
 
 # Build release firmware
 make -C pico_release -j4 || exit 1

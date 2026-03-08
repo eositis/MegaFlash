@@ -183,7 +183,7 @@ static void a2bus_gpio_init(PIO pio) {
   
   //GPIO: Configure PHI0, nDEVSEL and nPICOWR
   pio_gpio_init(pio,nDEVSEL_GPIO);
-  gpio_pull_up(nDEVSEL_GPIO);  // Hold high when not selected; required so PIO sees clean low when card is selected
+  gpio_set_pulls(nDEVSEL_GPIO, false, false);  // No pull; driven by Apple bus
   pio_gpio_init(pio,PHI0_GPIO);
   pio_gpio_init(pio,nPICOWR_GPIO);
 }

@@ -18,7 +18,7 @@
                 .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
                 .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
                 .export _StartTFTP,_GetTFTPStatus
-                .export _EnableRomdiskAtLast,_BootToRomdisk
+                .export _EnableRomdiskAtLast,_DisableRomdisk,_BootToRomdisk
                 .import _Reboot
                 .export _GetParam8Offset,_GetParam8,_GetParam16
 
@@ -679,6 +679,20 @@ _EnableRomdiskAtLast:
                 stz cmdreg
                 stz paramreg            ;0 = last unit
                 lda #CMD_ENABLEROMDISK
+                jmp execute
+.else
+                rts
+.endif
+
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ DisableRomdisk(void)
+; Hide ROM disk from SmartPort (do not show as a unit).
+;
+_DisableRomdisk:
+.ifndef TESTBUILD
+                stz cmdreg
+                lda #CMD_DISABLEROMDISK
                 jmp execute
 .else
                 rts

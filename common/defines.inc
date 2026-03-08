@@ -109,6 +109,7 @@ AUTOBOOTFLAG            =       %01000000
 RAMDISKFLAG             =       %00100000
 NTPCLIENTFLAG           =       %00010000
 FPUFLAG                 =       %00001000
+ROMDISKFLAG             =       %00000100
 
 ;
 ;FPU Support Signature

@@ -60,7 +60,7 @@ void DoFormat() {
   //
   ///////////////////////////////////////////////////////////  
   
-  unitCount = GetUnitCount();
+  unitCount = GetDriveListCount();  /* Exclude ROM disk (read-only) */
   if (unitCount==0) FatalError(ERR_UINTCOUNT_ZERO);
   
   DrawFormatWindowFrame('1');

@@ -92,6 +92,7 @@ static void PrintCheckbox(uint8_t index,bool checked) {
 //  Main routine of Drives Enable function
 //
 void DoDrivesEnable() {
+  static_local uint8_t listCount;
   static_local uint8_t unitCount;
   static_local unsigned char key;
   static_local bool newFlag;
@@ -99,15 +100,15 @@ void DoDrivesEnable() {
   static_local uint8_t row;
   
   unitCount = GetUnitCount();
+  listCount = GetDriveListCount();  /* Excludes ROM disk when last (show on separate row) */
   UnpackFlags();
   
-  //Draw window and its content
+  //Draw window and its content (flash + RAM only; ROM disk has its own row below)
   DrawWindowFrame();
-  PrintDriveList(unitCount);
+  PrintDriveList(listCount);
   
-  //ROM Disk line (same style as other devices) - row after last drive
-  //PrintDriveList uses 1 header + unitCount lines, so last drive is at YPOS+1+unitCount
-  romdiskRow = YPOS + unitCount + 2;
+  //ROM Disk line - row after last drive. Header at YPOS, drive i at YPOS+i, so last at YPOS+listCount
+  romdiskRow = YPOS + listCount + 1;
   gotoxy(2, romdiskRow);
   cputs("R");
   gotoxy(6, romdiskRow);
@@ -115,17 +116,17 @@ void DoDrivesEnable() {
   gotoxy(23, romdiskRow);
   cputs("  --");
   
-  //Print Checkboxes: drive i at row YPOS+1+i (header at YPOS+1), ROM Disk at romdiskRow
-  for(i=1;i<=unitCount;++i) {
-    row = YPOS + 1 + i;
-    if (i < unitCount) PrintCheckbox(row, enableFlags[i]);
+  //Print Checkboxes: drive i at row YPOS+i; last in list is RAM disk
+  for(i=1;i<=listCount;++i) {
+    row = YPOS + i;
+    if (i < listCount) PrintCheckbox(row, enableFlags[i]);
     else PrintCheckbox(row, ramdiskEnableFlag);
   }
   PrintCheckbox(romdiskRow, romdiskEnableFlag);
   
   //Prompt Messages (one newline to stay within 24-screen line limit)
   newline();
-  cprintf(" 1-%d or R: toggle  Enter: OK", unitCount);
+  cprintf(" 1-%d or R: toggle  Enter: OK", listCount);
   gotoxy(1,15);
   cputs(strCancelesc);
   gotox(31);
@@ -144,17 +145,17 @@ void DoDrivesEnable() {
     }
     
     //Toggle RAMDisk
-    if (i == unitCount) {
+    if (i == listCount) {
       ramdiskEnableFlag = !ramdiskEnableFlag;
-      PrintCheckbox(YPOS + 1 + unitCount, ramdiskEnableFlag);
+      PrintCheckbox(YPOS + listCount, ramdiskEnableFlag);
       continue;
     }
     
     //Toggle Flash drives
-    if (i>=1 && i<unitCount) {
+    if (i>=1 && i<listCount) {
       newFlag = !enableFlags[i];
       enableFlags[i] = newFlag;
-      PrintCheckbox(YPOS + 1 + i, newFlag);
+      PrintCheckbox(YPOS + i, newFlag);
       continue;
     }
     

@@ -2,6 +2,7 @@
 #define _UI_MISC_H
 
 char cgetc_showclock();
+uint8_t GetDriveListCount(void);  /* Unit count excluding ROM disk when last */
 bool AskUserToConfirm();
 void PrintDriveInfoList(uint8_t unitCount);
 void PrintDriveList(uint8_t unitCount);

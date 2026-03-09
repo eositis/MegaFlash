@@ -4,6 +4,13 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-03-09
+
+- **TFTP receive fix when reusing WiFi:** When ConnectWifi returns early (already LINK_UP), added ~100 ms warmup: 100× `cyw43_arch_poll()` + 1 ms sleep before returning. Stabilizes lwIP/CYW43 so new UDP PCB can receive (pico-sdk #915). TFTP no longer stuck at "Requesting Server". `pico/udptask.cpp`, `CHANGELOG-NEXT.md`.
+- **cmakeall cpanel step:** cmakeall.sh now builds cpanel first (make -C ../cpanel) before Pico firmware. Decremented version to 0x0012/V1.1.14-eo, then ran build → V1.1.15-eo release with cpanel included. `pico/cmakeall.sh`, `defines.h`.
+
+---
+
 ## 2025-02-15
 
 - **Pin 27 deactivated; slot select = default MegaFlash (address only)**: Removed GPIO 27 slot select. `pico/defines.h`: removed `SLOT4_SELECT_GPIO` and `IsSlot4Selected()`; comment now “address decode only, no GPIO slot select”. `pico/busloop.c`: Uthernet II when `addr >= U2_C0X_OFFSET` only (no `IsSlot4Selected()`). `pico/main.c`: removed GPIO 27 init; only `U2_Init()`. `docs/Uthernet-II-emulation-on-MegaFlash.md`: no pin 27, slot select = default bus behaviour.
@@ -27,6 +34,7 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-03-02
 
+- **ROM disk: single row, exclude from TFTP/Format:** ROM disk was shown twice (in PrintDriveList + custom row) and in TFTP/Format. Added `GetDriveListCount()` to exclude ROM disk when last unit. Drives Enable: use listCount for PrintDriveList, show ROM on separate row; fix checkbox rows to `YPOS+i`. TFTP and Format: use GetDriveListCount. `cpanel/ui-misc.c`, `drivesenable.c`, `tftp.c`, `format.c`.
 - **Release notes by default:** cmakeall.sh now always includes CHANGELOG.md in the release dir. If `pico/CHANGELOG-NEXT.md` exists, it is copied with `@VERSION@` replaced; else a stub is created. Added V1.1.14-eo CHANGELOG, created CHANGELOG-NEXT.md template. `pico/cmakeall.sh`, `BUILD-REQUIREMENTS.md`.
 - **Pico firmware build:** Ran cpanel make + `pico/cmakeall.sh`; built V1.1.14-eo (0x0012). Release UF2s in `_releases/V1.1.14-eo/`.
 - **WiFi kept online between sessions:** Destructor no longer disconnects/deinits WiFi; only tears down UDP PCB and buffers. InitCyw43() uses static s_cyw43Inited guard to skip re-init. ConnectWifi() already returns when LINK_UP. Subsequent TFTP/NTP/TestWifi sessions reuse connection. `pico/udptask.cpp`.

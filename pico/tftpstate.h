@@ -86,6 +86,8 @@ typedef struct {
 
 
 void InitTFTPState();
+/** Reset session state (taskid, progress, error, status) so a new TFTP run starts clean. Does not clear unitNum, dir, hostname, filename (set by DoTFTPRun). Call at start of ExecuteTFTP. */
+void TFTPResetSessionState(void);
 void TFTPCopyHostname(const char* hostname);
 void TFTPCopyFilename(const char* filename);
 void tftp_critical_section_enter_blocking();

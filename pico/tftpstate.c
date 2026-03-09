@@ -48,6 +48,16 @@ void InitTFTPState() {
   tftp_state.retries = 0;
 }
 
+// Reset only session/progress state so the next TFTP run does not reuse previous session.
+// Preserves unitNum, dir, server_hostname, filename (filled by DoTFTPRun before ExecuteTFTP).
+void TFTPResetSessionState(void) {
+  tftp_state.taskid = 0;
+  tftp_state.blockTransferred = TFTPSTATE_INVALIDBLOCKCOUNT;
+  tftp_state.tsize = TFTPSTATE_INVALIDTSIZE;
+  tftp_state.retries = 0;
+  tftp_state.error = TFTPERROR_NOERR;
+  tftp_state.status = TFTPSTATUS_IDLE;
+}
 
 void TFTPCopyHostname(const char* hostname) {
   strncpy((char*)tftp_state.server_hostname,hostname,TFTP_HOSTNAME_MAXLEN);

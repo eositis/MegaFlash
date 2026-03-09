@@ -7,7 +7,7 @@
 
 #define DEFAULT_DNSTIMEOUT 5000       //DNS timeout in msec
 #define UDP_BUFFERSIZE 1500           //UDP Packet Buffer Size
-#define HEARTBEAT_PERIOD   10         //Execute event loop every HEARTBEAT_PERIOD in msec (TFTP/NTP/TestWifi)
+#define HEARTBEAT_PERIOD   50         //Execute event loop every HEARTBEAT_PERIOD in msec (TFTP/NTP/TestWifi)
 #define WATCHDOG_TIMEOUT   (15*1000)  //Watchdog Timer timeout in msec
 
 

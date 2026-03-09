@@ -95,6 +95,8 @@ void DoDrivesEnable() {
   static_local uint8_t unitCount;
   static_local unsigned char key;
   static_local bool newFlag;
+  static_local uint8_t romdiskRow;
+  static_local uint8_t row;
   
   unitCount = GetUnitCount();
   UnpackFlags();
@@ -103,18 +105,22 @@ void DoDrivesEnable() {
   DrawWindowFrame();
   PrintDriveList(unitCount);
   
-  //ROM Disk line (same style as other devices)
-  gotoxy(2, unitCount + 1);
+  //ROM Disk line (same style as other devices) - row after last drive
+  romdiskRow = YPOS + unitCount + 1;
+  gotoxy(2, romdiskRow);
   cputs("R");
-  gotoxy(6, unitCount + 1);
+  gotoxy(6, romdiskRow);
   cputs("\323\323\323ROM Disk\323\323\323");
-  gotoxy(23, unitCount + 1);
+  gotoxy(23, romdiskRow);
   cputs("  --");
   
-  //Print Checkboxes
-  for(i=unitCount-1;i!=0;--i) PrintCheckbox(i,enableFlags[i]);
-  PrintCheckbox(unitCount,ramdiskEnableFlag);
-  PrintCheckbox(unitCount + 1, romdiskEnableFlag);
+  //Print Checkboxes (rows YPOS+1..YPOS+unitCount for drives, romdiskRow for ROM Disk)
+  for(i=1;i<=unitCount;++i) {
+    row = YPOS + i;
+    if (i < unitCount) PrintCheckbox(row, enableFlags[i]);
+    else PrintCheckbox(row, ramdiskEnableFlag);
+  }
+  PrintCheckbox(romdiskRow, romdiskEnableFlag);
   
   //Prompt Messages (one newline to stay within 24-screen line limit)
   newline();
@@ -132,14 +138,14 @@ void DoDrivesEnable() {
     //Toggle ROM Disk (key R or r)
     if (key == 'R' || key == 'r') {
       romdiskEnableFlag = !romdiskEnableFlag;
-      PrintCheckbox(unitCount + 1, romdiskEnableFlag);
+      PrintCheckbox(romdiskRow, romdiskEnableFlag);
       continue;
     }
     
     //Toggle RAMDisk
     if (i == unitCount) {
       ramdiskEnableFlag = !ramdiskEnableFlag;
-      PrintCheckbox(unitCount,ramdiskEnableFlag);
+      PrintCheckbox(YPOS + unitCount, ramdiskEnableFlag);
       continue;
     }
     
@@ -147,7 +153,7 @@ void DoDrivesEnable() {
     if (i>=1 && i<unitCount) {
       newFlag = !enableFlags[i];
       enableFlags[i] = newFlag;
-      PrintCheckbox(i, newFlag);
+      PrintCheckbox(YPOS + i, newFlag);
       continue;
     }
     

@@ -14,6 +14,7 @@
                 
 
                 .export _SendCommand,_GetInfoString,_GetUnitCount,_EraseDisk,_FormatDisk,_GetVolInfo
+                .export _Beep
                 .export _TestWifi,_EraseAllSettings,_GetUnitBlockCount,_DriveMapping,_DisplayTime,_ClearTime
                 .export _SaveSetting,_LoadSetting,_PrintStringFromDataBuffer
                 .export _CopyStringToDataBuffer,_CopyStringFromDataBuffer
@@ -104,6 +105,21 @@ _GetUnitCount:
                 ldx #0
                 rts
 .endif
+
+;/////////////////////////////////////////////////////////
+; void __fastcall__ Beep(void)
+; Brief Apple II speaker beep (cc65 Homebrew 2.19 lacks beep in apple2.h)
+;
+SPEAKER         :=      $C030
+_Beep:
+                ldy #24                 ;toggle count
+@loop:          lda SPEAKER             ;toggle speaker
+                ldx #8
+@delay:         dex
+                bne @delay
+                dey
+                bne @loop
+                rts
 
 ;//////////////////////////////////////////////////////////
 ; uint8_t __fastcall__ EraseDisk();

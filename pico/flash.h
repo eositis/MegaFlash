@@ -26,6 +26,10 @@ void tsEraseEverything();
 void tsEraseSector64k(const uint deviceNum, uint32_t address);
 bool tsIsSector64kErased(const uint deviceNum, uint32_t address);
 
+/** Optional yield callback during long flash waits (e.g. sector erase).
+ *  Set by TFTP RX so the network stack can be polled and incoming DATA packets buffered. */
+void flash_set_yield_cb(void (*cb)(void));
+
 void tsEraseSecurityRegister(const uint32_t regnum);
 void tsReadSecurityRegister(const uint32_t regnum,uint8_t* dest,const uint8_t offset,const size_t len);
 void tsWriteSecurityRegister(const uint32_t regnum,uint8_t* src,const uint8_t offset,const size_t len);

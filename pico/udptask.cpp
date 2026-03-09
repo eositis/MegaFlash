@@ -11,6 +11,10 @@
 //Function Prototype
 void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pub, const ip_addr_t *remote_addr, u16_t remot_port);
 
+extern "C" void tftp_network_yield(void) {
+  cyw43_arch_poll();
+}
+
 //--------------------------------------------------------------------
 // This function is modified from cyw43_arch_wifi_connect_timeout_ms()
 // The original function fails to report CYW43_LINK_NONET
@@ -167,6 +171,8 @@ void CUDPTask::Run(const char* ssid, const char* wpakey) {
         udpCallbackInvoked = false;
         WatchdogUpdate();      
         EvtUDPReceived(rxbuffer,rxdatalen,rxremoteipaddr,rxremoteport);
+      } else if (this->DrainOneQueuedPacket()) {
+        WatchdogUpdate();
       }
       
       //Timer Timeout
@@ -443,32 +449,44 @@ void CUDPTask::SendUDP(const uint8_t *payload,const uint16_t payloadlen, const u
 /////////////////////////////////////////////////////////////////////////////
 // UDP Received callback function
 //
-// UDP Payload is copied to rxbuffer
-// remote IP address and port is copied to rxremoteipaddr and rxremoteport
-// udpCallbackInvoked is set to true
+// If OnUDPPacketReceived returns true the task consumed the packet (e.g. enqueued).
+// Otherwise payload is copied to rxbuffer and udpCallbackInvoked is set.
 //
 void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
   TRACE_PRINTF("udp_callback invoked\n");
   CUDPTask* pTask = (CUDPTask*) arg;  
   
-  //make sure the callback is for this object
-  //see note at dns_callback()
-  if (CUDPTask::GetRunningObject()==pTask && pTask!=NULL) {
-    if (pbuf->tot_len <= UDP_BUFFERSIZE) {
-      //Copy recevied data to CUDPTask object
-      pTask->udpCallbackInvoked=true;
-      pTask->rxdatalen = pbuf->tot_len;
-      pbuf_copy_partial(pbuf,pTask->rxbuffer,pbuf->tot_len,0);
-      pTask->rxremoteipaddr=*remote_addr;
-      pTask->rxremoteport=remote_port;
-    } else {
-      assert(0);
-    }
-  } else {
+  if (CUDPTask::GetRunningObject()!=pTask || pTask==NULL) {
     WARN_PRINTF("udp_callback() arg NOT POINTING to current UDPTask object. Ignore it!\n");
+    if (pbuf) pbuf_free(pbuf);
+    return;
   }
-  
+  if (pbuf->tot_len > UDP_BUFFERSIZE) {
+    assert(0);
+    if (pbuf) pbuf_free(pbuf);
+    return;
+  }
+  if (pTask->OnUDPPacketReceived(pbuf, remote_addr, remote_port)) {
+    if (pbuf) pbuf_free(pbuf);
+    return;  // task consumed (e.g. enqueued for TFTP RX)
+  }
+  pTask->udpCallbackInvoked = true;
+  pTask->rxdatalen = pbuf->tot_len;
+  pbuf_copy_partial(pbuf, pTask->rxbuffer, pbuf->tot_len, 0);
+  pTask->rxremoteipaddr = *remote_addr;
+  pTask->rxremoteport = remote_port;
   if (pbuf) pbuf_free(pbuf);
+}
+
+bool CUDPTask::OnUDPPacketReceived(struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
+  (void)pbuf;
+  (void)remote_addr;
+  (void)remote_port;
+  return false;  // default: do normal copy to rxbuffer
+}
+
+bool CUDPTask::DrainOneQueuedPacket() {
+  return false;  // default: no queue
 }
 
 

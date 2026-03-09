@@ -195,7 +195,24 @@ So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style 
 
 ---
 
-## 11. Summary table of code locations
+## 11. macOS build: Homebrew toolchain vs official ARM toolchain
+
+**Symptom:** Build fails with “cannot read spec file 'nosys.specs'” at boot_stage2 link, or (after adding nosys.specs) with “stdio.h / assert.h: No such file or directory” when compiling the main firmware.
+
+**Reasoning:**
+- Homebrew’s `arm-none-eabi-gcc` is built with `--without-headers`: it does not ship newlib (no `stdio.h`, `assert.h`, or C library headers). The compiler’s `-print-search-dirs` shows “ignoring nonexistent directory .../arm-none-eabi/include”.
+- The Pico SDK’s boot_stage2 build uses `--specs=nosys.specs`. Homebrew’s toolchain also does not ship `nosys.specs` in its lib dir, so the link fails unless a spec file is provided.
+- **Fix for boot_stage2:** A minimal `nosys.specs` is bundled in `pico/scripts/nosys.specs` (renames `link_gcc_c_sequence`, overrides it to only add empty `--start-group`/`--end-group` so no `-lc`/`-lnosys` are pulled in). Copy it into the toolchain’s spec search path, e.g.  
+  `cp pico/scripts/nosys.specs "$(dirname $(arm-none-eabi-gcc -print-file-name=libc.a))/../lib/gcc/arm-none-eabi/$(arm-none-eabi-gcc -dumpversion)/"`  
+  (or the path reported by `arm-none-eabi-gcc -print-file-name=nosys.specs`’s install dir). Then boot_stage2 links successfully.
+- **Main firmware:** Even with nosys.specs in place, the main app needs standard headers. Homebrew’s gcc has no newlib include path, so compilation fails. **Solution:** Use the [official ARM GNU toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) (macOS .pkg), which includes newlib. Set `ARM_TOOLCHAIN_PATH` to its `arm-none-eabi/bin` directory before running `./cmakeall.sh`.
+- Using a compiler wrapper (e.g. to rewrite `--specs=nosys.specs` to the bundled file) as `CMAKE_C_COMPILER` causes the SDK to set `CMAKE_FIND_ROOT_PATH` from the wrapper’s directory, so includes are looked for under the project (e.g. `pico/scripts/`) and stdio.h is still not found. So the wrapper is not used in `cmakeall.sh`; the real compiler path is passed, and nosys.specs is installed into the toolchain when using Homebrew (for boot_stage2 only; full build still needs official toolchain for headers).
+
+**References:** `pico/scripts/nosys.specs`, `pico/cmakeall.sh`, `pico/README.md`.
+
+---
+
+## 12. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
@@ -208,10 +225,11 @@ So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style 
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug build = UART + logs + bus loop always; Release = no UART, no logs, bus loop only when Apple connected |
 | C0C4 diagnostic | `busloop.c` | LED on 1 s on any $C0C4 access; non-blocking |
 | nDEVSEL sense | Both PIO files | Active-low (trigger on low); inverted sense was tried and reverted |
+| macOS build | `README.md`, `scripts/nosys.specs` | Homebrew gcc has no newlib; use official ARM toolchain + optional copy of nosys.specs into toolchain lib |
 
 ---
 
-## 12. Open / unresolved: C0C4 not seen by firmware
+## 13. Open / unresolved: C0C4 not seen by firmware
 
 **Observed:** With a logic analyzer, A0–A4 (and thus the address) are confirmed at the Pico when C0C4 is accessed. With nDEVSEL pull-up enabled, the Pico still does not recognize the access (no LED, no U2 response).
 

@@ -67,15 +67,25 @@ if [ -n "$TOOLCHAIN_BIN" ]; then
   echo "Using ARM toolchain: $TOOLCHAIN_BIN"
 fi
 
-#Pico Build
-cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
-cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+# Pico SDK path (override with env PICO_SDK_PATH)
+PICO_SDK_PATH="${PICO_SDK_PATH:-/Users/eositis/pico-sdk}"
 
-#Pico2 Build
-cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
-cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH=/Users/eositis/pico-sdk $CMAKE_ARM_TOOLCHAIN
+# Pico (RP2040) build
+cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$PICO_SDK_PATH" $CMAKE_ARM_TOOLCHAIN
+cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$PICO_SDK_PATH" $CMAKE_ARM_TOOLCHAIN
 
-# Build release firmware
+# Pico 2 W (RP2350) is required
+if [ ! -f "$PICO_SDK_PATH/src/boards/include/boards/pico2_w.h" ] && [ ! -f "$PICO_SDK_PATH/src/boards/pico2_w.cmake" ]; then
+  echo "ERROR: Pico 2 W (pico2_w) is required but not found in the SDK at $PICO_SDK_PATH"
+  echo "Use an SDK that includes pico2_w (e.g. SDK 2.0 or later), then re-run ./cmakeall.sh"
+  exit 1
+fi
+
+# Pico 2 (RP2350) build
+cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$PICO_SDK_PATH" $CMAKE_ARM_TOOLCHAIN
+cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$PICO_SDK_PATH" $CMAKE_ARM_TOOLCHAIN
+
+# Build release firmware (Pico W and Pico 2 W)
 make -C pico_release -j4 || exit 1
 make -C pico2_release -j4 || exit 1
 

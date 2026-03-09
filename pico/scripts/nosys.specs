@@ -1,0 +1,10 @@
+%rename link_gcc_c_sequence nosys_link_gcc_c_sequence
+
+*nosys_libgloss:
+
+
+*nosys_libc:
+
+
+*link_gcc_c_sequence:
+--start-group %(nosys_libc) %(nosys_libgloss) --end-group

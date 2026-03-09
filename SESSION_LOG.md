@@ -49,4 +49,24 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-03-07
+
+- **Official ARM toolchain + full build:** Downloaded ARM GNU toolchain 14.2.Rel1 (darwin x86_64) from developer.arm.com to `$HOME/arm-gnu-toolchain`, extracted, set `ARM_TOOLCHAIN_PATH` to its `bin` dir. Ran `./cmakeall.sh` (clean build dirs); build completed for pico_w and pico2_w. UF2s in `pico/_releases/V1.1.19-eo/` (megaflash-pico.uf2, megaflash-pico2.uf2). README updated with tarball path example.
+
+- **Build run:** Ran `./cmakeall.sh`; clean build dirs first (stale wrapper path in cache). Boot_stage2 failed on missing `nosys.specs`. Added minimal `pico/scripts/nosys.specs` and wrapper script; wrapper as compiler broke SDK’s FIND_ROOT (stdio.h not found). Reverted wrapper; copied `nosys.specs` into Homebrew toolchain lib dir; boot_stage2 built. Main app failed: Homebrew `arm-none-eabi-gcc` is built `--without-headers` (no newlib), so stdio.h/assert.h missing. README and implementation notes updated: on macOS use official ARM GNU toolchain and set `ARM_TOOLCHAIN_PATH` for full build; optional copy of `scripts/nosys.specs` into toolchain for boot_stage2 when using Homebrew gcc.
+
+---
+
+## 2025-03-07
+
+- **SDK and dependencies:** Ran `pico/scripts/install-deps.sh` (cmake 4.2.3, arm-none-eabi-gcc 15.2.0 already installed). Pico SDK at /Users/eositis/pico-sdk set to latest release 2.2.0 (includes pico2_w). Submodules already in sync.
+
+- **Reverted SDK-accommodation changes:** Restored original build flow per user request. Removed: gcc wrapper, `scripts/nosys.specs`, `toolchain_megaflash.cmake`; cmakeall.sh no longer uses wrapper or forces Pico 2; Pico 2 build is conditional again (skip if pico2_w not in SDK). README and install-deps.sh reverted to simpler SDK instructions (no SDK 2.0+ requirement).
+
+- **nDEVSEL pull removed**: In `pico/a2bus_rp2040.pio` and `pico/a2bus_rp2350.pio`, replaced `gpio_pull_up(nDEVSEL_GPIO)` with `gpio_set_pulls(nDEVSEL_GPIO, false, false)` so nDEVSEL has no internal pull; line is driven by Apple bus / GAL only.
+- **Release notes and build**: Added `pico/_releases/V1.1.9-eo/CHANGELOG.md` for next release (nDEVSEL pull removal). Build not run in this environment (cmake not in PATH); run `./cmakeall.sh` locally to produce V1.1.9-eo UF2s.
+- **Pico build dependencies (macOS)**: Added `pico/scripts/install-deps.sh` to install CMake and arm-none-eabi-gcc via Homebrew. Updated `pico/README.md` with macOS dependency steps and Pico SDK clone instructions. `cmakeall.sh` now uses `PICO_SDK_PATH` from environment (default `/Users/eositis/pico-sdk`). Install blocked until Xcode license is accepted (user must run `sudo xcodebuild -license accept` once).
+
+---
+
 *Append new entries above this line, with date and brief description of changes/commands/decisions.*

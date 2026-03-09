@@ -17,6 +17,19 @@
 static VolInfo_t volInfo;  //Data structure returned by CMD_GETVOLINFO command
 
 /////////////////////////////////////////////////////////////////////
+// Get drive count for UI lists (Drives Enable, TFTP). Excludes ROM disk
+// when it is the last unit, since ROM has its own row / is read-only.
+//
+uint8_t GetDriveListCount(void) {
+  static_local uint8_t unitCount;
+  unitCount = GetUnitCount();
+  if (unitCount == 0) return 0;
+  if (!GetVolInfo(unitCount, &volInfo)) return unitCount;
+  if (volInfo.mediumType == TYPE_ROMDISK) return unitCount - 1;
+  return unitCount;
+}
+
+/////////////////////////////////////////////////////////////////////
 // Replace cgetc()
 // Call DisplayTime() regularly while waiting for a key
 //

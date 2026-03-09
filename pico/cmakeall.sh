@@ -67,6 +67,15 @@ if [ -n "$TOOLCHAIN_BIN" ]; then
   echo "Using ARM toolchain: $TOOLCHAIN_BIN"
 fi
 
+# Build cpanel first (Control Panel binary embedded in firmware)
+CPANEL_DIR="$(cd "$SCRIPT_DIR/../cpanel" 2>/dev/null && pwd)"
+if [ -d "$CPANEL_DIR" ] && [ -f "$CPANEL_DIR/Makefile" ]; then
+  echo "Building cpanel..."
+  make -C "$CPANEL_DIR" || exit 1
+else
+  echo "Warning: cpanel directory not found, using existing cpanel.bin"
+fi
+
 # PICO_SDK_PATH: use environment if set, else default (edit default for your machine)
 SDK_PATH="${PICO_SDK_PATH:-/Users/eositis/pico-sdk}"
 if [ ! -d "$SDK_PATH" ]; then

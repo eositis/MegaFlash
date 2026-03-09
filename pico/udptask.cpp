@@ -223,8 +223,15 @@ void CUDPTask::ConnectWifi(const char* ssid, const char* wpakey) {
   uint32_t delay;
   int attempt=0;  
     
-  //Already connected?
-  if (cyw43_tcpip_link_status(&cyw43_state,CYW43_ITF_STA )==CYW43_LINK_UP) return;
+  //Already connected? Warm up lwIP/CYW43 before creating new PCB to avoid
+  //"sending but not receiving" when reusing WiFi (pico-sdk #915).
+  if (cyw43_tcpip_link_status(&cyw43_state,CYW43_ITF_STA)==CYW43_LINK_UP) {
+    for (int i = 0; i < 100; i++) {
+      cyw43_arch_poll();
+      sleep_ms(1);
+    }
+    return;
+  }
 
   //If SSID is empty, don't proceed
   if (ssid[0]=='\0') {

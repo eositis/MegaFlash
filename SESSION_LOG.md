@@ -25,6 +25,13 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-03-02
+
+- **TFTP RX buffering during flash write:** Incoming TFTP DATA packets are now buffered while the RX task is blocked in `WriteBlockForImageTransfer()` (e.g. during sector erase). `flash.c`: added `flash_set_yield_cb()` and yield every ~1 ms in `WaitUntilBusyClear()` so `cyw43_arch_poll()` runs during erase. `udptask`: virtual `OnUDPPacketReceived()` and `DrainOneQueuedPacket()`; callback enqueues when task consumes. `tftprxtask`: 16-slot queue for DATA payloads, `enqueue_data_packets` flag around flash writes, yield callback registered in `Run()`. Event loop drains one queued packet per iteration. Doc §13c in `Implementation-notes-and-reasoning.md`. Build V1.1.11-eo.
+- **USB XMODEM vs TFTP write handling:** Documented in `docs/Implementation-notes-and-reasoning.md` (§13b) why USB xmodem/ymodem completes with no delays while TFTP can be slow: same `WriteBlockForImageTransfer()` and ACK-before-write; difference is synchronous USB loop + USB buffering vs event-loop + no `cyw43_arch_poll()` during blocking flash erase.
+
+---
+
 ## 2026-03-05
 
 - **UDP/TFTP performance documented:** Added §13 to `docs/Implementation-notes-and-reasoning.md`: symptom (slow TFTP, high error rate), root cause (50 ms HEARTBEAT_PERIOD, blocking flash erase), fix (10 ms period), summary and refs. Updated chronology and §11 summary table.

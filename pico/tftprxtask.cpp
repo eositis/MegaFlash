@@ -5,6 +5,8 @@
 #include "misc.h"
 #include "mediaaccess.h"
 #include "debug.h"
+#include "flash.h"
+#include "lwip/pbuf.h"
 
 extern "C" volatile tftp_state_t tftp_state;
 
@@ -28,18 +30,58 @@ CTFTPRXTask::CTFTPRXTask(const uint32_t unitNum,const char* hostname,const char*
   blockReceived = 0;
   tftpBlockSize = 512;
   blockCapacity = GetBlockCountActual(unitNum);
+  enqueue_data_packets = false;
+  rx_queue_head = 0;
+  rx_queue_tail = 0;
+  rx_queue_count = 0;
   DEBUG_PRINTF("blockCapacity = %d\n",blockCapacity);
 }
 
-// Override Run()
+// Override Run(): register flash yield so network is polled during sector erase
 //
 void CTFTPRXTask::Run(const char* ssid, const char* wpakey){
   tftp_critical_section_enter_blocking();
   tftp_state.status = TFTPSTATUS_WIFICONNECTING;
   tftp_critical_section_exit();
   INFO_PRINTF("tftp_state.status = TFTPSTATUS_WIFICONNECTING\n");
- 
-  CTFTPTask::Run(ssid,wpakey);
+
+  flash_set_yield_cb(tftp_network_yield);
+  try {
+    CTFTPTask::Run(ssid,wpakey);
+  } catch (...) {
+    flash_set_yield_cb(NULL);
+    throw;
+  }
+  flash_set_yield_cb(NULL);
+}
+
+//////////////////////////////////////////////////////////
+// Enqueue incoming DATA when we're inside blocking flash write; drain in event loop
+//
+bool CTFTPRXTask::OnUDPPacketReceived(struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
+  if (!enqueue_data_packets || pbuf->tot_len < 4) return false;
+  const uint8_t *p = (const uint8_t*)pbuf->payload;
+  uint16_t opcode = (uint16_t)p[0] << 8 | p[1];
+  if (opcode != OP_DATA) return false;
+  if (!ip_addr_cmp(&server_addr, remote_addr) || server_port != remote_port) return false;
+  if (rx_queue_count >= TFTP_RX_QUEUE_SIZE) return true;   // queue full, drop so server retransmits; avoid reorder
+  uint16_t len = (uint16_t)pbuf->tot_len;
+  if (len > TFTP_RX_QUEUE_ENTRY_SIZE) return false;
+  pbuf_copy_partial(pbuf, rx_queue[rx_queue_tail].data, len, 0);
+  rx_queue[rx_queue_tail].len = len;
+  rx_queue_tail = (rx_queue_tail + 1) % TFTP_RX_QUEUE_SIZE;
+  rx_queue_count++;
+  return true;
+}
+
+bool CTFTPRXTask::DrainOneQueuedPacket() {
+  if (rx_queue_count == 0) return false;
+  uint16_t len = rx_queue[rx_queue_head].len;
+  uint8_t *payload = rx_queue[rx_queue_head].data;
+  rx_queue_head = (rx_queue_head + 1) % TFTP_RX_QUEUE_SIZE;
+  rx_queue_count--;
+  EvtUDPReceived(payload, len, server_addr, server_port);
+  return true;
 }
 
 
@@ -340,7 +382,9 @@ void CTFTPRXTask::ProcessDataPacket(const uint8_t* payload,uint16_t payloadlen,u
     if (eof_with512payload) {
       #if WRITETOFLASH
       if (!IsValidBlockNumber(blockReceived)) return;
+      enqueue_data_packets = true;
       success = WriteBlockForImageTransfer(unitNum, blockReceived, payload+4);  //Actual Data starts at offset 4
+      enqueue_data_packets = false;
       if (!success) throw CTFTPTask::ERR_RWFAILED;
       #endif
       ++blockReceived;    
@@ -395,9 +439,10 @@ void CTFTPRXTask::ProcessDataPacket(const uint8_t* payload,uint16_t payloadlen,u
     ++expectedBlock;
     
     #if WRITETOFLASH
+    enqueue_data_packets = true;
     //blockReceived has been validated above
     success = WriteBlockForImageTransfer(unitNum, blockReceived, payload+4);  //Actual Data starts at offset 4
-    if (!success) throw CTFTPTask::ERR_RWFAILED;
+    if (!success) { enqueue_data_packets = false; throw CTFTPTask::ERR_RWFAILED; }
     #endif
     ++blockReceived;    
     tftp_critical_section_enter_blocking();
@@ -406,16 +451,18 @@ void CTFTPRXTask::ProcessDataPacket(const uint8_t* payload,uint16_t payloadlen,u
     
     if (dataSize==1024) {
       #if WRITETOFLASH
-      if (!IsValidBlockNumber(blockReceived)) return;      
+      if (!IsValidBlockNumber(blockReceived)) { enqueue_data_packets = false; return; }      
       success = WriteBlockForImageTransfer(unitNum, blockReceived, payload+4+512);  //Actual Data starts at offset 4
-      if (!success) throw CTFTPTask::ERR_RWFAILED;
+      if (!success) { enqueue_data_packets = false; throw CTFTPTask::ERR_RWFAILED; }
       #endif
       ++blockReceived;
       tftp_critical_section_enter_blocking();
       tftp_state.blockTransferred = blockReceived;
       tftp_critical_section_exit();    
     }
-    
+    #if WRITETOFLASH
+    enqueue_data_packets = false;
+    #endif
     return;
   } 
 

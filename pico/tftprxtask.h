@@ -3,8 +3,6 @@
 
 #include "tftptask.h"
 
-#define TFTP_RX_QUEUE_SIZE  16
-#define TFTP_RX_QUEUE_ENTRY_SIZE  (4 + 1024)  /* opcode(2)+block(2)+data(1024) */
 
 class CTFTPRXTask:public CTFTPTask {
 public:
@@ -13,9 +11,6 @@ public:
 
   //Override Run()
   virtual void Run(const char* ssid, const char* wpakey);
-
-  bool OnUDPPacketReceived(struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) override;
-  bool DrainOneQueuedPacket() override;
   
 protected:
   bool OACKReceived;          //To indicate OACK Packet has been received
@@ -39,15 +34,8 @@ protected:
   void HandleOACK_blksize(const char* value);
   void HandleOACK_tsize(const char* value);
 private:
+  //Helper method
   bool IsValidBlockNumber(const uint32_t blockNum);
-
-  /** When true, incoming DATA packets are enqueued instead of invoking EvtUDPReceived (used during blocking flash write). */
-  volatile bool enqueue_data_packets;
-  /** Queue of received DATA payloads (len + data) for draining after flash write. */
-  struct { uint16_t len; uint8_t data[TFTP_RX_QUEUE_ENTRY_SIZE]; } rx_queue[TFTP_RX_QUEUE_SIZE];
-  uint8_t rx_queue_head;
-  uint8_t rx_queue_tail;
-  uint8_t rx_queue_count;
 };
 
 

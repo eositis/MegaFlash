@@ -490,6 +490,27 @@ static void DoGetTimeString(){
 }
 
 //////////////////////////////////////////////////////
+// Return firmware version string for display (e.g. left of clock)
+// Returns 12 bytes with high bit set, padded with spaces.
+// Separate from CMD_GETTIMESTR to avoid breaking ProDOS integration.
+//
+static void DoGetFirmwareVer(void){
+  const uint32_t VERLEN = 12;
+  size_t vlen = strlen(FIRMWAREVERSTR);
+  uint32_t i;
+
+  if (vlen > VERLEN) vlen = VERLEN;
+  for (i = 0; i < (uint32_t)vlen; ++i) {
+    parameterBuffer[i] = (uint8_t)FIRMWAREVERSTR[i] | 0x80;
+  }
+  for (; i < VERLEN; ++i) {
+    parameterBuffer[i] = ' ' | 0x80;
+  }
+  ClearError();
+  ResetParamPointer();
+}
+
+//////////////////////////////////////////////////////
 // Set RTC from timestamp in ProDOS format
 // The date/time is formatted according to ProDOS standard
 // which is located at $BF90-$BF93
@@ -1593,6 +1614,9 @@ void __no_inline_not_in_flash_func(DoCommand)(const uint32_t command) {
       break;
     case CMD_DRIVEMAPPING:
       DoDriveMapping();
+      break;
+    case CMD_GETFIRMWAREVER:
+      DoGetFirmwareVer();
       break;
     case CMD_FADD:
       fadd(parameterBuffer);

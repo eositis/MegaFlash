@@ -106,7 +106,8 @@ void DoDrivesEnable() {
   PrintDriveList(unitCount);
   
   //ROM Disk line (same style as other devices) - row after last drive
-  romdiskRow = YPOS + unitCount + 1;
+  //PrintDriveList uses 1 header + unitCount lines, so last drive is at YPOS+1+unitCount
+  romdiskRow = YPOS + unitCount + 2;
   gotoxy(2, romdiskRow);
   cputs("R");
   gotoxy(6, romdiskRow);
@@ -114,9 +115,9 @@ void DoDrivesEnable() {
   gotoxy(23, romdiskRow);
   cputs("  --");
   
-  //Print Checkboxes (rows YPOS+1..YPOS+unitCount for drives, romdiskRow for ROM Disk)
+  //Print Checkboxes: drive i at row YPOS+1+i (header at YPOS+1), ROM Disk at romdiskRow
   for(i=1;i<=unitCount;++i) {
-    row = YPOS + i;
+    row = YPOS + 1 + i;
     if (i < unitCount) PrintCheckbox(row, enableFlags[i]);
     else PrintCheckbox(row, ramdiskEnableFlag);
   }
@@ -145,7 +146,7 @@ void DoDrivesEnable() {
     //Toggle RAMDisk
     if (i == unitCount) {
       ramdiskEnableFlag = !ramdiskEnableFlag;
-      PrintCheckbox(YPOS + unitCount, ramdiskEnableFlag);
+      PrintCheckbox(YPOS + 1 + unitCount, ramdiskEnableFlag);
       continue;
     }
     
@@ -153,7 +154,7 @@ void DoDrivesEnable() {
     if (i>=1 && i<unitCount) {
       newFlag = !enableFlags[i];
       enableFlags[i] = newFlag;
-      PrintCheckbox(YPOS + i, newFlag);
+      PrintCheckbox(YPOS + 1 + i, newFlag);
       continue;
     }
     

@@ -7,7 +7,7 @@
 
 #define DEFAULT_DNSTIMEOUT 5000       //DNS timeout in msec
 #define UDP_BUFFERSIZE 1500           //UDP Packet Buffer Size
-#define HEARTBEAT_PERIOD   50         //Execute event loop every HEARTBEAT_PERIOD in msec (TFTP/NTP/TestWifi)
+#define HEARTBEAT_PERIOD   50         //Execute event loop every HEARTBEAT_PERIOD in msec
 #define WATCHDOG_TIMEOUT   (15*1000)  //Watchdog Timer timeout in msec
 
 
@@ -15,9 +15,6 @@
 
 
 #define TIMEOUT_NEVER at_the_end_of_time
-
-/** Called from flash wait loop during TFTP RX so network can be polled; set via flash_set_yield_cb(). */
-extern "C" void tftp_network_yield(void);
 enum {
   DNSERR_TIMEOUT     = -1,
   DNSERR_NONE     = 0,
@@ -123,11 +120,6 @@ class CUDPTask {
     virtual bool EvtAbortRequested();
     virtual void EvtAborted();
     virtual void EvtWatchdogTimeout();
-
-    /** If task consumes the packet (e.g. enqueues for TFTP RX), return true and callback will not set udpCallbackInvoked. */
-    virtual bool OnUDPPacketReceived(struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port);
-    /** Drain one queued packet (e.g. TFTP RX buffer); return true if one was processed. */
-    virtual bool DrainOneQueuedPacket();
     
 private:
       //

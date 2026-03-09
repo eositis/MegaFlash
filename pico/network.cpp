@@ -89,9 +89,6 @@ static int ConvertExceptionToTFTPError(int e) {
 
 
 void ExecuteTFTP(const uint32_t taskid) {
-  // Clean up any previous session state so this run does not reuse old taskid/error/status.
-  TFTPResetSessionState();
-
   uint32_t dir = tftp_state.dir;
   uint unitNum = tftp_state.unitNum;
   const char* hostname = (const char*)tftp_state.server_hostname;

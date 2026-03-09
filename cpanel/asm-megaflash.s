@@ -361,20 +361,29 @@ _DriveMapping:
 
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ DisplayTime()
-; Get Time String from MegaFlash and display
-; the time at the bottom right corner of the screen
-; All the formatting of the string is performed by Pico.
-; The routine just copies the result to screen memory.
-;       
+; Get firmware version (CMD_GETFIRMWAREVER) and time (CMD_GETTIMESTR)
+; from MegaFlash. Display build ID left of clock at bottom of screen.
+; Version at cols 20-31, time at cols 32-39. CMD_GETTIMESTR unchanged
+; for ProDOS compatibility.
+;
 _DisplayTime:   
 .ifndef TESTBUILD
-                lda #CMD_GETTIMESTR
+                ;Fetch version string (12 bytes)
+                lda #CMD_GETFIRMWAREVER
                 jsr execute
- 
-                ;Copy the result to screen memory
                 ldx #0
 :               lda paramreg
-                sta $7D0+32,x   ;x=32, y=23
+                sta $7D0+20,x   ;cols 20-31
+                inx
+                cpx #12
+                bne :-
+
+                ;Fetch time string (8 bytes)
+                lda #CMD_GETTIMESTR
+                jsr execute
+                ldx #0
+:               lda paramreg
+                sta $7D0+32,x   ;cols 32-39
                 inx
                 cpx #8
                 bne :-
@@ -383,22 +392,22 @@ _DisplayTime:
                 ldx #0
 :               lda @timstr,x
                 ora #$80        ;set high-bit
-                sta $7D0+32,x
+                sta $7D0+20,x
                 inx
-                cpx #8
+                cpx #20
                 bne :-
                 rts
-@timstr:        .byte "11:50 AM"   
+@timstr:        .byte "V1.1.13-eo  11:50 AM"
 .endif                
 
 
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ ClearTime()
-; Clear the time from screen
+; Clear the version + time from screen (20 chars at cols 20-39)
 ;
 _ClearTime:     lda #' '|$80
-                ldx #7
-:               sta $7D0+32,x
+                ldx #19
+:               sta $7D0+20,x
                 dex
                 bpl :-
                 rts

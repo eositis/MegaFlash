@@ -303,34 +303,20 @@ static uint8_t WriteStatus3Volatile(const uint deviceNum, const uint8_t value) {
 }
 
 ////////////////////////////////////////////////////////////////////
-// Optional yield during long flash waits (e.g. sector erase).
-// TFTP RX sets this so cyw43_arch_poll() runs and incoming DATA can be buffered.
-////////////////////////////////////////////////////////////////////
-static void (*g_flash_yield_cb)(void) = NULL;
-
-void flash_set_yield_cb(void (*cb)(void)) {
-  g_flash_yield_cb = cb;
-}
-
-////////////////////////////////////////////////////////////////////
 // Wait until busy flag is cleared
 //
 // Input: Device Number
 //
 static void WaitUntilBusyClear(const uint deviceNum) {
   uint8_t buffer[1] = {0x05}; //Read Status Register-1 Command
-  uint32_t poll_count = 0;
 
   enable_spi0(deviceNum);
   spi_write_blocking(spi0,buffer,1);  //Send Read Status Register-1 command
   
   //keep reading status register 1 until busy flag is cleared
   do{
-    busy_wait_us_32(2);  //wait 2us before next polling
+    busy_wait_us_32(2);  //wait 2us before next polling    
     spi_read_blocking(spi0, REPEATED_TX_DATA, buffer, 1);
-    if (g_flash_yield_cb != NULL && (++poll_count % 500) == 0) {
-      g_flash_yield_cb();  // ~1ms between yields; allows network poll during long erase
-    }
   }while(buffer[0] & FLASH_BUSYFLAG);
   
   disable_spi0();

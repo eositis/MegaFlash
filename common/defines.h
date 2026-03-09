@@ -44,6 +44,7 @@
 #define CMD_ERASEADVSETTINGS    0x26
 #define CMD_ERASEALLSETTINGS    0x27
 #define CMD_DRIVEMAPPING        0x28
+#define CMD_GETFIRMWAREVER      0x29
 
 #define CMD_FADD                0x30
 #define CMD_FMUL                0x31

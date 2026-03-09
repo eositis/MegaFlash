@@ -92,5 +92,13 @@ if [ -n "${NEW_VER:-}" ]; then
   mkdir -p "$RELEASE_DIR"
   cp -f pico_release/megaflash.uf2 "$RELEASE_DIR/megaflash-pico.uf2"
   cp -f pico2_release/megaflash.uf2 "$RELEASE_DIR/megaflash-pico2.uf2"
+  # Include CHANGELOG in release dir (default)
+  if [ -f "CHANGELOG-NEXT.md" ]; then
+    sed "s/@VERSION@/$NEW_VER/g" CHANGELOG-NEXT.md > "$RELEASE_DIR/CHANGELOG.md"
+  else
+    echo "# $NEW_VER" > "$RELEASE_DIR/CHANGELOG.md"
+    echo "" >> "$RELEASE_DIR/CHANGELOG.md"
+    echo "*No release notes. Add CHANGELOG-NEXT.md before building for details.*" >> "$RELEASE_DIR/CHANGELOG.md"
+  fi
   echo "Release files -> $RELEASE_DIR/"
 fi

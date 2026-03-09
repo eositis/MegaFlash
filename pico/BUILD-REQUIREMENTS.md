@@ -69,7 +69,7 @@ The firmware can include a ROM disk image via `romdisk.s`, which includes the bi
 ## 6. Build script and version bump
 
 - **Script:** Run **`./cmakeall.sh`** from the **`pico/`** directory.
-- **Behaviour:** The script (1) bumps the firmware version and date in `defines.h`, (2) configures four CMake build trees (`pico_debug`, `pico_release`, `pico2_debug`, `pico2_release`), (3) builds the two release trees, and (4) copies the resulting UF2 files into **`_releases/<version>/`** (e.g. `_releases/V1.1.8-eo/`) as `megaflash-pico.uf2` and `megaflash-pico2.uf2`.
+- **Behaviour:** The script (1) bumps the firmware version and date in `defines.h`, (2) configures four CMake build trees, (3) builds the two release trees, and (4) copies the UF2 files into **`_releases/<version>/`** as `megaflash-pico.uf2` and `megaflash-pico2.uf2`. A **`CHANGELOG.md`** is always included: if **`CHANGELOG-NEXT.md`** exists, it is copied with `@VERSION@` replaced by the build version; otherwise a stub is created.
 - **`sed` and macOS:** The script uses `sed -i.bak` for in-place edits. This is compatible with **BSD sed** (macOS). On **GNU sed** (Linux), `sed -i.bak` also works. If you port to a system where in-place `sed` differs, adjust the `sed` invocations in `cmakeall.sh`.
 
 ## 7. Summary: minimal steps to reproduce the build

@@ -11,10 +11,6 @@
 //Function Prototype
 void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pub, const ip_addr_t *remote_addr, u16_t remot_port);
 
-extern "C" void tftp_network_yield(void) {
-  cyw43_arch_poll();
-}
-
 //--------------------------------------------------------------------
 // This function is modified from cyw43_arch_wifi_connect_timeout_ms()
 // The original function fails to report CYW43_LINK_NONET
@@ -86,36 +82,35 @@ CUDPTask::CUDPTask() {
 
 ///////////////////////////////////////////////////////////////////
 // Destructor
+// Keep WiFi online between sessions - only tear down task resources (UDP PCB, buffer).
 //
 CUDPTask::~CUDPTask() {
   cyw43_arch_lwip_begin();  
   if (this->pcb) udp_remove(this->pcb);
   if (rxbuffer) delete[] rxbuffer;
   cyw43_arch_lwip_end();   
-  
-  if (hasInitedCyw43) {
-    //Disconnect WIFI
-    TRACE_PRINTF("Disconnecting WIFI\n");
-    cyw43_arch_disable_sta_mode();
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN,0); //Turn off LED
-    
-    //CYW43 Library will go crazy if we try to connect continuously
-    //deinit than init the library seems to fix the problem
-     cyw43_arch_deinit();    
-  }
+  // Do not disconnect or deinit WiFi - keep it online for next TFTP/NTP/etc.
 }
 
 ///////////////////////////////////////////////////////////////////
 // Init CYW43 
+// Only init once; subsequent tasks reuse existing connection.
 //
+static bool s_cyw43Inited = false;
+
 void CUDPTask::InitCyw43() {
   if (!CheckPicoW()) throw CUDPTask::ERR_NOTPICOW;
   
+  if (s_cyw43Inited) {
+    TRACE_PRINTF("InitCyw43() skipped - already inited\n");
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN,1); //Ensure LED on
+    return;
+  }
   TRACE_PRINTF("InitCyw43()\n");
   hasInitedCyw43 = true;
+  s_cyw43Inited = true;
   cyw43_arch_init_with_country(WIFI_COUNTRY);
   cyw43_arch_enable_sta_mode();
-  
   cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN,1); //Turn on LED
 }
 
@@ -171,8 +166,6 @@ void CUDPTask::Run(const char* ssid, const char* wpakey) {
         udpCallbackInvoked = false;
         WatchdogUpdate();      
         EvtUDPReceived(rxbuffer,rxdatalen,rxremoteipaddr,rxremoteport);
-      } else if (this->DrainOneQueuedPacket()) {
-        WatchdogUpdate();
       }
       
       //Timer Timeout
@@ -449,44 +442,32 @@ void CUDPTask::SendUDP(const uint8_t *payload,const uint16_t payloadlen, const u
 /////////////////////////////////////////////////////////////////////////////
 // UDP Received callback function
 //
-// If OnUDPPacketReceived returns true the task consumed the packet (e.g. enqueued).
-// Otherwise payload is copied to rxbuffer and udpCallbackInvoked is set.
+// UDP Payload is copied to rxbuffer
+// remote IP address and port is copied to rxremoteipaddr and rxremoteport
+// udpCallbackInvoked is set to true
 //
 void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
   TRACE_PRINTF("udp_callback invoked\n");
   CUDPTask* pTask = (CUDPTask*) arg;  
   
-  if (CUDPTask::GetRunningObject()!=pTask || pTask==NULL) {
+  //make sure the callback is for this object
+  //see note at dns_callback()
+  if (CUDPTask::GetRunningObject()==pTask && pTask!=NULL) {
+    if (pbuf->tot_len <= UDP_BUFFERSIZE) {
+      //Copy recevied data to CUDPTask object
+      pTask->udpCallbackInvoked=true;
+      pTask->rxdatalen = pbuf->tot_len;
+      pbuf_copy_partial(pbuf,pTask->rxbuffer,pbuf->tot_len,0);
+      pTask->rxremoteipaddr=*remote_addr;
+      pTask->rxremoteport=remote_port;
+    } else {
+      assert(0);
+    }
+  } else {
     WARN_PRINTF("udp_callback() arg NOT POINTING to current UDPTask object. Ignore it!\n");
-    if (pbuf) pbuf_free(pbuf);
-    return;
   }
-  if (pbuf->tot_len > UDP_BUFFERSIZE) {
-    assert(0);
-    if (pbuf) pbuf_free(pbuf);
-    return;
-  }
-  if (pTask->OnUDPPacketReceived(pbuf, remote_addr, remote_port)) {
-    if (pbuf) pbuf_free(pbuf);
-    return;  // task consumed (e.g. enqueued for TFTP RX)
-  }
-  pTask->udpCallbackInvoked = true;
-  pTask->rxdatalen = pbuf->tot_len;
-  pbuf_copy_partial(pbuf, pTask->rxbuffer, pbuf->tot_len, 0);
-  pTask->rxremoteipaddr = *remote_addr;
-  pTask->rxremoteport = remote_port;
+  
   if (pbuf) pbuf_free(pbuf);
-}
-
-bool CUDPTask::OnUDPPacketReceived(struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
-  (void)pbuf;
-  (void)remote_addr;
-  (void)remote_port;
-  return false;  // default: do normal copy to rxbuffer
-}
-
-bool CUDPTask::DrainOneQueuedPacket() {
-  return false;  // default: no queue
 }
 
 

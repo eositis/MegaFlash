@@ -27,6 +27,8 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-03-05
 
+- **UDP/TFTP performance documented:** Added §13 to `docs/Implementation-notes-and-reasoning.md`: symptom (slow TFTP, high error rate), root cause (50 ms HEARTBEAT_PERIOD, blocking flash erase), fix (10 ms period), summary and refs. Updated chronology and §11 summary table.
+- **UDP task loop period 50 ms → 10 ms:** `pico/udptask.h` HEARTBEAT_PERIOD changed to 10 ms (was 50 ms) to improve TFTP responsiveness and reduce timeouts/retries. Build produced V1.1.10-eo (0x000e); release files in `_releases/V1.1.10-eo/`.
 - **Build V1.1.9-eo and release notes:** Ran `pico/cmakeall.sh`; version bumped to V1.1.9-eo (0x000d). Added `pico/_releases/V1.1.9-eo/CHANGELOG.md` (ROM Disk enable/disable, nDEVSEL pull disabled, ReconfigRomdisk, layout fix).
 - **Storage device activation: ROM Disk enable/disable:** Added ROM Disk line to Drives Enable page (cpanel). New config bit ROMDISKFLAG in configbyte1 (1=show ROM disk, 0=hide). UI: row “R  ROM Disk  --  [ ]”, key R toggles; Enter applies and sends EnableRomdiskAtLast() or DisableRomdisk() to Pico. asm: DisableRomdisk() (CMD_DISABLEROMDISK). Pico: ReconfigRomdisk() in Reconfig() applies ROMDISKFLAG; DoAppleColdStart() no longer forces EnableRomdisk (config controls it). Default DEFCFGBYTE1 includes ROMDISKFLAG so new configs show ROM disk.
 - **nDEVSEL pull disabled:** `pico/a2bus_rp2040.pio` and `pico/a2bus_rp2350.pio`: replaced `gpio_pull_up(nDEVSEL_GPIO)` with `gpio_set_pulls(nDEVSEL_GPIO, false, false)` so nDEVSEL has no internal pull (driven by Apple bus).

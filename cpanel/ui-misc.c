@@ -155,10 +155,15 @@ void PrintDriveInfo(uint8_t unit) {
 //     9   ---RAM Disk---     400   (X)
 //
 void PrintDriveList(uint8_t unitCount) {
+  PrintDriveListWithCheckboxes(unitCount, NULL, false);
+}
+
+void PrintDriveListWithCheckboxes(uint8_t unitCount, const bool *enableFlags, bool ramdiskFlag) {
   static const char strHeader[] = "Drive Volume Name     Blocks Enable";
   static const char strRamdisk[]  = "\323\323\323RAM Disk\323\323\323";
   static const char strNonProdos[]= "\323\323Non-ProDOS\323\323";
   static_local uint8_t unit;
+  static_local bool checked;
   
   cputs(strHeader);
   newline();
@@ -179,9 +184,16 @@ void PrintDriveList(uint8_t unitCount) {
     gotox(23);
     cprintf("%5u",volInfo.blockCount); //right-justify
     
-    //Checkbox
+    //Checkbox - draw inline so it aligns with this row
     gotox(31);
-    cprintf("( )");
+    if (enableFlags != NULL) {
+      checked = (unit < unitCount) ? enableFlags[unit] : ramdiskFlag;
+      cputc('(');
+      cputc(checked ? '\304' : ' ');
+      cputc(')');
+    } else {
+      cprintf("( )");
+    }
     
     newline();
   }

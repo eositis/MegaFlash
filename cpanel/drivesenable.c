@@ -97,7 +97,6 @@ void DoDrivesEnable() {
   static_local unsigned char key;
   static_local bool newFlag;
   static_local uint8_t romdiskRow;
-  static_local uint8_t row;
   
   unitCount = GetUnitCount();
   listCount = GetDriveListCount();  /* Excludes ROM disk when last (show on separate row) */
@@ -105,7 +104,7 @@ void DoDrivesEnable() {
   
   //Draw window and its content (flash + RAM only; ROM disk has its own row below)
   DrawWindowFrame();
-  PrintDriveList(listCount);
+  PrintDriveListWithCheckboxes(listCount, enableFlags, ramdiskEnableFlag);
   
   //ROM Disk line - row after last drive. Header at YPOS, drive i at YPOS+i, so last at YPOS+listCount
   romdiskRow = YPOS + listCount + 1;
@@ -116,12 +115,7 @@ void DoDrivesEnable() {
   gotoxy(23, romdiskRow);
   cputs("  --");
   
-  //Print Checkboxes: drive i at row YPOS+i; last in list is RAM disk
-  for(i=1;i<=listCount;++i) {
-    row = YPOS + i;
-    if (i < listCount) PrintCheckbox(row, enableFlags[i]);
-    else PrintCheckbox(row, ramdiskEnableFlag);
-  }
+  //ROM Disk checkbox (drives drawn inline in PrintDriveListWithCheckboxes)
   PrintCheckbox(romdiskRow, romdiskEnableFlag);
   
   //Prompt Messages (one newline to stay within 24-screen line limit)

@@ -124,8 +124,15 @@ void __no_inline_not_in_flash_func(BusLoop)() {
       U2_HandleBusAccess(busdata, &u2_read_byte);
       if (busdata & READFLAG) {
         registers.r[addr] = u2_read_byte;
-        UpdateMegaFlashRegisters(1, registers.i32[1]);  /* 1: for $C0C4-$C0C7 */
+      } else {
+        /* Write: Mode Reg, Addr High, Addr Low read back the written value.
+         * Data Port (addr 7) readback is memory; updated on next read. */
+        uint32_t data = (busdata >> 5) & 0xff;
+        if (addr <= 6) {
+          registers.r[addr] = (uint8_t)data;
+        }
       }
+      UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
       if (++u2_poll_counter >= 500) {
         u2_poll_counter = 0;
         U2_Poll();

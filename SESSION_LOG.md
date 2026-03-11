@@ -9,6 +9,12 @@ This project’s local log. One log per project; stored in the project root.
 - **TFTP receive fix when reusing WiFi:** When ConnectWifi returns early (already LINK_UP), added ~100 ms warmup: 100× `cyw43_arch_poll()` + 1 ms sleep before returning. Stabilizes lwIP/CYW43 so new UDP PCB can receive (pico-sdk #915). TFTP no longer stuck at "Requesting Server". `pico/udptask.cpp`, `CHANGELOG-NEXT.md`.
 - **cmakeall cpanel step:** cmakeall.sh now builds cpanel first (make -C ../cpanel) before Pico firmware. Decremented version to 0x0012/V1.1.14-eo, then ran build → V1.1.15-eo release with cpanel included. `pico/cmakeall.sh`, `defines.h`.
 
+## 2026-03-10
+
+- **Apple II API reference doc:** Added `docs/MegaFlash-AppleII-API.md` documenting all C0C0 commands, their 65C02 calling sequences, equivalent Applesoft PEEK/POKE usage, and how ROM hooks (FPU, clock, SmartPort) map onto these commands so other languages can bypass ROM if needed.
+- **cc65 MegaFlash library:** Added `cc65/megaflash.h` and `cc65/megaflash.c` exposing a small C API for unit enumeration, volume info, block I/O, firmware/time strings, ROM disk control, and WiFi self-test on Apple IIc/IIc+. Documented usage and examples in `docs/cc65-megaflash-lib.md`.
+- **A2osX C MegaFlash library:** Added `a2osx/megaflash_a2osx.h` / `.c`, a portable K&R-style C wrapper around the same MegaFlash API for the C compiler used in A2osX. It avoids cc65-specific features and uses simple typedefs (`mf_u8`, `mf_u16`, `mf_u32`). Usage and integration notes for A2osX are documented in `docs/a2osx-megaflash-lib.md`.
+
 ---
 
 ## 2025-02-15

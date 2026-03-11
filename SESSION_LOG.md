@@ -6,7 +6,10 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-03-09
 
+- **U2 read-after-write fix:** PIO chunk 1 ($C0C4–$C0C7) was only updated on U2 reads; writes never called UpdateMegaFlashRegisters(1, ...). SM 1 output stale 0x00 on read-after-write. Now: on U2 write to Mode Reg / Addr High / Addr Low, set registers.r[addr]=data and always call UpdateMegaFlashRegisters(1, ...) for both reads and writes. Data Port (addr 7) readback comes from memory; still updated on read only. `pico/busloop.c`.
+- **Toolchain fix in cmakeall.sh:** Pass CMAKE_OBJDUMP and CMAKE_OBJCOPY from TOOLCHAIN_BIN so build no longer uses /usr/local/bin/arm-none-eabi-objdump. Export PATH with toolchain bin first; add PICO_TOOLCHAIN_PATH for SDK compiler lookup. `pico/cmakeall.sh`.
 - **TFTP receive fix when reusing WiFi:** When ConnectWifi returns early (already LINK_UP), added ~100 ms warmup: 100× `cyw43_arch_poll()` + 1 ms sleep before returning. Stabilizes lwIP/CYW43 so new UDP PCB can receive (pico-sdk #915). TFTP no longer stuck at "Requesting Server". `pico/udptask.cpp`, `CHANGELOG-NEXT.md`.
+- **Drives Enable checkboxes alignment:** Draw checkboxes inline in PrintDriveListWithCheckboxes (cputc tick/space when printing each "( )") so they align with drive rows. ROM disk checkbox unchanged. `cpanel/ui-misc.c`, `cpanel/drivesenable.c`, `cpanel/ui-misc.h`.
 - **cmakeall cpanel step:** cmakeall.sh now builds cpanel first (make -C ../cpanel) before Pico firmware. Decremented version to 0x0012/V1.1.14-eo, then ran build → V1.1.15-eo release with cpanel included. `pico/cmakeall.sh`, `defines.h`.
 
 ---

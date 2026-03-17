@@ -1,4 +1,4 @@
-# @VERSION@
+# V1.1.18-eo
 
 ## WiFi kept online between sessions
 

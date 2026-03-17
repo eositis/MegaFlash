@@ -237,3 +237,93 @@ mf_u8 mf_test_wifi(void)
     return MF_PARAM;
 }
 
+/* --------------------------------------------------------------------
+ * FPU API (MBF-level)
+ * ------------------------------------------------------------------ */
+
+void mf_fpu_op(mf_u8 cmd,
+               const mf_fpu_args_t* args,
+               mf_fpu_result_t*     res)
+{
+    mf_u8 i;
+
+    if (!args || !res) {
+        mf_last_error = 0xFFu;
+        return;
+    }
+
+    MF_CMDREG = MF_CMD_RESETBOTHPTRS;
+    mf_wait_busy();
+
+    /* Send 13 bytes of FAC/ARG into parameter buffer. */
+    for (i = 0; i < 13u; ++i) {
+        MF_PARAM = args->bytes[i];
+    }
+
+    mf_issue_cmd(cmd);
+    if (mf_last_error != 0) {
+        return;
+    }
+
+    /* Read 1-byte error code + 7-byte MBF result. */
+    for (i = 0; i < 8u; ++i) {
+        res->bytes[i] = MF_PARAM;
+    }
+}
+
+void mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FADD, args, res);
+}
+
+void mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FMUL, args, res);
+}
+
+void mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FDIV, args, res);
+}
+
+void mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FSIN, args, res);
+}
+
+void mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FCOS, args, res);
+}
+
+void mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FTAN, args, res);
+}
+
+void mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FATN, args, res);
+}
+
+void mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FLOG, args, res);
+}
+
+void mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FEXP, args, res);
+}
+
+void mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FSQR, args, res);
+}
+
+void mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FOUT, args, res);
+}
+
+

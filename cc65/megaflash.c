@@ -240,3 +240,95 @@ uint8_t __fastcall__ mf_test_wifi(void)
     return MF_PARAM;
 }
 
+/* --------------------------------------------------------------------
+ * FPU API (MBF-level)
+ * ------------------------------------------------------------------ */
+
+void __fastcall__ mf_fpu_op(uint8_t cmd,
+                            const mf_fpu_args_t* args,
+                            mf_fpu_result_t* res)
+{
+    uint8_t i;
+
+    if (!args || !res) {
+        mf_last_error = 0xFFu;
+        return;
+    }
+
+    /* Reset both pointers. */
+    MF_CMDREG = MF_CMD_RESETBOTHPTRS;
+    mf_wait_busy();
+
+    /* Send 13 bytes of FAC/ARG into parameter buffer. */
+    for (i = 0; i < 13u; ++i) {
+        MF_PARAM = args->bytes[i];
+    }
+
+    /* Issue FPU command. */
+    mf_issue_cmd(cmd);
+    if (mf_last_error != 0) {
+        return;
+    }
+
+    /* Read 1-byte error code + 7-byte MBF result. */
+    for (i = 0; i < 8u; ++i) {
+        res->bytes[i] = MF_PARAM;
+    }
+}
+
+void __fastcall__ mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FADD, args, res);
+}
+
+void __fastcall__ mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FMUL, args, res);
+}
+
+void __fastcall__ mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FDIV, args, res);
+}
+
+void __fastcall__ mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FSIN, args, res);
+}
+
+void __fastcall__ mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FCOS, args, res);
+}
+
+void __fastcall__ mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FTAN, args, res);
+}
+
+void __fastcall__ mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FATN, args, res);
+}
+
+void __fastcall__ mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FLOG, args, res);
+}
+
+void __fastcall__ mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FEXP, args, res);
+}
+
+void __fastcall__ mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FSQR, args, res);
+}
+
+void __fastcall__ mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res)
+{
+    mf_fpu_op(MF_CMD_FOUT, args, res);
+}
+
+

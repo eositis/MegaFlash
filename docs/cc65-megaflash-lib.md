@@ -439,7 +439,152 @@ if (mf_failed()) {
 
 ---
 
-## 9. Relationship to ROM‑patched features
+## 9. FPU API (MBF-level)
+
+MegaFlash’s FPU hardware is wired to emulate **Applesoft BASIC**’s floating point format (MBF). The Pico expects operands in a 13‑byte buffer representing Applesoft’s FAC and ARG, and returns a 1‑byte error code followed by a 7‑byte MBF result.
+
+The cc65 `megaflash` library exposes this protocol at the **MBF byte level** via two small types and a set of functions. It does **not** attempt to convert between C `float`/`double` and MBF; that conversion can be done in user code if needed.
+
+### 9.1 Data structures
+
+```c
+typedef struct mf_fpu_args {
+    uint8_t bytes[13];
+} mf_fpu_args_t;
+
+typedef struct mf_fpu_result {
+    uint8_t bytes[8];      /* [0] = error, [1..7] = MBF value */
+} mf_fpu_result_t;
+```
+
+**Input layout (`mf_fpu_args_t.bytes`):**
+
+The 13 bytes encode Applesoft FAC and ARG in this order (see comments in `pico/fpu.c`):
+
+```text
+Index  Field
+-----  -----------------------------------------
+  0    FACSIGN      (FAC sign byte, $A2)
+  1    ARGSIGN      (ARG sign byte, $AA)
+  2    FACMANT4     (FAC mantissa byte 4, $A1)
+  3    ARGMANT4     (ARG mantissa byte 4, $A9)
+  4    FACMANT3     (FAC mantissa byte 3, $A0)
+  5    ARGMANT3     (ARG mantissa byte 3, $A8)
+  6    FACMANT2     (FAC mantissa byte 2, $9F)
+  7    ARGMANT2     (ARG mantissa byte 2, $A7)
+  8    FACMANT1     (FAC mantissa byte 1, $9E)
+  9    ARGMANT1     (ARG mantissa byte 1, $A6)
+ 10    FACEXP       (FAC exponent, $9D)
+ 11    ARGEXP       (ARG exponent, $A5)
+ 12    FACEXT       (FAC extension, $AC)
+```
+
+These fields are exactly what the firmware’s `fpu_exec` routine sends when it intercepts Applesoft FPU calls.
+
+**Output layout (`mf_fpu_result_t.bytes`):**
+
+```text
+Index  Field
+-----  ---------------------------------------------
+  0    error flags:
+         bit 7 = OVERFLOWERROR
+         bit 6 = DIV0ERROR
+         bit 5 = IQERROR
+  1    sign           (MSB set if negative)
+  2    mantissa 4
+  3    mantissa 3
+  4    mantissa 2
+  5    mantissa 1 (MSB always set)
+  6    exponent
+  7    extension
+```
+
+### 9.2 Core FPU call
+
+```c
+void mf_fpu_op(uint8_t cmd,
+               const mf_fpu_args_t* args,
+               mf_fpu_result_t*     res);
+```
+
+**Description**
+
+Send a 13‑byte operand buffer (`args`) to MegaFlash, execute the FPU command (`cmd`), and read back an 8‑byte result (`res`).
+
+**Parameters**
+
+- `cmd`: one of the FPU command codes:
+  - `MF_CMD_FADD`  (`0x30`)
+  - `MF_CMD_FMUL`  (`0x31`)
+  - `MF_CMD_FDIV`  (`0x32`)
+  - `MF_CMD_FSIN`  (`0x33`)
+  - `MF_CMD_FCOS`  (`0x34`)
+  - `MF_CMD_FTAN`  (`0x35`)
+  - `MF_CMD_FATN`  (`0x36`)
+  - `MF_CMD_FLOG`  (`0x37`)
+  - `MF_CMD_FEXP`  (`0x38`)
+  - `MF_CMD_FSQR`  (`0x39`)
+  - `MF_CMD_FOUT`  (`0x3A`)
+- `args`: pointer to an `mf_fpu_args_t` filled with FAC/ARG bytes.
+- `res`: pointer to an `mf_fpu_result_t` which receives the result.
+
+**Error handling**
+
+- On protocol failure, `mf_last_error` is non‑zero and `res->bytes` contents are undefined.
+- On success (`mf_last_error == 0`), `res->bytes[0]` is the arithmetic error flags; 0 means “no FPU error”.
+
+### 9.3 Convenience wrappers
+
+For each FPU operation there is a convenience wrapper:
+
+```c
+void mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+```
+
+Each simply calls `mf_fpu_op` with the appropriate `MF_CMD_F*` code.
+
+### 9.4 Using FPU from cc65
+
+Because cc65’s `float`/`double` format is **not** Applesoft MBF, the library does **not** attempt to convert C floats to MBF. Instead:
+
+- You treat `mf_fpu_args_t` and `mf_fpu_result_t` as **opaque MBF containers**.
+- You can:
+  - Build MBF operands in assembly and pass them into C as `mf_fpu_args_t`.
+  - Or write your own conversion between cc65’s floats and MBF if you need a pure‑C interface.
+
+Example skeleton (MBF construction omitted):
+
+```c
+mf_fpu_args_t   a;
+mf_fpu_result_t r;
+
+/* TODO: fill a.bytes[0..12] with MBF representation of FAC/ARG */
+
+mf_fadd(&a, &r);
+if (mf_last_error != 0) {
+    /* protocol failure */
+} else if (r.bytes[0] != 0) {
+    /* FPU arithmetic error: OVERFLOW/DIV0/IQERROR bits in r.bytes[0] */
+} else {
+    /* r.bytes[1..7] now hold MBF result */
+}
+```
+
+If you later add helper routines (in C or assembly) to convert between cc65 floats and MBF, you can layer them on top of this MBF‑level API without changing the underlying library.
+
+---
+
+## 10. Relationship to ROM-patched features
 
 The library talks directly to the C0C0 protocol. Many features are also exposed indirectly via ROM patches:
 

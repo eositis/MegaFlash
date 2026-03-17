@@ -421,7 +421,146 @@ if (mf_failed()) {
 
 ---
 
-## 9. Relationship to A2osX C and libc
+## 9. FPU API (MBF-level)
+
+MegaFlash’s FPU emulation is wired to the Applesoft MBF format, not C `float`/`double`. On the Pico side, operands are passed as 13 bytes of FAC/ARG data and the result is returned as 1 error byte + 7 bytes of MBF value. The A2osX C library exposes this byte‑level protocol so C programs can drive the FPU directly, without relying on ROM Applesoft hooks.
+
+### 9.1 Data structures
+
+```c
+typedef struct mf_fpu_args {
+    mf_u8 bytes[13];
+} mf_fpu_args_t;
+
+typedef struct mf_fpu_result {
+    mf_u8 bytes[8];  /* [0] = error flags, [1..7] = MBF result */
+} mf_fpu_result_t;
+```
+
+**Input layout (`mf_fpu_args_t.bytes`):** mirrors the firmware’s `fpu_exec` comment in `pico/fpu.c`:
+
+```text
+Index  Field
+-----  -----------------------------------------
+  0    FACSIGN      (FAC sign byte, $A2)
+  1    ARGSIGN      (ARG sign byte, $AA)
+  2    FACMANT4     (FAC mantissa byte 4, $A1)
+  3    ARGMANT4     (ARG mantissa byte 4, $A9)
+  4    FACMANT3     (FAC mantissa byte 3, $A0)
+  5    ARGMANT3     (ARG mantissa byte 3, $A8)
+  6    FACMANT2     (FAC mantissa byte 2, $9F)
+  7    ARGMANT2     (ARG mantissa byte 2, $A7)
+  8    FACMANT1     (FAC mantissa byte 1, $9E)
+  9    ARGMANT1     (ARG mantissa byte 1, $A6)
+ 10    FACEXP       (FAC exponent, $9D)
+ 11    ARGEXP       (ARG exponent, $A5)
+ 12    FACEXT       (FAC extension, $AC)
+```
+
+**Output layout (`mf_fpu_result_t.bytes`):**
+
+```text
+Index  Field
+-----  ---------------------------------------------
+  0    error flags (0 = no FPU error)
+         bit 7 = OVERFLOWERROR
+         bit 6 = DIV0ERROR
+         bit 5 = IQERROR
+  1    sign
+  2    mantissa 4
+  3    mantissa 3
+  4    mantissa 2
+  5    mantissa 1 (MSB always set)
+  6    exponent
+  7    extension
+```
+
+### 9.2 Core FPU call
+
+```c
+void mf_fpu_op(mf_u8 cmd,
+               const mf_fpu_args_t* args,
+               mf_fpu_result_t*     res);
+```
+
+**Parameters**
+
+- `cmd`: one of the FPU command constants:
+  - `MF_CMD_FADD`, `MF_CMD_FMUL`, `MF_CMD_FDIV`,
+  - `MF_CMD_FSIN`, `MF_CMD_FCOS`, `MF_CMD_FTAN`,
+  - `MF_CMD_FATN`, `MF_CMD_FLOG`, `MF_CMD_FEXP`, `MF_CMD_FSQR`, `MF_CMD_FOUT`.
+- `args`: pointer to a 13‑byte operand buffer (FAC/ARG).
+- `res`: pointer to an 8‑byte result buffer.
+
+**Behavior**
+
+- Resets MegaFlash buffer pointers.
+- Writes `args->bytes[0..12]` into `MF_PARAM`.
+- Issues `cmd` via `mf_issue_cmd`.
+- On success (`mf_last_error == 0`), reads 8 bytes from `MF_PARAM` into `res->bytes`.
+
+**Error handling**
+
+- If the command itself fails, `mf_last_error != 0` and `res` contents are undefined.
+- If the command succeeds, `res->bytes[0]` contains arithmetic error flags; 0 means “no FPU error”.
+
+### 9.3 Convenience wrappers
+
+For easier use, each operation has a dedicated wrapper:
+
+```c
+void mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+```
+
+Each is equivalent to calling `mf_fpu_op` with the corresponding `MF_CMD_F*` command.
+
+### 9.4 Using FPU from A2osX C
+
+Because the A2osX C compiler’s float representation is not Applesoft MBF, the library **does not convert** between C `float`/`double` and MBF. Instead:
+
+- You manipulate MBF byte arrays explicitly.
+- You can build helpers (in C or assembly) that:
+  - Convert between your C float representation and MBF, or
+  - Wrap these calls for particular use cases where operands/results are already known in MBF form.
+
+Skeleton:
+
+```c
+mf_fpu_args_t   a;
+mf_fpu_result_t r;
+mf_u8 i;
+
+/* TODO: populate a.bytes[0..12] with MBF FAC/ARG values */
+for (i = 0; i < 13u; ++i) {
+    a.bytes[i] = 0;
+}
+
+mf_fsin(&a, &r);
+
+if (mf_failed()) {
+    /* protocol error: mf_last_error is non-zero */
+} else if (r.bytes[0] != 0) {
+    /* arithmetic error (overflow/div0/illegal quantity) in r.bytes[0] */
+} else {
+    /* r.bytes[1..7] now hold MBF result */
+}
+```
+
+You can then use A2osX’s libc (e.g. `PrintF`) to display or further process the MBF result, or route it back to Applesoft‑style consumers.
+
+---
+
+## 10. Relationship to A2osX C and libc
 
 The A2osX kernel already integrates MegaFlash indirectly via:
 

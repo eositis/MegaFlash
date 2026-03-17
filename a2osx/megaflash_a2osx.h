@@ -66,6 +66,19 @@ typedef unsigned long  mf_u32;
 #define MF_CMD_DRIVEMAPPING        0x28u
 #define MF_CMD_GETFIRMWAREVER      0x29u
 
+/* FPU operations (Applesoft-compatible) */
+#define MF_CMD_FADD                0x30u
+#define MF_CMD_FMUL                0x31u
+#define MF_CMD_FDIV                0x32u
+#define MF_CMD_FSIN                0x33u
+#define MF_CMD_FCOS                0x34u
+#define MF_CMD_FTAN                0x35u
+#define MF_CMD_FATN                0x36u
+#define MF_CMD_FLOG                0x37u
+#define MF_CMD_FEXP                0x38u
+#define MF_CMD_FSQR                0x39u
+#define MF_CMD_FOUT                0x3Au
+
 #define MF_CMD_RESETTIMER_US       0x40u
 #define MF_CMD_GETTIMER_US         0x41u
 #define MF_CMD_RESETTIMER_MS       0x42u
@@ -102,6 +115,19 @@ typedef struct mf_volinfo {
     char   name[16];      /* null-terminated volume name (max 15 chars) */
 } mf_volinfo_t;
 
+/* FPU argument / result buffers (MBF-compatible layout)
+ *
+ * See docs/cc65-megaflash-lib.md and pico/fpu.c for detailed comments
+ * on the MBF format and the byte ordering used by the firmware.
+ */
+typedef struct mf_fpu_args {
+    mf_u8 bytes[13];
+} mf_fpu_args_t;
+
+typedef struct mf_fpu_result {
+    mf_u8 bytes[8];   /* [0] = error flags, [1..7] = MBF result */
+} mf_fpu_result_t;
+
 /* --------------------------------------------------------------------
  * Public API
  * ------------------------------------------------------------------ */
@@ -131,6 +157,30 @@ mf_u8 mf_disable_romdisk(void);
 
 /* WiFi self-test. Returns test result code (0 = OK). */
 mf_u8 mf_test_wifi(void);
+
+/* --------------------------------------------------------------------
+ * FPU API (MBF-level)
+ *
+ * These calls send 13 bytes of FAC/ARG state to MegaFlash and return
+ * an 8-byte MBF result. The C caller is responsible for converting
+ * between its own float format and MBF if needed.
+ * ------------------------------------------------------------------ */
+
+void mf_fpu_op(mf_u8 cmd,
+               const mf_fpu_args_t* args,
+               mf_fpu_result_t*     res);
+
+void mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res);
 
 #endif /* MEGAFLASH_A2OSX_H */
 

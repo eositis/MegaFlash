@@ -17,6 +17,7 @@ This project’s local log. One log per project; stored in the project root.
 - **Apple II API reference doc:** Added `docs/MegaFlash-AppleII-API.md` documenting all C0C0 commands, their 65C02 calling sequences, equivalent Applesoft PEEK/POKE usage, and how ROM hooks (FPU, clock, SmartPort) map onto these commands so other languages can bypass ROM if needed.
 - **cc65 MegaFlash library:** Added `cc65/megaflash.h` and `cc65/megaflash.c` exposing a small C API for unit enumeration, volume info, block I/O, firmware/time strings, ROM disk control, and WiFi self-test on Apple IIc/IIc+. Documented usage and examples in `docs/cc65-megaflash-lib.md`.
 - **A2osX C MegaFlash library:** Added `a2osx/megaflash_a2osx.h` / `.c`, a portable K&R-style C wrapper around the same MegaFlash API for the C compiler used in A2osX. It avoids cc65-specific features and uses simple typedefs (`mf_u8`, `mf_u16`, `mf_u32`). Usage and integration notes for A2osX are documented in `docs/a2osx-megaflash-lib.md`.
+- **cc65 FPU bindings:** Extended the cc65 library (`cc65/megaflash.h/.c`) with an MBF-level FPU API: `mf_fpu_args_t`/`mf_fpu_result_t` plus `mf_fpu_op` and wrappers (`mf_fadd`, `mf_fmul`, `mf_fdiv`, `mf_fsin`, etc.). These send the same 13-byte FAC/ARG layout used by Applesoft hooks and read back the 8-byte MBF result, allowing C programs to drive MegaFlash’s FPU without using ROM Applesoft. Documented the layout and usage in `docs/cc65-megaflash-lib.md`.
 
 ---
 

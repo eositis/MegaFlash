@@ -68,6 +68,19 @@ enum {
     MF_CMD_DRIVEMAPPING        = 0x28,
     MF_CMD_GETFIRMWAREVER      = 0x29,
 
+    /* FPU operations (Applesoft-compatible) */
+    MF_CMD_FADD                = 0x30,
+    MF_CMD_FMUL                = 0x31,
+    MF_CMD_FDIV                = 0x32,
+    MF_CMD_FSIN                = 0x33,
+    MF_CMD_FCOS                = 0x34,
+    MF_CMD_FTAN                = 0x35,
+    MF_CMD_FATN                = 0x36,
+    MF_CMD_FLOG                = 0x37,
+    MF_CMD_FEXP                = 0x38,
+    MF_CMD_FSQR                = 0x39,
+    MF_CMD_FOUT                = 0x3A,
+
     MF_CMD_RESETTIMER_US       = 0x40,
     MF_CMD_GETTIMER_US         = 0x41,
     MF_CMD_RESETTIMER_MS       = 0x42,
@@ -106,6 +119,47 @@ typedef struct mf_volinfo {
     char     name[16];      /* null-terminated volume name (max 15 chars) */
 } mf_volinfo_t;
 
+/* FPU argument / result buffers (MBF-compatible layout)
+ *
+ * The Pico FPU expects 13 bytes of FAC/ARG data in the parameter buffer:
+ *
+ *   bytes[ 0] = FACSIGN    ($A2)
+ *   bytes[ 1] = ARGSIGN    ($AA)
+ *   bytes[ 2] = FACMANT4   ($A1)
+ *   bytes[ 3] = ARGMANT4   ($A9)
+ *   bytes[ 4] = FACMANT3   ($A0)
+ *   bytes[ 5] = ARGMANT3   ($A8)
+ *   bytes[ 6] = FACMANT2   ($9F)
+ *   bytes[ 7] = ARGMANT2   ($A7)
+ *   bytes[ 8] = FACMANT1   ($9E)
+ *   bytes[ 9] = ARGMANT1   ($A6)
+ *   bytes[10] = FACEXP     ($9D)
+ *   bytes[11] = ARGEXP     ($A5)
+ *   bytes[12] = FACEXT     ($AC)
+ *
+ * See pico/fpu.c comments for details of the MBF format.
+ */
+typedef struct mf_fpu_args {
+    uint8_t bytes[13];
+} mf_fpu_args_t;
+
+/* FPU result: 1-byte error code + 7-byte MBF value.
+ *
+ * Layout matches the Pico's StoreResult() output:
+ *
+ *   error     = bytes[0]
+ *   bytes[1]  = sign
+ *   bytes[2]  = mantissa4
+ *   bytes[3]  = mantissa3
+ *   bytes[4]  = mantissa2
+ *   bytes[5]  = mantissa1 (MSB always set)
+ *   bytes[6]  = exponent
+ *   bytes[7]  = extension
+ */
+typedef struct mf_fpu_result {
+    uint8_t bytes[8];
+} mf_fpu_result_t;
+
 /* --------------------------------------------------------------------
  * Core API
  * ------------------------------------------------------------------ */
@@ -143,6 +197,38 @@ uint8_t __fastcall__ mf_disable_romdisk(void);
 
 /* Run WiFi self-test. Returns Pico error code (0 = OK). */
 uint8_t __fastcall__ mf_test_wifi(void);
+
+/* --------------------------------------------------------------------
+ * FPU API (MBF-level)
+ *
+ * These functions expose MegaFlash's FPU operations at the MBF data
+ * level. The caller is responsible for converting between C floating
+ * point types and Applesoft MBF format if needed.
+ *
+ * For all functions:
+ *   - 'args' must point to 13 bytes of FAC/ARG as described above.
+ *   - 'res' must point to an 8-byte buffer that will receive:
+ *       res->bytes[0] = error flags (overflow/div0/illegal quantity)
+ *       res->bytes[1..7] = MBF result value.
+ *   - mf_last_error is set to a non-zero Pico error code if the
+ *     MegaFlash command itself fails; otherwise it remains 0.
+ * ------------------------------------------------------------------ */
+
+void __fastcall__ mf_fpu_op(uint8_t cmd,
+                            const mf_fpu_args_t* args,
+                            mf_fpu_result_t* res);
+
+void __fastcall__ mf_fadd(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fmul(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fdiv(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fsin(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fcos(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_ftan(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fatn(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_flog(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fexp(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fsqr(const mf_fpu_args_t* args, mf_fpu_result_t* res);
+void __fastcall__ mf_fout(const mf_fpu_args_t* args, mf_fpu_result_t* res);
 
 #endif /* MEGAFLASH_H */
 

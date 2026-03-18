@@ -50,18 +50,21 @@ void CNTPTask::AttemptNTP() {
 }
 
 void CNTPTask::EvtStart() {
+  DEBUG_PRINTF("NTP: EvtStart()\n");
   CUDPTask::EvtStart();
   AttemptNTP();
 }
 
 
 void CNTPTask::EvtDNSResult(const int dnserr, const ip_addr_t *ipaddr){
+  DEBUG_PRINTF("NTP: EvtDNSResult dnserr=%d\n", dnserr);
   CUDPTask::EvtDNSResult(dnserr, ipaddr);
   assert(GetServerIpResolved());
   SendNTPRequest();
 }
 
 void CNTPTask::EvtUDPReceived(const uint8_t* payload,uint16_t payloadlen,ip_addr_t remote_addr,uint16_t remote_port){
+  DEBUG_PRINTF("NTP: EvtUDPReceived len=%d port=%d\n", payloadlen, remote_port);
   CUDPTask::EvtUDPReceived(payload, payloadlen, remote_addr, remote_port);
   
   //Cancel Timeout timer  
@@ -77,7 +80,7 @@ void CNTPTask::EvtUDPReceived(const uint8_t* payload,uint16_t payloadlen,ip_addr
       mode == 0x04 &&
       stratum !=0) {
     
-    DEBUG_PRINTF("Valid Response received from NTP Server\n");    
+    DEBUG_PRINTF("NTP: Valid response: mode=0x%02X stratum=%u\n", mode, stratum);
     this->Complete();
     
     //Get the time from payload
@@ -86,10 +89,11 @@ void CNTPTask::EvtUDPReceived(const uint8_t* payload,uint16_t payloadlen,ip_addr
     //Convert to time_t
     if (secondsSince1900 < ROLLOVER_LIMIT) secondsSince1970 = secondsSince1900 + 0x100000000ull - NTP_DELTA;
     else secondsSince1970 = secondsSince1900 - NTP_DELTA;    
-    INFO_PRINTF("unix epoch = %llu\n",secondsSince1970);
+    INFO_PRINTF("NTP: unix epoch = %llu\n",secondsSince1970);
     
   } else {
-    ERROR_PRINTF("Invalid response from NTP Server\n");
+    ERROR_PRINTF("NTP: Invalid response from server (len=%d, mode=0x%02X, stratum=%u)\n",
+                 payloadlen, mode, stratum);
     AttemptNTP(); //Try again
   }
 }

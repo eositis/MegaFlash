@@ -18,6 +18,7 @@ pico_sdk_init()
 #add source file here
 add_executable(${CMAKE_PROJECT_NAME}
     main.c
+    network_pump.cpp
     a2bus.c
     busloop.c
     busloop_wa.c

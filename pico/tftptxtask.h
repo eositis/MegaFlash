@@ -29,11 +29,17 @@ protected:
   uint32_t tftpBlockSize;      //TFTP block size (512 or 1024)
   bool serverTIDAccepted;      //Server TID (remote_port) accepted
 
+  // Deferred build: build next packet at start of loop to avoid flash/SPI in UDP handler path (prevents stall/lockup)
+  bool needToBuildNextPacket;
+  uint16_t nextBuildTftpBlock;
+  uint32_t nextBuildBlockSent;
+
   //Event Handlers
   //void EvtStart();
   void EvtDNSResult(const int dns_error, const ip_addr_t *ipaddr);
   void EvtUDPReceived(const uint8_t* payload,uint16_t payloadlen,ip_addr_t remote_addr,uint16_t remote_port);
   void EvtTimeout(uint32_t arg);
+  void OnBeforeWait() override;
   
   void StartTransfer();  
   void SendDataPacket(); 

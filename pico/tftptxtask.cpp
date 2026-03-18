@@ -22,11 +22,12 @@ CTFTPTXTask::CTFTPTXTask(const uint32_t unitNum,const char* hostname,const char*
   nextDataPacketLen = 0;
   
   OACKReceived = false;
-  hasCompleted = false; 
+  hasCompleted = false;
   serverTIDAccepted = false;
   blockSent = 0;
   tftpBlockSize = 512;
   blockCount = GetBlockCountForImageTransfer(unitNum); //Number of ProDOS blocks to be sent
+  needToBuildNextPacket = false;
   DEBUG_PRINTF("Total blockCount=%d\n",blockCount);
 }
 
@@ -259,12 +260,14 @@ void CTFTPTXTask::SendDataPacket() {
   
   //Transfer Completed?
   if(payloadlen<tftpBlockSize) {
-    hasCompleted = true;  
+    hasCompleted = true;
   } else {
-    //No, Build Next Data Packet
-    nextDataPacketLen = BuildDataPacket(nextDataPacketBuf,current_tftpBlock+1,blockSent);
+    // Defer building next packet to OnBeforeWait() so flash read runs outside UDP handler path (avoids stall/lockup after ~14 blocks)
+    needToBuildNextPacket = true;
+    nextBuildTftpBlock = current_tftpBlock + 1;
+    nextBuildBlockSent = blockSent;
   }
-  
+
   tftp_critical_section_enter_blocking();
   if (hasCompleted) tftp_state.status = TFTPSTATUS_COMPLETING;
   tftp_state.error = TFTPERROR_NOERR;
@@ -320,6 +323,17 @@ uint32_t CTFTPTXTask::BuildDataPacket(uint8_t *destBuffer,uint16_t tftpBlockNum,
 
 
 
+
+//////////////////////////////////////////////////////////
+// Build next data packet at start of event loop (deferred from SendDataPacket).
+// Avoids doing flash/SPI (ReadBlock) inside UDP receive path, which can cause
+// stall/lockup after several blocks (e.g. ~14) and require hard power-off.
+//
+void CTFTPTXTask::OnBeforeWait() {
+  if (!needToBuildNextPacket || completed) return;
+  nextDataPacketLen = BuildDataPacket(nextDataPacketBuf, nextBuildTftpBlock, nextBuildBlockSent);
+  needToBuildNextPacket = false;
+}
 
 //////////////////////////////////////////////////////////
 // Process ACK

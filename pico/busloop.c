@@ -178,6 +178,10 @@ void __no_inline_not_in_flash_func(BusLoop)() {
             
             //Clear Busy Flag
             registers.r[STATUSREG] &= ~BUSYFLAG;
+            // Push chunk 0 to PIO immediately so the Apple's next read of DATAREG
+            // sees the command result (e.g. CMD_TFTPGETLASTSERVER hostname), not
+            // stale data from a previous command (WiFi test IP, TFTP status text).
+            UpdateMegaFlashRegisters(0, registers.i32[0]);
             break;
           case DATAREG:
             dataBuffer[dataBufferIndex] = data;

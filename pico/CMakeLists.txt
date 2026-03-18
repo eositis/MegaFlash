@@ -13,6 +13,12 @@ include(pico_sdk_import.cmake)
 project(megaflash C CXX ASM)
 set(PICO_CXX_ENABLE_EXCEPTIONS 1)
 set(PICO_CXX_ENABLE_RTTI 1)
+
+# Keep Release codegen the same as Debug (-Og); only NDEBUG differs (disables assert + UART logging).
+# Avoids -O3-induced differences (reordering, inlining) that can cause release-only bugs (e.g. TFTP stall).
+set(CMAKE_C_FLAGS_RELEASE "-g -Og -DNDEBUG" CACHE STRING "Release C flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-g -Og -DNDEBUG" CACHE STRING "Release CXX flags" FORCE)
+
 pico_sdk_init()
 
 #add source file here

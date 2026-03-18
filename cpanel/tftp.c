@@ -83,6 +83,18 @@ static bool LooksLikeIPv4Address(const char *s) {
   return (dots == 3 && digitsInOctet > 0);
 }
 
+// Return true if s looks like TFTP status text (from Pico data buffer), not a hostname.
+static bool LooksLikeStatusText(const char *s) {
+  if (s == NULL || s[0] == '\0') return false;
+  if (strstr(s, "Successfully") != NULL) return true;
+  if (strstr(s, "Completed") != NULL) return true;
+  if (strstr(s, "transferred") != NULL) return true;
+  if (strstr(s, "Transferring") != NULL) return true;
+  if (strstr(s, "Connecting") != NULL) return true;
+  if (strstr(s, "Idle") != NULL && strlen(s) <= 4) return true;
+  return false;
+}
+
 /////////////////////////////////////////////////////////////////////
 // Draw Format Window 
 // 
@@ -225,6 +237,10 @@ void DoTFTPImageTransfer() {
 #ifndef TESTBUILD  
   SendCommand(CMD_TFTPGETLASTSERVER);
   CopyStringFromDataBuffer(ti_textBuffer);
+  // If we got stale status text (e.g. "Completed Successfully") from the shared
+  // data buffer, show blank instead of wrong default.
+  if (LooksLikeStatusText(ti_textBuffer))
+    ti_textBuffer[0] = '\0';
 #else
   ti_textBuffer[0]='\0';
 #endif  

@@ -74,8 +74,6 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
-## 2025-03-02
-
 - **A2/A3 pulldowns disabled**: `pico/a2bus_rp2040.pio` and `pico/a2bus_rp2350.pio`: `gpio_set_pulls(A2ABUS_BASE+2/3, false, true)` → `(false, false)` so A2 and A3 have no pull-ups or pull-downs (driven by Apple bus).
 - **Pico firmware rebuilt**: Updated `pico/cmakeall.sh` to pass `-DPICO_SDK_PATH=/Users/eositis/pico-sdk`, reconfigured all CMake builds, and built release UF2 images: `pico_release/megaflash.uf2` (Pico W) and `pico2_release/megaflash.uf2` (Pico 2 W).
 - **Build script version bump**: `pico/cmakeall.sh` now increments version and date on each run: reads `FIRMWAREVER`/`FIRMWAREVERSTR` from `defines.h`, bumps patch and hex version, appends `-eo` to string, sets build date, updates `defines.h` and appends a comment line. Fixed hex parsing to use `awk '{print $3}'`. Built firmware at V1.1.6-eo (0x000a).
@@ -87,8 +85,17 @@ This project’s local log. One log per project; stored in the project root.
 - **C0C4 not seen by firmware**: Documented in `docs/Implementation-notes-and-reasoning.md` (§2b): PIO only pushes a cycle when **nDEVSEL (GPIO 20) goes low**; if nDEVSEL doesn’t go low (wrong slot, or floating after pull-up was removed), the CPU never sees the access. Re-enabled **nDEVSEL pull-up** in both PIO files so the line is held high when not selected and the PIO sees a clean low when the card is selected.
 - **Implementation notes expanded**: `docs/Implementation-notes-and-reasoning.md` updated with chronology, version-bump script bugs (grep/tr), GPIO pull summary (§8), C0C4 diagnostic LED (§9), reverted nDEVSEL-invert attempt (§10), and open issue “C0C4 not seen” with next steps (§12). Clarified RP2040/RP2350 data path in §2b.
 - **Document-thinking rule**: Added `.cursor/rules/document-thinking.mdc` so the agent always records reasoning in SESSION_LOG (brief) and in `docs/Implementation-notes-and-reasoning.md` (root cause, dead ends, takeaways) for future reference and learning.
+## 2025-03-02
+
+... (entries above unchanged) ...
+
 - **U2 bus loop (colleague’s approach)**: Replaced merge-into-chunk logic with shadow-register approach in `pico/busloop.c`: on U2 read set `registers.r[addr] = u2_read_byte` then `UpdateMegaFlashRegisters(1, registers.i32[1])`; condition `addr >= U2_C0X_OFFSET` (no U2_C0X_LAST in snippet). C0C4 diagnostic LED kept.
 - **Concurrent C0xx ranges**: Documented in `busloop.c` and `docs/Implementation-notes-and-reasoning.md` (§1b): C0C0–C0C3 (MegaFlash), C0C4–C0C7 (U2), and C0C8–C0CF (future ACIA) are concurrently active; decode by address only. U2 restricted to 4–7 (`addr <= U2_C0X_LAST`) so C0C8–C0CF remain for ACIA.
+
+## 2026-03-17
+
+- **Planned network refactor documented:** Extended `docs/Implementation-notes-and-reasoning.md` with §14 describing a future NetworkPump + INetworkSession architecture so NTP, TFTP, TestWifi, and Uthernet II TCP/UDP can share cyw43/lwIP concurrently, and how to abort/reset all sessions cleanly on Apple II reset.
+- **NetworkPump skeleton added:** Created `pico/network_pump.h` and `pico/network_pump.cpp` defining a preliminary `NetworkPump` and `INetworkSession` interface (WiFi init/connection helpers, UDP/TCP pcb helpers, stubbed session/timer/abort APIs). Added `network_pump.cpp` to `pico/CMakeLists.txt`. No existing code uses the pump yet, so runtime behaviour is unchanged; this is groundwork for migrating NTP/TFTP/Uthernet II to a shared pump later.
 
 ---
 

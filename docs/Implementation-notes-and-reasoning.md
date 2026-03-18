@@ -308,4 +308,174 @@ So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style 
 
 ---
 
+## 14. Network architecture: single pump, multiple sessions (NTP, TFTP, Uthernet II)
+
+**Requirement:** Support multiple concurrent network users on the Pico (NTP, TFTP, Test WiFi, and Uthernet II TCP/UDP sockets) without them blocking each other, while still respecting cyw43/lwIP’s requirement that there be a single “driver context” that calls `cyw43_arch_poll`, `cyw43_arch_wait_for_work_until`, and lwIP APIs.
+
+### 14.1 Prior design: single blocking UDP task
+
+- `CUDPTask` in `pico/udptask.cpp` owns:
+  - WiFi connect (`InitCyw43`, `ConnectWifi`).
+  - A single `udp_pcb` and its callback (`udp_recv(pcb, udp_callback, this)`).
+  - A blocking event loop inside `Run()` that:
+    - Calls `cyw43_arch_poll()` and `cyw43_arch_wait_for_work_until(...)`.
+    - Delivers events (DNS result, UDP receive, timer, watchdog) to virtual methods (`EvtDNSResult`, `EvtUDPReceived`, `EvtTimeout`, etc.) on **one** task object.
+- Global static state:
+  - `volatile bool CUDPTask::isRunning;`
+  - `CUDPTask *CUDPTask::runningObject;`
+- DNS and UDP callbacks (`dns_callback`, `udp_callback`) check:
+  - `if (CUDPTask::GetRunningObject() == pTask && pTask != NULL) {...}` and ignore callbacks if `arg` does not match `runningObject`.
+- Higher-level users:
+  - `CNTPTask` (NTP client), `CTFTPTask` (base for RX/TX TFTP), and `CTestWifiTask` all subclass `CUDPTask`.
+  - `GetNetworkTime()` and `ExecuteTFTP()` both construct a task and call `task.Run(ssid, wpakey)`, which does not return until the task calls `Complete()` or throws.
+
+**Consequence:** Only **one** UDP-based network activity can run at a time (e.g. NTP *or* TFTP). A broken or stuck NTP session monopolizes the event loop (`CUDPTask::isRunning` never cleared) and prevents TFTP or TestWifi from starting, even though the cyw43 chip and lwIP stack can support multiple sockets in parallel.
+
+### 14.2 Target design: one network pump, many sessions
+
+**Idea:** Separate the “driver context” (WiFi + lwIP pump) from the individual protocols. Instead of each protocol owning its own `CUDPTask::Run()` loop, introduce a **NetworkPump** that:
+
+- Is the only context that:
+  - Calls `cyw43_arch_init_with_country` / `cyw43_arch_enable_sta_mode`.
+  - Calls `cyw43_arch_poll()` and `cyw43_arch_wait_for_work_until(...)`.
+  - Creates and destroys lwIP pcbs (`udp_new`, `udp_bind`, `udp_recv`, `tcp_new`, `tcp_connect`, `tcp_listen`, `tcp_accept`, `tcp_close`, etc.).
+- Maintains a registry of **sessions**:
+  - NTP session (time sync).
+  - TFTP RX/TX sessions (file transfer).
+  - Test WiFi session (diagnostic).
+  - Uthernet II sessions:
+    - UDP sockets used by the Uthernet emulation.
+    - TCP connections requested by the Apple II (client and server).
+- Drives a cooperative loop (typically on Core 0 inside `core0Loop()`):
+  - Polls cyw43/lwIP.
+  - Delivers events to each active session.
+  - Checks per-session timers and watchdogs.
+  - Removes sessions that report “done”.
+
+### 14.3 Session interface (conceptual)
+
+Each protocol implementation becomes an `INetworkSession` (C++ interface) managed by the pump, instead of a subclass of `CUDPTask` that owns the loop. Roughly:
+
+- `OnStart(NetworkPump&)`: called once when the session is added; can request DNS lookup, create pcbs, send initial packets.
+- `OnDNSResult(err, ipaddr)`: DNS result for a hostname the session requested.
+- `OnUDPReceived(payload, len, remote_addr, remote_port)`: called when a UDP packet arrives on a port (or TID) owned by this session.
+- `OnTCPEvent(...)`: called from TCP accept/recv/sent/error callbacks for pcbs owned by this session.
+- `OnTimer(arg)`: session-specific timer expiry (retries, timeouts).
+- `OnWatchdog()`: called if the session has not made progress by some deadline; can abort or reset itself.
+- `Abort()`: called when the system wants to tear the session down (e.g. Apple II reset, user cancel).
+- `IsDone() const`: reports whether the session is finished (success or failure).
+- Ownership helpers:
+  - `OwnsUdpPort(uint16_t port) const` or an explicit binding table from `udp_pcb*` → session.
+  - `OwnsTcpPcb(struct tcp_pcb* pcb) const` or similar.
+
+The pump exposes helpers to sessions:
+
+- `CreateUdpPcb(owner, local_port)` / `DestroyUdpPcb(pcb)`.
+- `CreateTcpPcb(owner)`, `ListenTcp(owner, port)`, `ConnectTcp(owner, remote_ip, port)`.
+- `ScheduleTimer(owner, timeout_ms, arg)` / `CancelTimer(owner)`.
+- `RequestDNS(owner, hostname, timeout_ms)`.
+
+Sessions never call `cyw43_arch_lwip_begin/end` directly; they ask the pump to perform network operations on their behalf so all lwIP and cyw43 calls flow through one place.
+
+### 14.4 Event flow with the pump
+
+With this design:
+
+- **UDP callbacks:** `udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, ...)` is registered with `arg = NetworkPump*` instead of `arg = CUDPTask*`. The pump:
+  - Looks up which session owns `pcb` (via a binding table).
+  - Copies the payload into a buffer or small event object.
+  - Frees the pbuf.
+  - Marks that this session has a pending UDP event.
+- **DNS callbacks:** `dns_callback(..., void *arg)` similarly uses `arg = NetworkPump*`; the pump matches the callback to the session that requested that hostname.
+- **TCP callbacks:** `tcp_accept`, `tcp_recv`, `tcp_sent`, `tcp_poll`, `tcp_err` are all registered by the pump and associated with a given session via their `tcp_pcb*`.
+- **Pump loop:** In each `PollOnce()`:
+  - Call `cyw43_arch_poll()` to move data between the WiFi chip and lwIP.
+  - Drain any pending UDP/TCP/DNS events and dispatch them to sessions’ handlers.
+  - Check timers and watchdogs, and call `OnTimer` / `OnWatchdog` as needed.
+  - Remove sessions whose `IsDone()` returns true and close their pcbs.
+
+This keeps cyw43 and lwIP single-threaded (one owner) but lets multiple logical sessions (NTP, TFTP, Uthernet II sockets, etc.) share the network concurrently.
+
+### 14.5 NTP and TFTP as sessions instead of tasks
+
+- **NTP:** `CNTPTask` logic becomes an `NtpSession`:
+  - On start: request DNS (`pool.ntp.org` round-robin) via pump.
+  - On DNS result: send an NTP request via a UDP pcb bound to an ephemeral port.
+  - On UDP receive: validate the NTP response, compute seconds since 1970, and mark done; or, on invalid packet, schedule another attempt.
+  - On timer: handle NTP timeout and retry logic (up to `NTP_MAX_RETRY`) or signal failure.
+- **TFTP:** `CTFTPTask` / `CTFTPRXTask` / `CTFTPTXTask` become `TftpSession` objects:
+  - On start: DNS lookup of TFTP server; then send RRQ/WRQ.
+  - On UDP receive: process DATA/ACK/OACK/ERROR packets, drive file I/O and retries.
+  - On timer: handle TFTP timeouts and exponential backoff.
+  - On abort: stop retrying, close the TFTP socket, and set `tftp_state.status`/`error` appropriately.
+
+High-level C entry points (`GetNetworkTime`, `ExecuteTFTP`) no longer block inside `CUDPTask::Run`; instead they:
+
+- Ask the pump to create and start a session.
+- Either:
+  - Wait/poll on a completion flag (for synchronous behaviour), or
+  - Rely on the existing `tftp_state`/RTC mechanisms to report completion back to the Apple II.
+
+### 14.6 Uthernet II TCP/UDP sessions
+
+For Uthernet II emulation, the Pico must service:
+
+- **UDP sockets**: used by U2 firmware (e.g. DNS, DHCP, SNTP, TFTP).
+- **TCP connections**: used by Apple software via the Uthernet II API (e.g. telnet, HTTP).
+
+In the pump-based design:
+
+- Each Uthernet II logical connection becomes its own session (or a child object of a U2 session manager), with:
+  - A `tcp_pcb` (client or accepted server connection) or `udp_pcb`.
+  - State needed to translate between Apple II SmartPort / Uthernet II register access and lwIP calls.
+- The pump routes TCP/UDP events for those pcbs to the corresponding session, which then:
+  - Updates W5100-like registers.
+  - Pushes data back to the Apple over the bus at the right time.
+- NTP/TFTP/TestWifi sessions simply co-exist in the same pump, sharing the WiFi link and event-loop fairly.
+
+### 14.7 Resetting all network sessions on Apple II reset
+
+**Requirement:** When the Apple II reset line is asserted (GPIO `nRESET_PIN`), all in-flight network activity (TFTP transfers, Uthernet II TCP/UDP sockets, NTP queries) should be terminated cleanly so:
+
+- No further packets are sent on behalf of the old Apple session.
+- Any state that the Apple might poll (e.g. `tftp_state`) is driven to a completed/aborted state.
+- The network pump returns to a known, idle state and is ready for new sessions after reset.
+
+In the current design, `gpio_intr_callback` can call `UDPTask_RequestAbortIfRunning()` (which in turn calls `CUDPTask::RequestAbortIfRunning()`) to cancel a single UDP task. In the pump design, this becomes:
+
+- A C-visible function in `network.cpp`, e.g. `Network_ResetAllSessionsOnAppleReset()`, that calls `NetworkPump::RequestAbortAll()`.
+- `NetworkPump::RequestAbortAll()`:
+  - Iterates over all active sessions and calls `Abort()` on each.
+  - Optionally closes all pcbs immediately (or marks them for closure at the next `PollOnce()`).
+  - Updates any global state mirrors such as `tftp_state` so that the Apple sees “completed with error/aborted” rather than “in progress forever”.
+- `gpio_intr_callback` then does:
+  - `Network_ResetAllSessionsOnAppleReset();`
+  - `AbortEraseFlashDisk();` (as it already does).
+
+This guarantees that a stuck NTP/TFTP/Uthernet II session cannot survive across an Apple reset and block new network operations from starting.
+
+### 14.8 Migration path
+
+Because this is a non-trivial refactor, a staged approach is safest:
+
+1. **Stabilize the existing single-task design**  
+   - Ensure all NTP/TFTP/TestWifi code paths either call `Complete()` or throw a `CUDPTask`-style exception so `CUDPTask::isRunning` is always cleared.
+   - Strengthen logging and, if necessary, watchdog behaviour around retries so stuck NTP cannot silently monopolize the UDP loop.
+2. **Introduce a minimal pump and session interface in parallel**  
+   - Extract a `NetworkPump` that, initially, wraps the existing `CUDPTask::Run` loop and exposes a simple `PollOnce()`.
+   - Convert `CNTPTask` into an `NtpSession` first, running under the pump while leaving TFTP on the legacy `CUDPTask` path.
+   - Once NTP works under the pump, port TFTP and TestWifi to sessions.
+3. **Add Uthernet II sessions**  
+   - Implement UDP/TCP sessions for U2, using the same pump.
+   - Remove the now-redundant `CUDPTask` singleton fields and the “ignore callback if arg != runningObject” logic.
+
+**Stage 2 status (skeleton only):** Created `network_pump.h` / `network_pump.cpp` with a preliminary `NetworkPump` and `INetworkSession` interface. The pump currently:
+
+- Owns lazy initialisation of cyw43 (`Init` / `EnsureWifiConnected`).
+- Provides helpers to create/destroy UDP/TCP pcbs (`CreateUdpPcb`, `DestroyUdpPcb`, `CreateTcpPcb`, `DestroyTcpPcb`) using `cyw43_arch_lwip_begin/end`.
+- Exposes `AddSession`, `RemoveSession`, `PollOnce`, `ScheduleTimer`, `CancelTimer`, and `RequestAbortAll` as **no-op placeholders** ready to be wired up when NTP/TFTP/Uthernet II are migrated.
+- Is compiled into the Pico firmware (`network_pump.cpp` added to `CMakeLists.txt`) but is not referenced from existing code yet, so behaviour is unchanged.
+
+**Takeaway:** The hardware (Pico W + cyw43 + lwIP) can support multiple concurrent UDP/TCP sockets. The primary limitation in the original design was the **software architecture**, which serialized all UDP work through a single `CUDPTask` instance and event loop. Moving to a pump + sessions model unlocks true concurrency between NTP, TFTP, and Uthernet II, and provides a natural place to reset all network state when the Apple II is reset. The new `NetworkPump`/`INetworkSession` skeleton is the first concrete code step toward that architecture; the next step will be migrating a single protocol (likely NTP) to run as a session under the pump.
+
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

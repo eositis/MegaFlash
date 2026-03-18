@@ -27,6 +27,7 @@ bool IsUDPTaskRunning();
 bool IsNTPTaskRunning();
 bool IsTestWifiTaskRunning();
 bool IsTFTPTaskRunning();
+void NetworkPump_RequestAbortAll();
 
 
 NetworkError_t GetNetworkTime();

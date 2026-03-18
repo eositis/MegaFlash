@@ -12,6 +12,7 @@
 #include "rtc.h"
 #include "network.h"
 #include "debug.h"
+#include "network_pump.h"
 #include "tftp.h"
 #include <typeinfo>
 
@@ -54,6 +55,8 @@ bool IsTFTPTaskRunning() {
 
 //tftp_state defined in tftpstate.c
 extern "C" volatile tftp_state_t tftp_state;
+
+static NetworkPump g_networkPump;
 
 
 
@@ -108,43 +111,37 @@ void ExecuteTFTP(const uint32_t taskid) {
   //
   // Start the task
   //
-  int errorcode = TFTPERROR_NOERR;
+  int errorcode = CUDPTask::ERR_NONE;
   const char* ssid = GetSSID();   
   const char* wpakey = GetWPAKey(); 
-  CTFTPTask *task = NULL;
 
-  try {
-    if (dir==0)      task = new CTFTPRXTask(unitNum,hostname,filename,GetTFTPEnable1kBlockSize(), GetTFTPTimeout(),GetTFTPMaxAttempt(),GetTFTPServerPort());
-    else if (dir==1) task = new CTFTPTXTask(unitNum,hostname,filename,GetTFTPEnable1kBlockSize(), GetTFTPTimeout(),GetTFTPMaxAttempt(),GetTFTPServerPort());
-    else {
-      assert(0); //should not happen
-    }  
-      
-    //CTFTPTXTask task(unitNum,hostname,filename,enable1kBlockSize,tftpTimeout,tftpMaxAttempt,tftpServerPort);
-    task->Run(ssid,wpakey);
-    
-  } catch(int e) {
-    ERROR_PRINTF("CUDPTask Execption caught:%d (%s)\n", e,CUDPTask::GetErrorCodeMessage(e));
-    
-    //Map CUDPTask exception to tftp_error_t error code
-    errorcode = ConvertExceptionToTFTPError(e);
-  } catch(...) {
-    //make sure no exception goto C code    
-    errorcode = TFTPERROR_UNKNOWN;
-  }    
+  errorcode = g_networkPump.RunTFTP(taskid, dir, unitNum, hostname, filename,
+                                    GetTFTPEnable1kBlockSize(),
+                                    GetTFTPTimeout(),
+                                    GetTFTPMaxAttempt(),
+                                    GetTFTPServerPort(),
+                                    ssid, wpakey);
+
+  if (errorcode != CUDPTask::ERR_NONE) {
+    ERROR_PRINTF("NETPUMP: RunTFTP returned code=%d (%s)\n",
+                 errorcode, CUDPTask::GetErrorCodeMessage(errorcode));
+  }
   
   //Setup error code
   //Make sure status is set to COMPLETED
   tftp_critical_section_enter_blocking();
-  if (errorcode!=TFTPERROR_NOERR) {
-    tftp_state.error = errorcode;
-    ERROR_PRINTF("tftp_state.error = %d\n",errorcode);
+  if (errorcode!=CUDPTask::ERR_NONE) {
+    tftp_state.error = ConvertExceptionToTFTPError(errorcode);
+    ERROR_PRINTF("tftp_state.error = %d\n",tftp_state.error);
   }
   tftp_state.status = TFTPSTATUS_COMPLETED;
   tftp_critical_section_exit();
   
   //Free CTFTPTask object
-  if (task) delete task;
+}
+
+void NetworkPump_RequestAbortAll() {
+  g_networkPump.RequestAbortAll();
 }
 
 

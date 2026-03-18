@@ -60,6 +60,13 @@ public:
 //
 class NetworkPump {
 public:
+  enum LegacyOperationKind {
+    LEGACY_OPERATION_NONE = 0,
+    LEGACY_OPERATION_NTP,
+    LEGACY_OPERATION_TESTWIFI,
+    LEGACY_OPERATION_TFTP
+  };
+
   NetworkPump();
   ~NetworkPump();
 
@@ -84,6 +91,20 @@ public:
   // expected to clean up promptly when Abort() is called.
   void RequestAbortAll();
 
+  // Run the existing legacy TFTP path under manager bookkeeping.
+  // Returns the raw exception/error code from the underlying task.
+  int32_t RunTFTP(const uint32_t taskid,
+                  const uint32_t dir,
+                  const uint32_t unitNum,
+                  const char *hostname,
+                  const char *filename,
+                  const bool enable1kBlockSize,
+                  const uint32_t tftpTimeout,
+                  const uint32_t tftpMaxAttempt,
+                  const uint16_t tftpServerPort,
+                  const char *ssid,
+                  const char *wpakey);
+
   // --- Helpers intended for future use by sessions ---
 
   udp_pcb *CreateUdpPcb(INetworkSession *owner, uint16_t local_port);
@@ -96,10 +117,16 @@ public:
   void CancelTimer(INetworkSession *owner);
 
 private:
+  void BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid, const char *label);
+  void EndLegacyOperation();
+
   // Internal bookkeeping structures will be filled in when we
   // migrate the first protocol (NTP/TFTP) to this pump.
   bool cyw43Inited;
   bool wifiConnected;
+  LegacyOperationKind activeLegacyOperation;
+  uint32_t activeLegacyTaskId;
+  const char *activeLegacyLabel;
 };
 
 #endif // _NETWORK_PUMP_H

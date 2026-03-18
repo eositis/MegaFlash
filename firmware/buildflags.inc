@@ -8,7 +8,7 @@
 ;
 ;Print Smartport and ProDOS call info to
 ;serial port
-DEBUG 	        EQU     FALSE
+DEBUG 	        EQU     TRUE
 
 
 ;------------------------------------------

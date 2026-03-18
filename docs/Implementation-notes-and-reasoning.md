@@ -6,6 +6,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ## Chronology and context (from session work)
 
+- **Version series:** V1.1.23-eo is the last release in the 1.1.x line. As of V1.2.0-eo, the 1.2.x series focuses on bringing **Uthernet II emulation**, **com port**, and **imagewriter emulation** into service.
 - **Uthernet II**: Confirmed U2 at $C0C4–$C0C7 only; no GPIO slot select. Fixed read-back of Mode Register (chunk 1 vs chunk 0). Added C0C4 diagnostic LED (1 s on any $C0C4 access).
 - **GPIO pulls**: A2/A3 pulldowns disabled (bus-driven). nDEVSEL pull-up first disabled at user request, then re-enabled when C0C4 was not seen; with pull-up enabled, C0C4 still not recognized.
 - **Build**: PICO_SDK_PATH added to cmakeall.sh; version bump + “-eo” + date on each build; version-bump script fixed (grep uniqueness, strip newlines); release UF2s copied to `_releases/<version>/`.
@@ -151,9 +152,109 @@ This document records the thinking, root-cause analysis, design decisions, and d
 - lwIP: In `lwipopts.h`, when `NDEBUG` is not defined, `LWIP_DEBUG` is set to 1 so the network stack can produce extra debug output.
 - TinyUSB: Debug build compiles with `CFG_TUSB_DEBUG=1`.
 
-So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style logging, bus loop always on, optional lwIP/TinyUSB debug. Release → no UART stdio, no debug prints, bus loop only when Apple connected.
+So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style logging, bus loop always on, optional lwIP/TinyUSB debug. Release → no UART stdio, no debug prints. As of the 1.1.20 fix (see §7b), Release now also always starts the bus loop and uses CheckPicoW() for the Core0 branch so the network stack runs on Pico W regardless of appleConnected.
 
 **References:** `docs/Debug-mode.md`, `pico/main.c`, `pico/debug.h`, `pico/lwipopts.h`.
+
+---
+
+## 7b. Release build network stack “nothing works” (1.1.20)
+
+**Symptom:** Debug build: network works; Release build: network stack broken, nothing works.
+
+**Root cause:** In Release we previously launched Core1 only when `IsAppleConnected()` was true and ran `core0Loop()` only when `appleConnected` was true. If `IsAppleConnected()` was false at boot (e.g. PHI0 timing), Core1 and the network loop never ran.
+
+**Fix:** Always call `multicore_launch_core1(core1Main)`. Use **CheckPicoW()** for the Core0 branch: if `CheckPicoW()` run `core0Loop()`, else User Terminal. On Pico W the network stack then always runs. Apple reset interrupt remains gated on `appleConnected`.
+
+**Why it was missed in the release build:**
+- Development and testing used **Debug** builds (UART logs, bus loop always on). The network stack was validated in Debug only.
+- Release had **intentional** branching (Core1 and core0Loop only when `appleConnected`) to “save resources when not connected,” so the difference looked like design, not a bug.
+- There was **no requirement to test the Release build** for network (NTP, TFTP, WiFi test) before shipping. Release was built and packaged but not exercised on the same critical paths as Debug.
+- The failure is **timing-dependent**: if the Apple is on and PHI0 is toggling when the Pico boots, `IsAppleConnected()` can be true and Release appears to work; if the Pico boots first or the check runs too early, it fails. So the bug could be intermittent.
+
+**Prevention (avoid repeating this):**
+1. **Always test Release before release.** Before tagging or packaging a version, run the **Release** firmware (not Debug) and verify: NTP sync, TFTP transfer, WiFi test from the Control Panel. Use the same hardware and boot order you expect in the field.
+2. **Document the requirement.** Keep a short “Pre-release verification” checklist and follow it for every release (see §7c).
+3. **Minimize critical Debug-vs-Release differences.** Avoid putting “does this feature run at all?” behind `#ifdef NDEBUG` or Release-only conditions. If behaviour must differ, document and test both code paths.
+4. **CI:** If you add CI, build both Debug and Release and run any automated tests against both so Release is exercised, not only built.
+
+**References:** `pico/main.c`.
+
+---
+
+## 7c. Pre-release verification checklist
+
+Before packaging or tagging a firmware release (e.g. 1.1.20+), run the **Release** build (e.g. `pico_release/megaflash.uf2` or `pico2_release/megaflash.uf2`) on real hardware and confirm:
+
+- [ ] **Boot:** Pico W boots with MegaFlash in an Apple IIc/IIc+ (or target machine).
+- [ ] **Network:** From the Control Panel (or equivalent), NTP sync, TFTP upload/download, and WiFi test all complete successfully. If any fail, do not ship until fixed or documented.
+- [ ] **Bus/Apple:** Commands from the Apple (e.g. SmartPort, boot menu) are handled correctly.
+
+This avoids shipping a Release build that was only tested as Debug (see §7b).
+
+---
+
+## 7d. TFTP upload stall after ~14 blocks (lockup, hard power-off required)
+
+**Symptom:** TFTP upload (TX) stalls after about 14 blocks; reboot does not recover; hard power-off required to restart MegaFlash.
+
+**Root cause (likely):** The next TFTP data packet was built inside the UDP receive handler path: on ACK we called `SendDataPacket()` → `BuildDataPacket()` → `ReadBlock()` → flash (SPI + mutex). Doing that work from the same call stack that processed the UDP packet could interact badly with lwIP/CYW43 or cross-core ordering and lead to stall or deadlock after several iterations.
+
+**Fix:** Defer building the *next* data packet to the start of the next event-loop iteration. In `udptask` add virtual `OnBeforeWait()` called before `cyw43_arch_poll()`. In TFTP TX, set `needToBuildNextPacket` (and params) in `SendDataPacket()` instead of calling `BuildDataPacket()`; `CTFTPTXTask::OnBeforeWait()` builds the packet so flash/SPI runs outside the UDP handler path. First data packet still built in handler when `blockSent==0`.
+
+**References:** `pico/udptask.h`, `pico/udptask.cpp`, `pico/tftptxtask.h`, `pico/tftptxtask.cpp`.
+
+---
+
+## 7e. Debug vs Release: optimization, not just NDEBUG
+
+**Observation:** Debug build works (e.g. TFTP upload); Release build stalls. “Removing debug” should only disable UART reporting; all other code should remain unchanged.
+
+**What actually differs:** CMake’s default for **Release** is **-O3 -DNDEBUG**; **Debug** is **-Og -g** (no NDEBUG). So there are two differences:
+1. **NDEBUG** – In Release, assert() is a no-op and `debug.h` macros (DEBUG_PRINTF, etc.) become no-ops. That’s “disable UART reporting.”
+2. **Optimization** – Release uses **-O3** (aggressive inlining, reordering, etc.); Debug uses **-Og**. Different codegen can change timing, expose races, or alter behavior in subtle ways even when logic is the same.
+
+**Fix:** In `CMakeLists.txt`, set Release to use the same optimization as Debug (**-Og**) and keep **-DNDEBUG** only:
+- `CMAKE_C_FLAGS_RELEASE="-g -Og -DNDEBUG"`
+- `CMAKE_CXX_FLAGS_RELEASE="-g -Og -DNDEBUG"`  
+(CACHE STRING … FORCE so existing release build dirs pick it up.)
+
+Then “Release” = no UART, no assert, but same code generation as Debug. Reconfigure release (e.g. re-run cmake for `pico_release`) and rebuild.
+
+**References:** `pico/CMakeLists.txt`, CMake `CMAKE_<LANG>_FLAGS_RELEASE`.
+
+---
+
+## 7f. Disabling debug must not change lwIP (TFTP breaks in release)
+
+**Symptom:** With debug enabled, TFTP works. As soon as debug is disabled (release build), TFTP data transfer breaks (e.g. stalls at 8 blocks, timer runs, no retransmit). “Disabling debug” should only turn off UART reporting; nothing else should change.
+
+**Cause:** In `lwipopts.h`, LWIP_DEBUG, LWIP_STATS, and LWIP_STATS_DISPLAY were set only when `#ifndef NDEBUG`. So in release (NDEBUG defined), lwIP was built without those options. That changed lwIP’s code and/or data layout (stats, debug paths) and broke UDP/TFTP behavior.
+
+**Fix:** Do not tie lwIP options to NDEBUG. Set them to fixed values so Debug and Release use the same lwIP configuration:
+- `LWIP_DEBUG 0`, `LWIP_STATS 0`, `LWIP_STATS_DISPLAY 0` in all builds.
+
+Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF etc.), not the network stack.
+
+**References:** `pico/lwipopts.h`.
+
+---
+
+## 7g. TFTP hostname field shows wrong default (Pico IP first time, “transferred successfully” after job)
+
+**Symptom:** On the Control Panel TFTP Disk Image Transfer page (Page 3), the “Enter IP Addr or hostname of server” field shows the wrong default: the **first time** the page is opened it shows the **Pico’s own IP**; **after a successful TFTP job**, returning to that page shows **“transferred successfully”** (or similar status text) instead of the last-used server hostname.
+
+**Root cause:** The MegaFlash **data buffer** is shared. When the Apple sends `CMD_TFTPGETLASTSERVER`, the Pico runs `DoTFTPGetLastServer()` which overwrites `dataBuffer` with `GetTFTPLastServer()` and calls `ResetDataPointer()` (so `registers.r[DATAREG] = dataBuffer[0]`). The Apple then reads the data register to get the hostname via `CopyStringFromDataBuffer(ti_textBuffer)`. The **first byte** the Apple sees on a read of DATAREG is whatever the **PIO** is currently outputting. The PIO’s copy of the registers is updated only when we call `UpdateMegaFlashRegisters()`. After handling the command write we cleared BUSY and updated in-memory `registers`, but the **next** bus cycle that ran might be a **read of STATUSREG** (wait loop); in the read path we have no case for STATUSREG so we hit `default: continue` and **skip** the end-of-loop `UpdateMegaFlashRegisters`. So the PIO was not guaranteed to have the new DATAREG (and cleared BUSY) before the Apple’s first read of DATAREG. The Apple could therefore still see the **previous** content of the data buffer—e.g. the Pico’s IP from a prior WiFi test, or the status string “Completed Successfully” from the last `CMD_TFTPSTATUS` poll—instead of the hostname string just written by `DoTFTPGetLastServer`.
+
+**Fix:**
+
+1. **Pico (`busloop.c`):** Immediately after clearing the BUSY flag in the CMDREG write handler, call `UpdateMegaFlashRegisters(0, registers.i32[0])` so chunk 0 (including DATAREG and STATUSREG) is pushed to the PIO **before** any further bus cycles. Then the Apple’s first read of DATAREG after `SendCommand(CMD_TFTPGETLASTSERVER)` returns will see `dataBuffer[0]` (first character of the last server hostname), not stale data.
+
+2. **Control Panel (`cpanel/tftp.c`):** After `CopyStringFromDataBuffer(ti_textBuffer)`, if the string looks like TFTP status text (e.g. contains “Successfully”, “Completed”, “transferred”, “Transferring”, “Connecting”), clear `ti_textBuffer` to empty so the field shows blank instead of wrong default. This is a defensive fallback if any stale data still appears.
+
+**Takeaway:** Any command that fills the data buffer and resets the data pointer must be followed by an immediate PIO update of chunk 0 so the Apple’s first read of DATAREG sees the new first byte.
+
+**References:** `pico/busloop.c` (CMDREG case, `UpdateMegaFlashRegisters` after clear BUSY), `pico/cmdhandler.c` (`DoTFTPGetLastServer`, `ResetDataPointer`), `pico/tftpstate.c` (`TFTPFormatStatusMessage`), `cpanel/tftp.c` (hostname prefill, `LooksLikeStatusText`).
 
 ---
 
@@ -206,10 +307,12 @@ So “Pico debug mode” = Debug build → UART console, all DEBUG_PRINTF-style 
 | Build SDK path | `cmakeall.sh` | Explicit `-DPICO_SDK_PATH=...` for all cmake invocations |
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo" |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
-| Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug build = UART + logs + bus loop always; Release = no UART, no logs, bus loop only when Apple connected |
+| Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
+| Release testing | §7b, §7c | Test Release build (NTP/TFTP/WiFi) before shipping; use pre-release checklist (§7c) to avoid Debug-only validation |
 | C0C4 diagnostic | `busloop.c` | LED on 1 s on any $C0C4 access; non-blocking |
 | nDEVSEL sense | Both PIO files | Active-low (trigger on low); inverted sense was tried and reverted |
 | TFTP/UDP performance | `udptask.h`, `udptask.cpp` | HEARTBEAT_PERIOD 50→10 ms; 50 ms added latency per packet; blocking flash erase also stalls loop (see §13) |
+| TFTP hostname default | `busloop.c`, `cpanel/tftp.c` | After command that sets data buffer, push chunk 0 to PIO immediately (§7g); clear hostname if it looks like status text |
 
 ---
 

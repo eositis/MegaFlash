@@ -143,9 +143,11 @@ void CUDPTask::Run(const char* ssid, const char* wpakey) {
     do {
       //Run the loop every HEARTBEAT_PERIOD to check the abortRequested flag
       absolute_time_t nextRun = make_timeout_time_ms(HEARTBEAT_PERIOD);
-      
+
+      this->OnBeforeWait();
+
       cyw43_arch_poll();
-      
+
       //DNS Callback
       if (dnsCallbackInvoked) {
         dnsCallbackInvoked = false;
@@ -439,11 +441,16 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
 //
 void CUDPTask::SendUDP(const uint8_t *payload,const uint16_t payloadlen, const uint16_t destPort) {
   cyw43_arch_lwip_begin();
-    struct pbuf *pbuf = pbuf_alloc(PBUF_TRANSPORT, payloadlen, PBUF_RAM);
-    pbuf_take(pbuf,payload,payloadlen);  //Copy payload into pbuf
-    udp_sendto(this->pcb, pbuf, &this->server_addr, destPort);
-    pbuf_free(pbuf);
-  cyw43_arch_lwip_end();  
+  struct pbuf *pbuf = pbuf_alloc(PBUF_TRANSPORT, payloadlen, PBUF_RAM);
+  if (!pbuf) {
+    cyw43_arch_lwip_end();
+    WARN_PRINTF("SendUDP: pbuf_alloc failed len=%u\n", (unsigned)payloadlen);
+    return;  // Caller may retry on next timeout
+  }
+  pbuf_take(pbuf, payload, payloadlen);
+  udp_sendto(this->pcb, pbuf, &this->server_addr, destPort);
+  pbuf_free(pbuf);
+  cyw43_arch_lwip_end();
 }
 
 /////////////////////////////////////////////////////////////////////////////

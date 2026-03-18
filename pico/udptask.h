@@ -120,6 +120,9 @@ class CUDPTask {
     virtual bool EvtAbortRequested();
     virtual void EvtAborted();
     virtual void EvtWatchdogTimeout();
+    /// Called at start of each event-loop iteration, before cyw43_arch_poll.
+    /// Use for deferred work (e.g. flash read) to avoid long work in UDP handler path.
+    virtual void OnBeforeWait() {}
     
 private:
       //

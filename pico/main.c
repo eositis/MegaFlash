@@ -163,20 +163,12 @@ int main() {
   
   //
   // Core1: Apple Bus Loop
+  // Always launch Core1 so the bus loop runs. In Release we previously
+  // only launched when appleConnected; that made the network stack appear
+  // broken when IsAppleConnected() was false at boot (e.g. timing/PHI0).
+  // Matching Debug (always run bus loop) fixes Release network behaviour.
   //
-  // For DEBUG Build, we want the Bus Loop is always running
-  // so that we can turn on Apple computer to do testing at
-  // any time. So, we run Bus Loop and User Terminal on different
-  // CPU core.
-  //
-  // For Release Build, Bus Loop is not executed if Pico is not 
-  // connected to Apple.
-  //
-#ifdef NDEBUG
-  if (appleConnected) multicore_launch_core1(core1Main);  
-#else
-  multicore_launch_core1(core1Main);  //DEBUG build
-#endif
+  multicore_launch_core1(core1Main);
 
   //
   //Save initialized setting from memory to flash if needed
@@ -196,15 +188,17 @@ int main() {
   DEBUG_PRINTF("Free heap  = %d\n",GetFreeHeap());
   
   //
-  //Core0: Running Wifi if connected to Apple IIc
-  //       User Terminal if not.
+  // Core0: On Pico W run the network loop (NTP/TFTP/WiFi test); otherwise
+  // run User Terminal. Use CheckPicoW() so the network stack runs on Pico W
+  // regardless of appleConnected (avoids Release breakage when IsAppleConnected()
+  // is false at boot due to timing).
   //
-  if (appleConnected) {
-    core0Loop();  //Running Wifi
+  if (CheckPicoW()) {
+    core0Loop();  // NTP, TFTP, WiFi test
   } else {
     stdio_usb_init();
     InitPicoLed();
-    
+
     while(1) {
       if (stdio_usb_connected()) {
         UserTerminal();

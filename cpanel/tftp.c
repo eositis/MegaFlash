@@ -53,6 +53,36 @@ static void gotoStatus();
 #define FILENAME_LEN  72
 #define FILENAME_WDTH 36
 
+// Debug/safety helper:
+// Return true if the string looks like an IPv4 address (dotted decimal).
+static bool LooksLikeIPv4Address(const char *s) {
+  uint8_t dots = 0;
+  uint8_t digitsInOctet = 0;
+  uint16_t octetValue = 0;
+
+  if (s == NULL || s[0] == '\0') return false;
+
+  while (*s) {
+    if (isdigit((unsigned char)*s)) {
+      octetValue = (uint16_t)(octetValue * 10 + (uint16_t)(*s - '0'));
+      if (octetValue > 255) return false;
+      ++digitsInOctet;
+      if (digitsInOctet > 3) return false;
+    } else if (*s == '.') {
+      if (digitsInOctet == 0) return false;
+      ++dots;
+      if (dots > 3) return false;
+      digitsInOctet = 0;
+      octetValue = 0;
+    } else {
+      return false;
+    }
+    ++s;
+  }
+
+  return (dots == 3 && digitsInOctet > 0);
+}
+
 /////////////////////////////////////////////////////////////////////
 // Draw Format Window 
 // 
@@ -231,6 +261,18 @@ again2:
     goto again2;
   }  
   strcpy(filename,ti_textBuffer);
+
+  // Defensive check: if the filename looks like an IPv4 address and the
+  // hostname does not, swap them. This catches the "host/file swapped" case
+  // seen during debug without changing normal filenames.
+  if (LooksLikeIPv4Address(filename) && !LooksLikeIPv4Address(hostname)) {
+    static_local char tmp[TFTP_HOSTNAME_MAXLEN+1];
+    strcpy(tmp, hostname);
+    strcpy(hostname, filename);
+    strcpy(filename, tmp);
+    gotoxy(0,ERR_YPOS);
+    cputs("Warning: host/file looked swapped");
+  }
   
   //Copy hostname and filename to data buffer
   SendCommand(CMD_RESETDATAPTR);

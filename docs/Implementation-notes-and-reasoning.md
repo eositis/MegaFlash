@@ -469,13 +469,40 @@ Because this is a non-trivial refactor, a staged approach is safest:
    - Implement UDP/TCP sessions for U2, using the same pump.
    - Remove the now-redundant `CUDPTask` singleton fields and the “ignore callback if arg != runningObject” logic.
 
-**Stage 2 status (skeleton only):** Created `network_pump.h` / `network_pump.cpp` with a preliminary `NetworkPump` and `INetworkSession` interface. The pump currently:
+**Stage 3 status (TFTP lifecycle now managed):** The manager now owns TFTP start/finish/abort bookkeeping even though the packet-level TFTP protocol still uses the legacy task implementation. `ExecuteTFTP()` delegates into `NetworkPump::RunTFTP(...)`, which:
+
+- Logs the TFTP run as a manager-owned legacy operation.
+- Constructs the existing RX/TX TFTP task and runs it under pump bookkeeping.
+- Clears the active-op state on success or failure.
+- Exposes `NetworkPump_RequestAbortAll()` so the Apple reset path can abort the active TFTP run through the manager instead of directly poking the legacy task.
+
+The pump still currently provides the earlier skeleton pieces too:
 
 - Owns lazy initialisation of cyw43 (`Init` / `EnsureWifiConnected`).
 - Provides helpers to create/destroy UDP/TCP pcbs (`CreateUdpPcb`, `DestroyUdpPcb`, `CreateTcpPcb`, `DestroyTcpPcb`) using `cyw43_arch_lwip_begin/end`.
 - Exposes `AddSession`, `RemoveSession`, `PollOnce`, `ScheduleTimer`, `CancelTimer`, and `RequestAbortAll` as **no-op placeholders** ready to be wired up when NTP/TFTP/Uthernet II are migrated.
-- Is compiled into the Pico firmware (`network_pump.cpp` added to `CMakeLists.txt`) but is not referenced from existing code yet, so behaviour is unchanged.
+- Is compiled into the Pico firmware (`network_pump.cpp` added to `CMakeLists.txt`) and now has the first real manager-owned operation (`RunTFTP`), but packet-level session routing is still a future step.
 
-**Takeaway:** The hardware (Pico W + cyw43 + lwIP) can support multiple concurrent UDP/TCP sockets. The primary limitation in the original design was the **software architecture**, which serialized all UDP work through a single `CUDPTask` instance and event loop. Moving to a pump + sessions model unlocks true concurrency between NTP, TFTP, and Uthernet II, and provides a natural place to reset all network state when the Apple II is reset. The new `NetworkPump`/`INetworkSession` skeleton is the first concrete code step toward that architecture; the next step will be migrating a single protocol (likely NTP) to run as a session under the pump.
+**Takeaway:** The hardware (Pico W + cyw43 + lwIP) can support multiple concurrent UDP/TCP sockets. The primary limitation in the original design was the **software architecture**, which serialized all UDP work through a single `CUDPTask` instance and event loop. Moving to a pump + sessions model unlocks true concurrency between NTP, TFTP, and Uthernet II, and provides a natural place to reset all network state when the Apple II is reset. The new `NetworkPump`/`INetworkSession` skeleton is the first concrete code step toward that architecture, and TFTP’s lifecycle is now routed through the pump; the next step is to migrate packet handling and then port another protocol into the shared pump model.
+
+---
+
+## 15. Control Panel TFTP host/file swap safeguard
+
+**Symptom:** When launching TFTP upload from the Control Panel after a TestWifi run, the Pico debug log showed the host and filename arriving swapped or stale, e.g. hostname = the Pico's IP and filename = the typed host.
+
+**Why this was treated as a Control Panel issue:** The Pico-side `CMD_TFTPRUN` parser reads the first NUL-terminated string as hostname and the second as filename. Debug logs showed the Pico receiving wrong values already in `tftp_state`, so the bad state was being sent from the Apple side before the Pico parsed it.
+
+**What we changed:** In `cpanel/tftp.c`, before copying the strings into the MegaFlash data buffer, we now:
+
+- Check whether the filename looks like an IPv4 address.
+- If the filename looks like an IP address while the hostname does not, swap the two values.
+- Show a warning on the TFTP screen (`"Warning: host/file looked swapped"`).
+
+This is intentionally conservative: the common case remains unchanged, but the control panel now catches the exact swapped-host/file pattern observed during debug and avoids sending an obviously wrong TFTP request.
+
+**References:** `cpanel/tftp.c`, `cpanel/ui-textinput.c`, `pico/cmdhandler.c`, `pico/network.cpp`.
+
+*This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

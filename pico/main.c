@@ -35,9 +35,7 @@ void gpio_intr_callback(uint gpio, uint32_t events){
   if (gpio==nRESET_PIN) {
     //Abort TFTP network task if Apple is reset
     //during TFTP transfer
-    if (IsUDPTaskRunning() && !IsNTPTaskRunning()) {
-      UDPTask_RequestAbortIfRunning(); 
-    }
+    NetworkPump_RequestAbortAll();
     
     //Abort Erase Flash Disk
     //Read the note at AbortEraseFlashDisk() for more info

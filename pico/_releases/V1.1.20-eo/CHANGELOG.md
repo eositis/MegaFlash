@@ -1,4 +1,4 @@
-# @VERSION@
+# V1.1.20-eo
 
 ## Network stack and debug updates
 

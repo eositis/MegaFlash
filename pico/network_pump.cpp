@@ -1,8 +1,16 @@
 #include "network_pump.h"
+#include "debug.h"
+#include "network.h"
+#include "tftprxtask.h"
+#include "tftptxtask.h"
+#include "tftpstate.h"
 
 NetworkPump::NetworkPump() :
   cyw43Inited(false),
-  wifiConnected(false) {
+  wifiConnected(false),
+  activeLegacyOperation(LEGACY_OPERATION_NONE),
+  activeLegacyTaskId(0),
+  activeLegacyLabel(NULL) {
 }
 
 NetworkPump::~NetworkPump() {
@@ -78,8 +86,14 @@ void NetworkPump::PollOnce() {
 }
 
 void NetworkPump::RequestAbortAll() {
-  // Placeholder: when sessions are wired up, this will iterate
-  // over active sessions and call Abort() on each.
+  INFO_PRINTF("NETPUMP: RequestAbortAll()\n");
+  if (activeLegacyOperation != LEGACY_OPERATION_NONE) {
+    INFO_PRINTF("NETPUMP: aborting active legacy op=%d label=%s taskid=%u\n",
+                (int)activeLegacyOperation,
+                activeLegacyLabel ? activeLegacyLabel : "(null)",
+                activeLegacyTaskId);
+  }
+  UDPTask_RequestAbortIfRunning();
 }
 
 udp_pcb *NetworkPump::CreateUdpPcb(INetworkSession * /*owner*/, uint16_t local_port) {
@@ -119,5 +133,80 @@ void NetworkPump::ScheduleTimer(INetworkSession * /*owner*/, uint32_t /*timeout_
 
 void NetworkPump::CancelTimer(INetworkSession * /*owner*/) {
   // Placeholder.
+}
+
+void NetworkPump::BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid, const char *label) {
+  activeLegacyOperation = kind;
+  activeLegacyTaskId = taskid;
+  activeLegacyLabel = label;
+  DEBUG_PRINTF("NETPUMP: begin op=%d label=%s taskid=%u\n",
+               (int)kind,
+               label ? label : "(null)",
+               taskid);
+}
+
+void NetworkPump::EndLegacyOperation() {
+  if (activeLegacyOperation != LEGACY_OPERATION_NONE) {
+    DEBUG_PRINTF("NETPUMP: end op=%d label=%s taskid=%u\n",
+                 (int)activeLegacyOperation,
+                 activeLegacyLabel ? activeLegacyLabel : "(null)",
+                 activeLegacyTaskId);
+  }
+  activeLegacyOperation = LEGACY_OPERATION_NONE;
+  activeLegacyTaskId = 0;
+  activeLegacyLabel = NULL;
+}
+
+int32_t NetworkPump::RunTFTP(const uint32_t taskid,
+                             const uint32_t dir,
+                             const uint32_t unitNum,
+                             const char *hostname,
+                             const char *filename,
+                             const bool enable1kBlockSize,
+                             const uint32_t tftpTimeout,
+                             const uint32_t tftpMaxAttempt,
+                             const uint16_t tftpServerPort,
+                             const char *ssid,
+                             const char *wpakey) {
+  BeginLegacyOperation(LEGACY_OPERATION_TFTP, taskid, "TFTP");
+
+  int errorcode = 0;
+  CTFTPRXTask *rxTask = NULL;
+  CTFTPTXTask *txTask = NULL;
+  CUDPTask *runTask = NULL;
+
+  try {
+    DEBUG_PRINTF("NETPUMP: RunTFTP dir=%u unit=%u host=%s file=%s\n",
+                 dir, unitNum,
+                 hostname ? hostname : "(null)",
+                 filename ? filename : "(null)");
+    if (dir==0) {
+      rxTask = new CTFTPRXTask(unitNum, hostname, filename, enable1kBlockSize,
+                               tftpTimeout, tftpMaxAttempt, tftpServerPort);
+      runTask = rxTask;
+    } else if (dir==1) {
+      txTask = new CTFTPTXTask(unitNum, hostname, filename, enable1kBlockSize,
+                               tftpTimeout, tftpMaxAttempt, tftpServerPort);
+      runTask = txTask;
+    } else {
+      assert(0);
+      ERROR_PRINTF("NETPUMP: invalid TFTP direction=%u\n", dir);
+      EndLegacyOperation();
+      return -99998;
+    }
+    runTask->Run(ssid, wpakey);
+  } catch (int e) {
+    ERROR_PRINTF("NETPUMP: TFTP task exception=%d\n", e);
+    errorcode = e;
+  } catch (...) {
+    ERROR_PRINTF("NETPUMP: TFTP task unknown exception\n");
+    errorcode = -99999;
+  }
+
+  if (rxTask) delete rxTask;
+  if (txTask) delete txTask;
+
+  EndLegacyOperation();
+  return errorcode;
 }
 

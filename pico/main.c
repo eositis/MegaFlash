@@ -194,7 +194,36 @@ int main() {
   // is false at boot due to timing).
   //
   if (CheckPicoW()) {
-    core0Loop();  // NTP, TFTP, WiFi test
+    // If no Apple II is detected, keep USB stdio responsive by running the
+    // interactive terminal instead of the network loop. This restores the
+    // previous "USB console works when powered from USB" behaviour.
+    //
+    // When Apple is detected, switch into the network loop (NTP/TFTP/WiFi).
+    if (appleConnected) {
+      core0Loop();  // NTP, TFTP, WiFi test
+    }
+
+    stdio_usb_init();
+    InitPicoLed();
+
+    absolute_time_t nextAppleCheck = make_timeout_time_ms(2000);
+    while (true) {
+      // If Apple becomes connected later, enable reset interrupt and start
+      // the network loop. Note: this only triggers between terminal sessions.
+      if (time_reached(nextAppleCheck)) {
+        nextAppleCheck = make_timeout_time_ms(2000);
+        if (IsAppleConnected()) {
+          EnableAppleResetInterrupt();
+          core0Loop();  // NTP, TFTP, WiFi test
+        }
+      }
+
+      if (stdio_usb_connected()) {
+        UserTerminal();
+      } else {
+        sleep_ms(1000);
+      }
+    }
   } else {
     stdio_usb_init();
     InitPicoLed();

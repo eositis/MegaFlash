@@ -7,6 +7,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 ## Chronology and context (from session work)
 
 - **Version series:** V1.1.23-eo is the last release in the 1.1.x line. As of V1.2.0-eo, the 1.2.x series focuses on bringing **Uthernet II emulation**, **com port**, and **imagewriter emulation** into service.
+- **ip65 / Uthernet II:** U2 emulation was adapted so the ip65 stack (no changes to ip65) works: RECV command advances RX_RD to sn_rx_wr; socket CR is cleared to 0 after each command; default RMSR/TMSR = 0x06; MACRAW RX is fed by wrapping netif->input when socket 0 is opened in MACRAW. U2 debug logging uses prefix `[u2]` and is gated by UTHERNET2_DEBUG (Debug build only), not NDEBUG. See `docs/ip65-Uthernet-II-integration.md`.
 - **Uthernet II**: Confirmed U2 at $C0C4–$C0C7 only; no GPIO slot select. Fixed read-back of Mode Register (chunk 1 vs chunk 0). Added C0C4 diagnostic LED (1 s on any $C0C4 access).
 - **GPIO pulls**: A2/A3 pulldowns disabled (bus-driven). nDEVSEL pull-up first disabled at user request, then re-enabled when C0C4 was not seen; with pull-up enabled, C0C4 still not recognized.
 - **Build**: PICO_SDK_PATH added to cmakeall.sh; version bump + “-eo” + date on each build; version-bump script fixed (grep uniqueness, strip newlines); release UF2s copied to `_releases/<version>/`.
@@ -297,6 +298,46 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ---
 
+## 10c. Control panel: firmware version left of clock (`DisplayTime`)
+
+**Requirement:** MegaFlash Control Panel should show the Pico firmware build string immediately to the **left** of the live clock on the bottom text line.
+
+**What happened:** `_DisplayTime` in `cpanel/asm-megaflash.s` had been trimmed to only run `CMD_GETTIMESTR` and paint cols 32–39, so the version disappeared. The firmware still implements `CMD_GETFIRMWAREVER` (`pico/cmdhandler.c` → `DoGetFirmwareVer`, 12 bytes with high bit set).
+
+**Fix:** Call `CMD_GETFIRMWAREVER` first, copy 12 bytes from `paramreg` to screen RAM `$7D0+20` (cols 20–31), then `CMD_GETTIMESTR` to `$7D0+32` (cols 32–39). Extend `_ClearTime` to blank cols 20–39 so the format flow that clears the clock does not leave stale version text.
+
+**References:** `cpanel/asm-megaflash.s` (`_DisplayTime`, `_ClearTime`), `pico/cmdhandler.c` (`DoGetFirmwareVer`).
+
+---
+
+## 10d. Drives Enable: `gotoxy` Y is window-relative (cc65)
+
+**Symptom:** Flash/RAM drive enable ticks updated on the wrong row when toggled (about **YPOS** lines too low with `YPOS=6`).
+
+**Root cause:** In cc65’s `libsrc/apple2/gotoxy.s`, `_gotoxy` does `CV = WNDTOP + y` (after `popa` for Y). The second argument is **relative to the scroll window top**, not an absolute screen row. Code in `drivesenable.c` passed `YPOS + row` as if matching `wnd_DrawWindow`’s content origin—effectively adding `WNDTOP` twice for the vertical component.
+
+**Fix:** Use window-relative rows only: drive `i` → `PrintCheckbox(i, …)`; RAM row → `listCount`; ROM row → `listCount + 1` (and `romdiskRow = listCount + 1` for the ROM line `gotoxy` calls). Same pattern as `gotoxy(1, HEIGHT-1)` elsewhere (relative index inside the window).
+
+**References:** cc65 `apple2/gotoxy.s`, `cpanel/drivesenable.c`, `cpanel/ui-wnd.c` (`wnd_DrawWindow` sets `WNDTOP`).
+
+---
+
+## 10e. Git: `1.1.x` maintenance branch
+
+**Purpose:** Keep a named line of development for **1.1.x** patches (hotfixes on the shipped 1.1.x codebase) while `main` continues with newer work (e.g. 1.2.x).
+
+**Branch:** `1.1.x` (created at the same commit as `main` when the branch was introduced; push with `git push -u origin 1.1.x` when credentials allow).
+
+**Typical workflow:**
+
+1. **Patch the 1.1.x line:** `git checkout 1.1.x` → edit → `make -C cpanel` and `cmake --build pico/pico_release` (and `pico2_release`) as usual → commit on `1.1.x` → `git push origin 1.1.x`.
+2. **Return to tip of `main`:** `git checkout main` (and `git pull` if collaborating).
+3. **Optional:** Cherry-pick a fix from `1.1.x` onto `main`, or merge `main` into `1.1.x` only when you intentionally bring `main` changes into the maintenance line.
+
+**Note:** Uncommitted work in the working tree is visible on whichever branch is checked out; **commit** release snapshots on `1.1.x` so the branch records the exact tree (e.g. V1.1.24-eo sources and `pico/_releases/V1.1.24-eo/` artifacts you care to track).
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -313,6 +354,9 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | nDEVSEL sense | Both PIO files | Active-low (trigger on low); inverted sense was tried and reverted |
 | TFTP/UDP performance | `udptask.h`, `udptask.cpp` | HEARTBEAT_PERIOD 50→10 ms; 50 ms added latency per packet; blocking flash erase also stalls loop (see §13) |
 | TFTP hostname default | `busloop.c`, `cpanel/tftp.c` | After command that sets data buffer, push chunk 0 to PIO immediately (§7g); clear hostname if it looks like status text |
+| CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
+| Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
+| Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 
 ---
 

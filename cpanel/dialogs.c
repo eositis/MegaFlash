@@ -12,6 +12,9 @@
 #include "asm.h"
 #include "textstrings.h"
 
+// Defined in cpanel/main.c
+extern UserSettings_t config;
+
 
 //Working Variables
 static uint8_t key;
@@ -89,6 +92,12 @@ void ShowEraseSettingsDialog() {
     DriveMapping(false);  //EraseAllSettings() disable RAMDisk. Disable drive mapping to make sure we can access
                           //to all drives
     LoadConfig();   //Reload Config
+    //Control Panel always enables ROM disk at startup (for access ordering),
+    //but after a full reset the new default should be "ROM disk hidden"
+    //unless explicitly enabled in the Drives Enable page.
+    if (!(config.configbyte1 & ROMDISKFLAG)) {
+      DisableRomdisk();
+    }
     DisplayTime();  //Timezone may have changed. Update the clock
     
     cputs(strDone);  

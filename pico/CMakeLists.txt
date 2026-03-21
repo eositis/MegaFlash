@@ -108,6 +108,11 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SYS_CLK_MHZ=150)
 endif()
 
 
+# U2 debug logging (independent of NDEBUG): enable in Debug build for [u2] UART output
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE UTHERNET2_DEBUG=1)
+endif()
+
 #enable stdio 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=3000)
 pico_enable_stdio_usb(${CMAKE_PROJECT_NAME} 1)

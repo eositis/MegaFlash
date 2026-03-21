@@ -362,13 +362,13 @@ _DriveMapping:
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ DisplayTime()
 ; Get firmware version (CMD_GETFIRMWAREVER) and time (CMD_GETTIMESTR)
-; from MegaFlash. Display build ID left of clock at bottom of screen.
-; Version at cols 20-31, time at cols 32-39. CMD_GETTIMESTR unchanged
-; for ProDOS compatibility.
+; from MegaFlash: version at cols 20-31 (12 chars), time at cols 32-39.
+; Version is left of the clock on the bottom line; main menu NTP checkbox
+; is in the window body (not on that line).
 ;
 _DisplayTime:   
 .ifndef TESTBUILD
-                ;Fetch version string (12 bytes)
+                ;Firmware version string (12 bytes, high bit set)
                 lda #CMD_GETFIRMWAREVER
                 jsr execute
                 ldx #0
@@ -377,8 +377,7 @@ _DisplayTime:
                 inx
                 cpx #12
                 bne :-
-
-                ;Fetch time string (8 bytes)
+                ;Time string (8 bytes)
                 lda #CMD_GETTIMESTR
                 jsr execute
                 ldx #0
@@ -390,20 +389,28 @@ _DisplayTime:
                 rts
 .else
                 ldx #0
-:               lda @timstr,x
-                ora #$80        ;set high-bit
+:               lda @verstr,x
+                ora #$80
                 sta $7D0+20,x
                 inx
-                cpx #20
+                cpx #12
+                bne :-
+                ldx #0
+:               lda @timstr,x
+                ora #$80        ;set high-bit
+                sta $7D0+32,x
+                inx
+                cpx #8
                 bne :-
                 rts
-@timstr:        .byte "V1.1.13-eo  11:50 AM"
+@verstr:        .byte "V0.0.0-test"
+@timstr:        .byte "11:50 AM"
 .endif                
 
 
 ;/////////////////////////////////////////////////////////
 ; void __fastcall__ ClearTime()
-; Clear the version + time from screen (20 chars at cols 20-39)
+; Clear version + time from screen (cols 20-39)
 ;
 _ClearTime:     lda #' '|$80
                 ldx #19

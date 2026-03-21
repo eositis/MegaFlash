@@ -4,6 +4,17 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* U2 debug logging: independent of NDEBUG. Enable with -DUTHERNET2_DEBUG=1 (e.g. in Debug build). */
+#ifndef UTHERNET2_DEBUG
+#define UTHERNET2_DEBUG 0
+#endif
+#if UTHERNET2_DEBUG
+#include <stdio.h>
+#define U2_DEBUGF(...) printf("[u2] " __VA_ARGS__)
+#else
+#define U2_DEBUGF(...) do {} while (0)
+#endif
+
 /** Call once at startup before the bus loop. */
 void U2_Init(void);
 

@@ -77,13 +77,13 @@ static void PackFlags() {
 
 
 ////////////////////////////////////////////////////////////////////////
-// Print or Clear the checkbox
+// Print or Clear the checkbox (tick only; parens drawn by PrintDriveListWithCheckboxes).
 //
-// Input: index   - Index of checkbox (1-N)
+// Input: relY   - Row within the scroll window (cc65 gotoxy() adds WNDTOP to Y)
 //        checked - Checked or not
 //
-static void PrintCheckbox(uint8_t index,bool checked) {
-  gotoxy(32,index);
+static void PrintCheckbox(uint8_t relY, bool checked) {
+  gotoxy(32, relY);
   cputc(checked?'\304':' ');  //Tick or space
 }
 
@@ -106,8 +106,8 @@ void DoDrivesEnable() {
   DrawWindowFrame();
   PrintDriveListWithCheckboxes(listCount, enableFlags, ramdiskEnableFlag);
   
-  //ROM Disk line - row after last drive. Header at YPOS, drive i at YPOS+i, so last at YPOS+listCount
-  romdiskRow = YPOS + listCount + 1;
+  //ROM Disk line - row after last drive (window-relative Y for gotoxy; WNDTOP is set by wnd_DrawWindow)
+  romdiskRow = listCount + 1;
   gotoxy(2, romdiskRow);
   cputs("R");
   gotoxy(6, romdiskRow);
@@ -141,7 +141,7 @@ void DoDrivesEnable() {
     //Toggle RAMDisk
     if (i == listCount) {
       ramdiskEnableFlag = !ramdiskEnableFlag;
-      PrintCheckbox(YPOS + listCount, ramdiskEnableFlag);
+      PrintCheckbox(listCount, ramdiskEnableFlag);
       continue;
     }
     
@@ -149,7 +149,7 @@ void DoDrivesEnable() {
     if (i>=1 && i<listCount) {
       newFlag = !enableFlags[i];
       enableFlags[i] = newFlag;
-      PrintCheckbox(YPOS + i, newFlag);
+      PrintCheckbox(i, newFlag);
       continue;
     }
     

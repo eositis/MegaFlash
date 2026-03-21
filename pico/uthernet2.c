@@ -33,6 +33,7 @@ static uint16_t read_net16(const uint8_t *p) {
 }
 
 static void u2_reset(void) {
+  U2_DEBUGF("reset\n");
   memset(u2_memory, 0, sizeof(u2_memory));
   u2_mode_register = 0;
   for (int i = 0; i < W5100_NUM_SOCKETS; i++)
@@ -60,14 +61,14 @@ static void u2_reset(void) {
     u2_memory[ra + W5100_SN_DHAR5] = 0xFF;
     u2_memory[ra + W5100_SN_TTL]   = 0x80;
   }
-  /* set default buffer sizes (same as AppleWin: 0x55 = 2K per socket) */
-  u2_memory[W5100_RMSR] = 0x55;
-  u2_memory[W5100_TMSR] = 0x55;
+  /* Default buffer sizes: 0x06 so ip65 chip-check path accepts without full reset; ip65 then writes 0x0A. */
+  u2_memory[W5100_RMSR] = 0x06;
+  u2_memory[W5100_TMSR] = 0x06;
   /* apply sizes to socket base/size */
   {
     uint16_t base = W5100_TX_BASE;
     const uint16_t end = W5100_RX_BASE;
-    uint8_t val = 0x55;
+    uint8_t val = 0x06;
     for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
       u2_sockets[i].transmit_base = base;
       uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
@@ -80,7 +81,7 @@ static void u2_reset(void) {
   {
     uint16_t base = W5100_RX_BASE;
     const uint16_t end = W5100_MEM_SIZE;
-    uint8_t val = 0x55;
+    uint8_t val = 0x06;
     for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
       u2_sockets[i].receive_base = base;
       uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
@@ -274,7 +275,11 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   uint16_t mask = size - 1;
   uint16_t base = s->receive_base;
   uint16_t total = (uint16_t)(2 + len);
-  if (get_rx_rsr(socket_i) + total > size) return;
+  if (get_rx_rsr(socket_i) + total > size) {
+    U2_DEBUGF("MACRAW RX socket %d drop len=%u (no room)\n", socket_i, (unsigned)len);
+    return;
+  }
+  U2_DEBUGF("MACRAW RX socket %d len=%u\n", socket_i, (unsigned)len);
   u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(len >> 8);
   s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
   u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)len;
@@ -326,6 +331,7 @@ static void send_data(int i) {
     if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
     for (int j = 0; j < n; j++)
       buf[j] = u2_memory[base + ((rd + j) & mask)];
+    U2_DEBUGF("MACRAW TX socket %d len=%u\n", i, (unsigned)(uint16_t)n);
     U2_Net_SendMacraw(i, buf, (uint16_t)n);
   }
   /* Advance TX_RD to TX_WR */
@@ -343,21 +349,23 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       uint8_t mr = u2_memory[(address & 0xFF00) + W5100_SN_MR];
       uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      U2_DEBUGF("socket %d OPEN mr=0x%02x port=%u\n", i, mr, (unsigned)port);
       switch (mr & W5100_SN_MR_PROTO_MASK) {
       case W5100_SN_MR_UDP:
-        if (U2_Net_OpenUdp(i, port) == 0) { /* ok */ }
-        else u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+        if (U2_Net_OpenUdp(i, port) == 0) { U2_DEBUGF("  UDP opened\n"); }
+        else { u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED; U2_DEBUGF("  UDP open failed\n"); }
         break;
       case W5100_SN_MR_TCP:
-        if (U2_Net_OpenTcp(i) == 0) u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_INIT;
-        else u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+        if (U2_Net_OpenTcp(i) == 0) { u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_INIT; U2_DEBUGF("  TCP opened\n"); }
+        else { u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED; U2_DEBUGF("  TCP open failed\n"); }
         break;
       case W5100_SN_MR_MACRAW:
-        if (U2_Net_OpenMacraw(i) == 0) u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_MACRAW;
-        else u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+        if (U2_Net_OpenMacraw(i) == 0) { u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_MACRAW; U2_DEBUGF("  MACRAW opened\n"); }
+        else { u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED; U2_DEBUGF("  MACRAW open failed\n"); }
         break;
       default:
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+        U2_DEBUGF("  unknown mode\n");
         break;
       }
       break;
@@ -369,6 +377,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
                    | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
       uint16_t dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
                      | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
+      U2_DEBUGF("socket %d CONNECT %u.%u.%u.%u:%u\n", i,
+                (unsigned)(dip >> 24) & 0xff, (unsigned)(dip >> 16) & 0xff,
+                (unsigned)(dip >> 8) & 0xff, (unsigned)dip & 0xff, (unsigned)dport);
       if (U2_Net_ConnectTcpEx(i, dip, dport) != 0)
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
       break;
@@ -376,24 +387,37 @@ static void write_socket_register(uint16_t address, uint8_t value) {
     case W5100_SN_CR_LISTEN: {
       uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      U2_DEBUGF("socket %d LISTEN port=%u\n", i, (unsigned)port);
       if (U2_Net_ListenTcp(i, port) != 0)
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
       break;
     }
     case W5100_SN_CR_CLOSE:
     case W5100_SN_CR_DISCON:
+      U2_DEBUGF("socket %d CLOSE/DISCON\n", i);
       U2_Net_Close(i);
       u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
       break;
     case W5100_SN_CR_SEND:
+      U2_DEBUGF("socket %d SEND\n", i);
       send_data(i);
       break;
-    case W5100_SN_CR_RECV:
+    case W5100_SN_CR_RECV: {
+      /* ip65: advance RX_RD to sn_rx_wr so RSR becomes 0 until next frame */
+      u2_socket_t *s = &u2_sockets[i];
+      uint16_t size = s->receive_size;
+      uint16_t wr = (size > 0) ? (s->sn_rx_wr & (size - 1)) : 0;
+      u2_memory[(address & 0xFF00) + W5100_SN_RX_RD0] = (uint8_t)(wr >> 8);
+      u2_memory[(address & 0xFF00) + W5100_SN_RX_RD1] = (uint8_t)(wr & 0xFF);
       U2_Net_RecvConfirm(i);
+      U2_DEBUGF("socket %d RECV -> RX_RD=%u\n", i, (unsigned)wr);
       break;
+    }
     default:
       break;
     }
+    /* Command complete: clear CR so host (e.g. ip65) sees command done */
+    u2_memory[address] = 0;
   }
 }
 
@@ -416,6 +440,7 @@ static void write_value(uint8_t value) {
 }
 
 void U2_Init(void) {
+  U2_DEBUGF("init\n");
   u2_data_address = 0;
   U2_Net_Init(u2_push_rx, u2_push_rx_macraw);
   u2_reset();
@@ -456,8 +481,10 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out) {
     case U2_C0X_MODE_REGISTER:
       if (data & W5100_MR_RST)
         u2_reset();
-      else
+      else {
         u2_mode_register = data;
+        U2_DEBUGF("mode=0x%02x (AI=%d IND=%d)\n", data, (data & W5100_MR_AI) ? 1 : 0, (data & W5100_MR_IND) ? 1 : 0);
+      }
       break;
     case U2_C0X_ADDRESS_HIGH:
       u2_data_address = (uint16_t)((data << 8) | (u2_data_address & 0x00FF));

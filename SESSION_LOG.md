@@ -4,9 +4,24 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-03-21
+
+- **Git branch `1.1.x`:** Created local branch `1.1.x` at current `main` tip (`60ee358`) for 1.1.x maintenance; switched back to `main`. `git push -u origin 1.1.x` failed here (no GitHub credentials in environment)—run that locally to publish. Workflow documented in `docs/Implementation-notes-and-reasoning.md` §10e.
+- **Release folder `pico/_releases/V1.1.24-eo/`:** Copied `megaflash-pico.uf2` and `megaflash-pico2.uf2` from current `pico_release` / `pico2_release` builds; added `CHANGELOG.md` (1.1.24-eo fixes + prior 1.1.23-eo notes).
+- **Firmware build number V1.1.24-eo (0x001c):** Set `FIRMWAREVER` / `FIRMWAREVERSTR` in `pico/defines.h`; rebuilt `pico_release` and `pico2_release` UF2s.
+- **Build:** `make -C cpanel` (no changes), `cmake --build pico/pico_release` and `pico/pico2_release` (-j4); UF2s `pico/pico_release/megaflash.uf2`, `pico/pico2_release/megaflash.uf2`.
+- **Drives Enable checkbox toggle wrong row:** cc65 `gotoxy(x,y)` adds `WNDTOP` to `y` (window-relative). `PrintCheckbox` used `YPOS + driveIndex` as if `y` were absolute screen row, so toggles drew **YPOS** lines too low (6). Fixed: pass window-relative rows (`i`, `listCount`, `listCount+1` for ROM); `romdiskRow` for the ROM line is now `listCount+1` instead of `YPOS+listCount+1`. `cpanel/drivesenable.c`.
+- **Control panel firmware version left of clock:** `_DisplayTime` in `cpanel/asm-megaflash.s` had been reduced to time-only (cols 32–39), dropping `CMD_GETFIRMWAREVER`. Restored: poll `CMD_GETFIRMWAREVER` first and paint 12 chars at cols 20–31, then `CMD_GETTIMESTR` at 32–39. `ClearTime` now clears cols 20–39 so format/erase flow does not leave stale version text. TESTBUILD shows a placeholder version string.
+
+## 2026-03-20
+
+- **ROM disk default after “Reset all options to default”:** Changed firmware/UI defaults so `ROMDISKFLAG` is not set by default (`common/defines.h`: `DEFCFGBYTE1 = AUTOBOOTFLAG`). After `EraseAllSettings()` the new default is now ROM disk hidden unless the user enables it on the Drives Enable page. Additionally, `cpanel/dialogs.c` now calls `DisableRomdisk()` immediately after `LoadConfig()` during the erase-all flow when `ROMDISKFLAG` is not set (so ROM disk isn’t left enabled just because Control Panel enables it on startup).
+
 ## 2026-03-17
 
+- **ip65 / Uthernet II adaptations and [u2] debug:** (1) RECV advances RX_RD to sn_rx_wr so ip65 sees 0 bytes until next frame; (2) socket CR cleared to 0 after each command so ip65 wait loop exits; (3) default RMSR/TMSR set to 0x06 for ip65 chip-check path; (4) MACRAW RX: netif input hook installed when socket 0 opens in MACRAW, wrapper feeds received frames via U2_Net_FeedMacrawRx(0,...) then calls original input; (5) U2 debug logging prefixed with `[u2]`, gated by UTHERNET2_DEBUG (set in Debug build only), not NDEBUG. Debug build: `pico/CMakeLists.txt` adds UTHERNET2_DEBUG=1 for Debug; built pico_debug and pico2_debug. `pico/uthernet2.c`, `pico/uthernet2.h`, `pico/uthernet2_net.c`, `docs/ip65-Uthernet-II-integration.md`.
 - **Version 1.2.0 / end of 1.1.x:** Set firmware to V1.2.0-eo (0x0020); 1.1.23 is the last 1.1.x build. 1.2 series will focus on Uthernet II emulation, com port, and imagewriter emulation. Updated `pico/defines.h` (version + comment), `pico/CHANGELOG-NEXT.md` (1.2 series intro).
+- **Doc cleanup:** Removed accidental untracked `cc65/cc65-megaflash-lib.md` and restored `docs/cc65-megaflash-lib.md` from `HEAD`.
 - **TFTP hostname field wrong default (Pico IP / “transferred successfully”):** First time TFTP page opened showed Pico’s IP; after a successful job, field showed status text. Root cause: shared data buffer; PIO was not updated with new DATAREG immediately after CMD_TFTPGETLASTSERVER, so Apple’s first read saw stale data. Fix: in `busloop.c` call `UpdateMegaFlashRegisters(0, registers.i32[0])` right after clearing BUSY in CMDREG handler so chunk 0 (including DATAREG) is pushed before next bus cycle. Defensive: in `cpanel/tftp.c` after `CopyStringFromDataBuffer`, if string looks like status text (e.g. “Successfully”, “Completed”), clear to blank. §7g in Implementation notes.
 - **TFTP breaks when debug disabled – lwIP tied to NDEBUG:** Disabling debug (NDEBUG) was changing lwIP: in `lwipopts.h`, LWIP_DEBUG/LWIP_STATS/LWIP_STATS_DISPLAY were set only when `#ifndef NDEBUG`, so release built a different lwIP and TFTP broke. Fixed by setting LWIP_DEBUG, LWIP_STATS, LWIP_STATS_DISPLAY to 0 always so Debug and Release use the same lwIP; only our logging is gated by NDEBUG. Reverted extra cyw43_arch_poll() added for wrong fix. §7f in Implementation notes. `pico/lwipopts.h`, `pico/udptask.cpp`.
 - **Release = same codegen as Debug, only NDEBUG:** Debug worked, Release stalled; difference is -O3 (Release) vs -Og (Debug), not just UART. Set CMAKE_C_FLAGS_RELEASE and CMAKE_CXX_FLAGS_RELEASE to "-g -Og -DNDEBUG" in CMakeLists.txt so Release only disables assert/UART; codegen matches Debug. §7e in Implementation notes. Rebuilt pico_release with new flags.
@@ -117,6 +132,7 @@ This project’s local log. One log per project; stored in the project root.
 - **Pico debug rebuild after Control Panel change:** Rebuilt `pico_debug` and `pico2_debug` after updating `cpanel.bin`, so the Pico firmware image now packages the new Control Panel code (`cpanel.s` was rebuilt as part of the Pico target).
 - **Control Panel release repackaged into Pico:** Reconfirmed the non-debug Control Panel build path (`make release`) and repackaged the Pico debug targets so the bundled `cpanel.bin` remains the release build while the Pico firmware is rebuilt around it.
 - **Versioned release build:** Ran `./cmakeall.sh` to bump the firmware to `V1.1.20-eo` (`0x0018`), rebuild the release firmware, and write `_releases/V1.1.20-eo/CHANGELOG.md`. The generated release notes now include the network stack work: `NetworkPump`/`INetworkSession` skeleton, TFTP lifecycle routing through the manager, the host/file swap safeguard, and the new debug logging details.
+- **USB console not responsive on PicoW when powered from USB (no Apple II):** Fixed in `pico/main.c` by running `UserTerminal()` on the USB console when `CheckPicoW()` is true but `IsAppleConnected()` is false, instead of immediately entering `core0Loop()` (network loop). Rebuilt `pico_debug` and `pico2_debug`. (Treat as v1.1.x hotfix.)
 
 ---
 

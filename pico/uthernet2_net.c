@@ -3,6 +3,7 @@
  * Only built when CYW43/lwIP is available (Pico W).
  */
 #include "uthernet2_net.h"
+#include "uthernet2.h"
 #include "w5100_regs.h"
 
 #if PICO_CYW43_ARCH_POLL
@@ -21,6 +22,9 @@
 
 static u2_push_rx_fn push_rx_cb;
 static u2_push_rx_macraw_fn push_rx_macraw_cb;
+
+/* Saved netif input for MACRAW RX hook (set in OpenMacraw(0), restored in Close(0)). */
+static netif_input_fn u2_saved_netif_input;
 
 typedef enum { PCB_NONE = 0, PCB_UDP, PCB_TCP, PCB_MACRAW } pcb_type_t;
 
@@ -110,11 +114,28 @@ void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
     sockets[i].status = W5100_SN_SR_CLOSED;
 }
 
+/* Feed received Ethernet frames to socket 0 when in MACRAW (for ip65). */
+static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
+  if (sockets[0].type == PCB_MACRAW && push_rx_macraw_cb && p && p->tot_len > 0 && p->tot_len <= U2_MACRAW_MAX_FRAME) {
+    uint8_t buf[U2_MACRAW_MAX_FRAME];
+    u16_t len = (u16_t)pbuf_copy_partial(p, buf, p->tot_len, 0);
+    if (len > 0)
+      push_rx_macraw_cb(0, buf, len);
+  }
+  return u2_saved_netif_input(p, inp);
+}
+
 int U2_Net_OpenMacraw(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS) return -1;
   U2_Net_Close(i);
   sockets[i].type = PCB_MACRAW;
   sockets[i].status = W5100_SN_SR_SOCK_MACRAW;
+  /* Install netif input hook for socket 0 so received frames are fed to MACRAW RX (ip65). */
+  if (i == 0 && netif_list && netif_list->input && !u2_saved_netif_input) {
+    u2_saved_netif_input = netif_list->input;
+    netif_list->input = u2_netif_input_wrapper;
+    U2_DEBUGF("netif input hook installed for MACRAW RX\n");
+  }
   return 0;
 }
 
@@ -142,6 +163,12 @@ void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len) {
 
 void U2_Net_Close(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS) return;
+  /* Restore netif input when socket 0 is closed */
+  if (i == 0 && u2_saved_netif_input && netif_list) {
+    netif_list->input = u2_saved_netif_input;
+    u2_saved_netif_input = NULL;
+    U2_DEBUGF("netif input hook removed\n");
+  }
   u2_net_socket_t *s = &sockets[i];
   if (s->type == PCB_UDP && s->pcb.udp) {
     udp_remove(s->pcb.udp);

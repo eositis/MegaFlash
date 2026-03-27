@@ -409,20 +409,27 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
   this->dns_result_ipaddr = IPADDR4_INIT(0); 
 
   ip_addr_t ipaddr;
+  /* Arm timeout before dns_gethostbyname(): lwIP may deliver dns_callback before this
+   * call returns ERR_INPROGRESS; if dnsTimeout were still unset until after the call,
+   * the event loop can mis-order timeout vs. callback handling. */
+  dnsTimeout = make_timeout_time_ms(timeout);
   cyw43_arch_lwip_begin();
   int err = dns_gethostbyname(hostname, &ipaddr, dns_callback, this);
   cyw43_arch_lwip_end();
   if (err == ERR_OK) {  //dns_gethostbyname() returns IP address immediately
+    dnsTimeout = TIMEOUT_NEVER;
     DEBUG_PRINTF("dns_gethostbyname() returns ERR_OK. resolved IP Address=%s\n",ipaddr_ntoa(&ipaddr));
     this->EvtDNSResult(DNSERR_NONE,&ipaddr);
     return;
   }
   else if (err == ERR_ARG) { 
+    dnsTimeout = TIMEOUT_NEVER;
     //Invalid host
     this->EvtDNSResult(DNSERR_INVALIDHOST,NULL);
     return;
   } 
   else if (err != ERR_INPROGRESS) {
+    dnsTimeout = TIMEOUT_NEVER;
     //Other unexpected error, report as timeout
     this->EvtDNSResult(DNSERR_TIMEOUT,NULL);
     return;
@@ -430,7 +437,7 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
   
   //Waiting for callback
   DEBUG_PRINTF("DNSLooup(): waiting for callback\n");
-  dnsTimeout = make_timeout_time_ms(timeout);
+  /* dnsTimeout already armed for ERR_INPROGRESS */
 }
 
 

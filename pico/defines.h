@@ -10,8 +10,8 @@
 
 ****************************************************/
 
-#define FIRMWAREVER     0x001c
-#define FIRMWAREVERSTR  "V1.1.24-eo"
+#define FIRMWAREVER     0x001d
+#define FIRMWAREVERSTR  "V1.1.25-eo"
 // 0x0000 = V0.1
 // 0x0001 = V0.2   18-Apr-2025
 // 0x0002 = V0.3   05-May-2025
@@ -41,6 +41,7 @@
 // 0x001a = V1.1.22-eo 18-Mar-2026
 // 0x001b = V1.1.23-eo 18-Mar-2026  (last 1.1.x; 1.2.x = Uthernet II, com port, imagewriter)
 // 0x001c = V1.1.24-eo 21-Mar-2026
+// 0x001d = V1.1.25-eo 27-Mar-2026
 // 0x0020 = V1.2.0-eo
 
 //Deivce Signature Bytes

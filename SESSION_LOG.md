@@ -4,6 +4,18 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-03-27
+
+- **Git `1.2.x` branch:** Created **`1.2.x`** at the same commit as **`main`** (`aadb80f`, firmware **`V1.2.0-eo` / `0x0020` in `pico/defines.h`). **`git push -u origin 1.2.x`** — **`main`** and **`1.2.x`** both track the **1.2.x** development line; **`1.1.x`** remains the **1.1.x** maintenance line (e.g. V1.1.25-eo).
+
+- **Release V1.1.25-eo (`0x001d`):** Bumped **`pico/defines.h`**; built **`cpanel`**, **`pico_release`** + **`pico2_release`**; UF2s + **`CHANGELOG.md`** → **`pico/_releases/V1.1.25-eo/`** (`megaflash-pico.uf2`, `megaflash-pico2.uf2`). DNS timeout ordering fix included from **`pico/udptask.cpp`**.
+
+- **1.1.x local DNS fix (V1.1.24-eo baseline):** **`CUDPTask::DNSLookup`** — set **`dnsTimeout`** **before** **`dns_gethostbyname(...)`**; **`dnsTimeout = TIMEOUT_NEVER`** on immediate result paths (`ERR_OK`, `ERR_ARG`, other non-`ERR_INPROGRESS`). Legacy **`dns_callback`** stack only. **`pico/udptask.cpp`**; **`cmake --build pico/pico2_release`** OK.
+
+- **`main` ← `1.1.x`:** Checked out **`main`** and **fast-forward** merged **`1.1.x`** (commit `aadb80f` — DNS race, RAM disk 256 KiB, TFTP heap diagnostics, NetworkPump/U2/u2_monitor, `uthernet2_net.cpp`, build scripts, docs). **`main`** and **`1.1.x`** now point at the same commit locally.
+
+---
+
 ## 2026-03-22
 
 - **1.1.24 DNS intermittent lookup fix:** `CUDPTask::DNSLookup` had a race: `RegisterDnsPendingOwner(this)` was set **after** `dns_gethostbyname`, so fast callbacks could be ignored (`not pending owner`) and later timeout. Moved registration **before** request and clear owner on immediate returns (`ERR_OK`/`ERR_ARG`/other). `pico/udptask.cpp`; `cmake --build pico/pico2_debug` OK. Documented §14.11 + summary row.

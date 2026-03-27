@@ -28,6 +28,7 @@ bool IsNTPTaskRunning();
 bool IsTestWifiTaskRunning();
 bool IsTFTPTaskRunning();
 void NetworkPump_RequestAbortAll();
+void NetworkPump_PollOnce(void);
 
 
 NetworkError_t GetNetworkTime();
@@ -36,6 +37,11 @@ void ExecuteTFTP(const uint32_t taskid);
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+class NetworkPump;
+NetworkPump &GetNetworkPump();
 #endif
 
 #endif

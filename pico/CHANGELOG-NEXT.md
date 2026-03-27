@@ -1,6 +1,6 @@
 # @VERSION@
 
-**1.2 series:** V1.1.23-eo was the final release in the 1.1.x line. The 1.2.x series focuses on bringing **Uthernet II emulation**, **com port**, and **imagewriter emulation** into service.
+**1.2 series:** V1.1.24-eo was the final release in the 1.1.x line. Development from **V1.2.0-eo** onward uses the **1.2.x** series, focused on **Uthernet II emulation**, **com port**, and **imagewriter emulation**.
 
 ## Network stack and debug updates
 

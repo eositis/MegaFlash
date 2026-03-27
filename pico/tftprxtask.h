@@ -22,7 +22,7 @@ protected:
   bool serverTIDAccepted;     //Server TID (remote_port) accepted
 
   //Event Handlers
-  //void EvtStart();
+  void EvtStart() override;
   void EvtDNSResult(const int dns_error, const ip_addr_t *ipaddr);
   void EvtUDPReceived(const uint8_t* payload,uint16_t payloadlen,ip_addr_t remote_addr,uint16_t remote_port);
   void EvtTimeout(uint32_t arg);

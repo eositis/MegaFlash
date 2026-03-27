@@ -10,8 +10,9 @@
 
 ****************************************************/
 
-#define FIRMWAREVER     0x001c
-#define FIRMWAREVERSTR  "V1.1.24-eo"
+#define FIRMWAREVER     0x0020
+#define FIRMWAREVERSTR  "V1.2.0-eo"
+// Per-build id is NOT here: CMake generates build_id.h (Unix + human-readable UTC string; see build_id.h.in, build-both.sh).
 // 0x0000 = V0.1
 // 0x0001 = V0.2   18-Apr-2025
 // 0x0002 = V0.3   05-May-2025
@@ -39,9 +40,9 @@
 // 0x0018 = V1.1.20-eo 17-Mar-2026
 // 0x0019 = V1.1.21-eo 18-Mar-2026
 // 0x001a = V1.1.22-eo 18-Mar-2026
-// 0x001b = V1.1.23-eo 18-Mar-2026  (last 1.1.x; 1.2.x = Uthernet II, com port, imagewriter)
-// 0x001c = V1.1.24-eo 21-Mar-2026
-// 0x0020 = V1.2.0-eo
+// 0x001b = V1.1.23-eo 18-Mar-2026
+// 0x001c = V1.1.24-eo 21-Mar-2026  (last 1.1.x maintenance release)
+// 0x0020 = V1.2.0-eo 21-Mar-2026  (1.2.x series: Uthernet II, com port, imagewriter)
 
 //Deivce Signature Bytes
 #define SIGNATURE1 0x88
@@ -63,7 +64,7 @@
 #ifdef PICO_RP2040
 #define RAMDISK_SIZE (140*1024)
 #else
-#define RAMDISK_SIZE (400*1024)   /* Free heap is 46k when size =400k */
+#define RAMDISK_SIZE (256*1024)   /* RP2350: was 400 KiB; smaller leaves more heap for WiFi/TFTP */
 #endif
 
 //Slinky Size in Bytes

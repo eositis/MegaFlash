@@ -1,0 +1,16 @@
+---
+description: Build both Pico W and Pico 2 W firmware when verifying pico changes
+globs: pico/**/*
+alwaysApply: false
+---
+
+# Pico firmware: build both boards
+
+MegaFlash ships **two** UF2s: **Pico W** (RP2040, `pico_release`) and **Pico 2 W** (RP2350, `pico2_release`).
+
+When running a compile check or test build after editing `pico/`:
+
+- Prefer **`./pico/build-both.sh`** — configures and builds **both** Release targets, builds **cpanel** first, does **not** bump `defines.h`.
+- **`./pico/cmakeall.sh`** — full release flow (version bump, all four CMake dirs, copies `_releases/…`).
+
+Do **not** verify only `pico_release` unless the user explicitly asked for RP2040-only.

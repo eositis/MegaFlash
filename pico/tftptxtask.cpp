@@ -41,21 +41,25 @@ CTFTPTXTask::~CTFTPTXTask() {
 //Override Run()
 //
 void CTFTPTXTask::Run(const char* ssid, const char* wpakey){
-  tftp_critical_section_enter_blocking();
-  tftp_state.status = TFTPSTATUS_WIFICONNECTING;
-  tftp_state.tsize = blockCount * PRODOS_BLOCKSIZE;    //Size of file being sent in bytes.
-  tftp_critical_section_exit();
-  INFO_PRINTF("tftp_state.status = TFTPSTATUS_WIFICONNECTING\n");
-  
   CTFTPTask::Run(ssid,wpakey);
 }
 
 //////////////////////////////////////////////////////////
 //
 // Event Start Handler
-// See CTFTPTask::EvtStart();
+// Must run when the session starts (including NetworkPump path, which does not call Run()).
+// tsize is required for Control Panel block line "N/M (pct%)" via TFTPFormatBlocksMessage.
 //
-
+void CTFTPTXTask::EvtStart() {
+  const uint32_t tsize_bytes = blockCount * PRODOS_BLOCKSIZE;
+  tftp_critical_section_enter_blocking();
+  tftp_state.status = TFTPSTATUS_WIFICONNECTING;
+  tftp_state.tsize = tsize_bytes;
+  tftp_critical_section_exit();
+  INFO_PRINTF("tftp_state.status = TFTPSTATUS_WIFICONNECTING, tsize bytes=%lu\n",
+              (unsigned long)tsize_bytes);
+  CTFTPTask::EvtStart();
+}
 
 //////////////////////////////////////////////////////////
 //

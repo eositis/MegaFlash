@@ -34,21 +34,20 @@ CTFTPRXTask::CTFTPRXTask(const uint32_t unitNum,const char* hostname,const char*
 // Override Run()
 //
 void CTFTPRXTask::Run(const char* ssid, const char* wpakey){
+  CTFTPTask::Run(ssid,wpakey);
+}
+
+//////////////////////////////////////////////////////////
+//
+// Event Start Handler (NetworkPump path does not call Run())
+//
+void CTFTPRXTask::EvtStart() {
   tftp_critical_section_enter_blocking();
   tftp_state.status = TFTPSTATUS_WIFICONNECTING;
   tftp_critical_section_exit();
   INFO_PRINTF("tftp_state.status = TFTPSTATUS_WIFICONNECTING\n");
- 
-  CTFTPTask::Run(ssid,wpakey);
+  CTFTPTask::EvtStart();
 }
-
-
-//////////////////////////////////////////////////////////
-//
-// Event Start Handler
-// See CTFTPTask::EvtStart();
-//
-
 
 //////////////////////////////////////////////////////////
 //

@@ -114,6 +114,11 @@ void __no_inline_not_in_flash_func(BusLoop)() {
      * C0x0–C0x3 = MegaFlash ($C0C0–$C0C3); C0x4–C0x7 = Uthernet II ($C0C4–$C0C7);
      * C0x8–C0xB / C0xC–C0xF reserved for future ACIA emulation ($C0C8–$C0CB, $C0CC–$C0CF). */
     if (addr >= U2_C0X_OFFSET && addr <= U2_C0X_LAST) {
+      /*
+       * Uthernet II ($C0C4-$C0C7): lower nibble addr 4..7 maps to registers.r[4..7],
+       * i.e. chunk 1 (registers.i32[1]). RP2350: UpdateMegaFlashRegisters(1, ...) feeds SM1
+       * so the next read presents this byte on the data bus — see docs §2 / §1d.
+       */
       /* Diagnostic: light activity LED for 1 s on any $C0C4 access */
       if (addr == U2_C0X_OFFSET) {
         TurnOnActLed();
@@ -132,8 +137,23 @@ void __no_inline_not_in_flash_func(BusLoop)() {
           registers.r[addr] = (uint8_t)data;
         }
       }
+      /* RP2350 a2bus prefetches SM1 FIFO for the *next* 6502 read; r[7] ($C0C7) must already
+       * hold the byte the W5100 would return on the next DATA read, or the first read after
+       * setting the address can latch a stale byte (monitor saw $08 then $07/$D0). */
+      registers.r[7] = U2_PeekDataPort();
+#ifndef PICO_RP2040
+      /* RP2350 a2bus SM delays rxfifo pull behind IRQ 0; do not update chunk FIFOs until
+       * the SM has pulled (same rule as bottom of loop). U2 used `continue` and skipped this,
+       * which can corrupt $C0C4–$C0C7 read data and break ip65 W5100 RTR probe → "Device not found". */
+      if (pio_sm_is_rx_fifo_empty(pio0, SM_LISTENER)) {
+        while (pio_interrupt_get(pio0, 0)) {
+          tight_loop_contents();
+        }
+      }
+#endif
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
-      if (++u2_poll_counter >= 500) {
+      /* Drain U2 net often; [u2]/[u2m] UART flush runs on core 0 (U2_MonPollFlush in main), not here. */
+      if (++u2_poll_counter >= 32) {
         u2_poll_counter = 0;
         U2_Poll();
       }

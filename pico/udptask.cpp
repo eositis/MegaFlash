@@ -2,14 +2,11 @@
 #include "pico/stdlib.h"
 #include "pico/sync.h"
 #include "lwip/dns.h"
+#include "lwip/pbuf.h"
 #include "udptask.h"
+#include "network.h"
 #include "debug.h"
 #include "misc.h"
-
-
-
-//Function Prototype
-void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pub, const ip_addr_t *remote_addr, u16_t remot_port);
 
 //--------------------------------------------------------------------
 // This function is modified from cyw43_arch_wifi_connect_timeout_ms()
@@ -85,10 +82,13 @@ CUDPTask::CUDPTask() {
 // Keep WiFi online between sessions - only tear down task resources (UDP PCB, buffer).
 //
 CUDPTask::~CUDPTask() {
-  cyw43_arch_lwip_begin();  
-  if (this->pcb) udp_remove(this->pcb);
+  cyw43_arch_lwip_begin();
+  if (this->pcb) {
+    GetNetworkPump().DestroyUdpPcb(this->pcb);
+    this->pcb = NULL;
+  }
   if (rxbuffer) delete[] rxbuffer;
-  cyw43_arch_lwip_end();   
+  cyw43_arch_lwip_end();
   // Do not disconnect or deinit WiFi - keep it online for next TFTP/NTP/etc.
 }
 
@@ -116,97 +116,110 @@ void CUDPTask::InitCyw43() {
 
 
 ///////////////////////////////////////////////////////////////////
+// WiFi + UDP pcb (shared first phase of Run)
+//
+void CUDPTask::BeginRun(const char* ssid, const char* wpakey) {
+  InitCyw43();
+  ConnectWifi(ssid, wpakey);
+  wifiConnected = true;
+
+  pcb = GetNetworkPump().CreateUdpPcb(this, 0 /* ephemeral port */);
+  DEBUG_PRINTF("CreateUdpPcb() pcb = 0x%x\n", (uint32_t)pcb);
+}
+
+///////////////////////////////////////////////////////////////////
+// One iteration of the UDP event loop (poll, events, wait)
+//
+bool CUDPTask::PumpNetworkIteration() {
+  absolute_time_t nextRun = make_timeout_time_ms(HEARTBEAT_PERIOD);
+
+  this->OnBeforeWait();
+
+  cyw43_arch_poll();
+
+  if (dnsCallbackInvoked) {
+    dnsCallbackInvoked = false;
+    dnsTimeout = TIMEOUT_NEVER;
+    WatchdogUpdate();
+    GetNetworkPump().ClearDnsPendingOwner(this);
+    this->EvtDNSResult(dns_error, &dns_result_ipaddr);
+  }
+
+  if (time_reached(dnsTimeout)) {
+    dnsTimeout = TIMEOUT_NEVER;
+    WatchdogUpdate();
+    GetNetworkPump().ClearDnsPendingOwner(this);
+    this->EvtDNSResult(DNSERR_TIMEOUT, NULL);
+  }
+
+  if (udpCallbackInvoked) {
+    udpCallbackInvoked = false;
+    WatchdogUpdate();
+    EvtUDPReceived(rxbuffer, rxdatalen, rxremoteipaddr, rxremoteport);
+  }
+
+  if (time_reached(timerTimeout)) {
+    timerTimeout = TIMEOUT_NEVER;
+    WatchdogUpdate();
+    this->EvtTimeout(timerArg);
+  }
+
+  if (!completed && CYW43_LINK_UP != cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA)) {
+    WatchdogUpdate();
+    this->EvtConnectionLost();
+  }
+
+  if (!completed && time_reached(watchdogTimeout)) {
+    watchdogTimeout = TIMEOUT_NEVER;
+    this->EvtWatchdogTimeout();
+    throw CUDPTask::ERR_WATCHDOG;
+  }
+
+  if (CUDPTask::abortRequested) CUDPTask::Abort(this);
+
+  if (!completed) {
+    cyw43_arch_wait_for_work_until(MIN3(nextRun, dnsTimeout, timerTimeout));
+  }
+
+  return !completed;
+}
+
+///////////////////////////////////////////////////////////////////
 // Call this function to execute the task
 //
-void CUDPTask::Run(const char* ssid, const char* wpakey) {
+void CUDPTask::EnterRunSession() {
   CUDPTask::isRunning = true;
   CUDPTask::abortRequested = false;
   CUDPTask::runningObject = this;
+}
+
+void CUDPTask::LeaveRunSession() {
+  GetNetworkPump().ClearDnsPendingOwner(this);
+  CUDPTask::isRunning = false;
+  CUDPTask::runningObject = NULL;
+}
+
+void CUDPTask::StartEventsAfterBeginRun() {
+  WatchdogUpdate();
+  this->EvtStart();
+}
+
+void CUDPTask::Run(const char* ssid, const char* wpakey) {
   TRACE_PRINTF("CUDPTask::Run()\n");
 
+  EnterRunSession();
   try {
-    InitCyw43();
-    ConnectWifi(ssid,wpakey);
-    wifiConnected = true;
-    
-    //Create udp_pcb
-    pcb = udp_new();
-    DEBUG_PRINTF("udp_new() pcb = 0x%x\n",(uint32_t)pcb);
-    udp_bind(pcb, IP4_ADDR_ANY, 0 /*random port*/); //Bind local IF
-    udp_recv(pcb,udp_callback,this);  //Set callback function
-    
-    //Start Event
-    WatchdogUpdate();
-    this->EvtStart();
+    BeginRun(ssid, wpakey);
+    StartEventsAfterBeginRun();
 
-    //Event Loop
-    do {
-      //Run the loop every HEARTBEAT_PERIOD to check the abortRequested flag
-      absolute_time_t nextRun = make_timeout_time_ms(HEARTBEAT_PERIOD);
-
-      this->OnBeforeWait();
-
-      cyw43_arch_poll();
-
-      //DNS Callback
-      if (dnsCallbackInvoked) {
-        dnsCallbackInvoked = false;
-        dnsTimeout = TIMEOUT_NEVER;
-        WatchdogUpdate();
-        this->EvtDNSResult(dns_error, &dns_result_ipaddr);
-      }
-        
-      //DNS Query Timeout
-      if (time_reached(dnsTimeout)) {
-        dnsTimeout = TIMEOUT_NEVER;
-        WatchdogUpdate();      
-        this->EvtDNSResult(DNSERR_TIMEOUT, NULL);
-      }
-      
-      //UDP Callback
-      if (udpCallbackInvoked) {
-        udpCallbackInvoked = false;
-        WatchdogUpdate();      
-        EvtUDPReceived(rxbuffer,rxdatalen,rxremoteipaddr,rxremoteport);
-      }
-      
-      //Timer Timeout
-      if (time_reached(timerTimeout)) {
-        timerTimeout = TIMEOUT_NEVER;
-        WatchdogUpdate();      
-        this->EvtTimeout(timerArg);
-      }
-      
-      //WIFI Connection Lost, suppress the event if completed has been set
-      if (!completed && CYW43_LINK_UP != cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA)) {
-        WatchdogUpdate();      
-        this->EvtConnectionLost();
-      }
-      
-      //Watchdog Timer
-      if (!completed && time_reached(watchdogTimeout)) {
-        watchdogTimeout = TIMEOUT_NEVER;
-        this->EvtWatchdogTimeout();
-        throw CUDPTask::ERR_WATCHDOG;
-      }
-      
-      //Abort Request
-      if (CUDPTask::abortRequested) CUDPTask::Abort(this);
-      
-      if (!completed) {
-        cyw43_arch_wait_for_work_until(MIN3(nextRun,dnsTimeout,timerTimeout));
-      }
-    }while(!completed);
+    while (PumpNetworkIteration()) {}
 
     DEBUG_PRINTF("Event Loop completed normally\n");
-    CUDPTask::isRunning = false;
-    CUDPTask::runningObject = NULL;        
-    
-  }catch(...) {
-    //Make sure isRunning and runningObject is set to false and NULL if any exception occurs
-    CUDPTask::isRunning = false;
-    CUDPTask::runningObject = NULL;    
-    throw; 
+    LeaveRunSession();
+
+  } catch (...) {
+    LeaveRunSession();
+    throw;
   }
 }
 
@@ -355,45 +368,16 @@ const char* CUDPTask::GetErrorCodeMessage(const int error){
 // ######  #     #  #####     ####### ####### ####### #    #  #####  #      
 ///////////////////////////////////////////////////////////////////////////////////////////
 
-////////////////////////////////////////////////////////////
-//DNS Query callback function
-//ipaddr is the reply from DNS server
-//Copy it to addr_out member of arg structure
-void dns_callback(const char *hostname, const ip_addr_t *ipaddr, void *arg){
-  TRACE_PRINTF("dns_callback() invoked\n");
-  CUDPTask* pTask = (CUDPTask*) arg;
-  
-  //Read note below.
-  if (CUDPTask::GetRunningObject()!=pTask || pTask==NULL) {
-    WARN_PRINTF("dns_callback() arg NOT POINTING to current UDPTask object. Ignore it!\n");
-    return;
-  }
-
-  pTask->dnsCallbackInvoked = true;
-  if (ipaddr!=NULL) {
-    pTask->dns_error = DNSERR_NONE;
-    pTask->dns_result_ipaddr = *ipaddr;
+void CUDPTask::OnDnsGetHostByNameResult(const ip_addr_t *ipaddr) {
+  TRACE_PRINTF("OnDnsGetHostByNameResult() invoked\n");
+  dnsCallbackInvoked = true;
+  if (ipaddr != NULL) {
+    dns_error = DNSERR_NONE;
+    dns_result_ipaddr = *ipaddr;
   } else {
-    pTask->dns_error = DNSERR_INVALIDHOST;
+    dns_error = DNSERR_INVALIDHOST;
   }
 }
-//If we don't check pTask is point to Running Task, it causes problem with the following sequence.
-//
-//1) To test DNS Failed scenario, the internet link of router is disconnected. 
-//2) Enable Network Time Sync
-//3) Power up Apple
-//4) Pico tries to do Network Time Sync
-//5) While the Time sync is in progress, start Test Wifi
-//6) pcb member variable is corrupted and it crashes when udp_remove() is called in the destructor.
-//
-//The cause is that dns_callback() is invoked when Test Wifi is running. But arg is not
-//pointing to CTestWifiTask object. 
-//Since CNTPTask is aborted, the dns_callback() belongs to the aborted CNTPTask, not
-//CTestWifiTask. 
-//So, we need to check if arg is actually pointing to running task. Otherwise, it causes
-//memory corruption when we write ipaddr and DNSERR_NONE with pTask pointer.
-
-
 
 ////////////////////////////////////////////////////////////
 // To resolve IP Address from hostname
@@ -407,22 +391,28 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
   TRACE_PRINTF("CUDPTask::DNSLooup(): hostname = %s\n",hostname);
   this->dnsCallbackInvoked = false;
   this->dns_result_ipaddr = IPADDR4_INIT(0); 
+  // Arm pending owner before dns_gethostbyname(): callback may fire quickly.
+  GetNetworkPump().RegisterDnsPendingOwner(this);
 
   ip_addr_t ipaddr;
   cyw43_arch_lwip_begin();
-  int err = dns_gethostbyname(hostname, &ipaddr, dns_callback, this);
+  int err = dns_gethostbyname(hostname, &ipaddr, NetworkPump_LegacyDnsCallback,
+                              static_cast<void *>(static_cast<INetworkSession *>(this)));
   cyw43_arch_lwip_end();
   if (err == ERR_OK) {  //dns_gethostbyname() returns IP address immediately
+    GetNetworkPump().ClearDnsPendingOwner(this);
     DEBUG_PRINTF("dns_gethostbyname() returns ERR_OK. resolved IP Address=%s\n",ipaddr_ntoa(&ipaddr));
     this->EvtDNSResult(DNSERR_NONE,&ipaddr);
     return;
   }
   else if (err == ERR_ARG) { 
+    GetNetworkPump().ClearDnsPendingOwner(this);
     //Invalid host
     this->EvtDNSResult(DNSERR_INVALIDHOST,NULL);
     return;
   } 
   else if (err != ERR_INPROGRESS) {
+    GetNetworkPump().ClearDnsPendingOwner(this);
     //Other unexpected error, report as timeout
     this->EvtDNSResult(DNSERR_TIMEOUT,NULL);
     return;
@@ -453,38 +443,26 @@ void CUDPTask::SendUDP(const uint8_t *payload,const uint16_t payloadlen, const u
   cyw43_arch_lwip_end();
 }
 
-/////////////////////////////////////////////////////////////////////////////
-// UDP Received callback function
-//
-// UDP Payload is copied to rxbuffer
-// remote IP address and port is copied to rxremoteipaddr and rxremoteport
-// udpCallbackInvoked is set to true
-//
-void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port) {
-  TRACE_PRINTF("udp_callback invoked\n");
-  CUDPTask* pTask = (CUDPTask*) arg;  
-  
-  //make sure the callback is for this object
-  //see note at dns_callback()
-  if (CUDPTask::GetRunningObject()==pTask && pTask!=NULL) {
-    if (pbuf->tot_len <= UDP_BUFFERSIZE) {
-      //Copy recevied data to CUDPTask object
-      pTask->udpCallbackInvoked=true;
-      pTask->rxdatalen = pbuf->tot_len;
-      pbuf_copy_partial(pbuf,pTask->rxbuffer,pbuf->tot_len,0);
-      pTask->rxremoteipaddr=*remote_addr;
-      pTask->rxremoteport=remote_port;
-    } else {
-      assert(0);
-    }
-  } else {
-    WARN_PRINTF("udp_callback() arg NOT POINTING to current UDPTask object. Ignore it!\n");
-  }
-  
-  if (pbuf) pbuf_free(pbuf);
+void CUDPTask::OnUdpRecvPbuf(struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port) {
+  (void)pcb;
+  NotifyUdpReceived(p, addr, port);
 }
 
-
+void CUDPTask::NotifyUdpReceived(struct pbuf *p, const ip_addr_t *remote_addr, uint16_t remote_port) {
+  TRACE_PRINTF("NotifyUdpReceived()\n");
+  if (!p || !remote_addr) {
+    return;
+  }
+  if (p->tot_len > UDP_BUFFERSIZE) {
+    assert(0);
+    return;
+  }
+  udpCallbackInvoked = true;
+  rxdatalen = p->tot_len;
+  pbuf_copy_partial(p, rxbuffer, p->tot_len, 0);
+  rxremoteipaddr = *remote_addr;
+  rxremoteport = remote_port;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // To Start a Timer

@@ -7,7 +7,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 ## Feature List
 
 - 128MB/256MB Capacity, divided into 4/8 ProDOS Drives
-- 400kB RAM Disk
+- 256kB RAM Disk on Pico 2 (RP2350); 140kB on Pico W (RP2040)
 - ROM Disk for Disaster Recovery
 - 256kB Slinky Emulation on stock firmware
 - Boot Menu (Similar to ROM4X/5X)

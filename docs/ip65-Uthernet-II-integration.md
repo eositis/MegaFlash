@@ -129,7 +129,7 @@ Current code stores the written value in `u2_memory[address]` for SN_CR; the **r
 |------|--------|------------|
 | **RECV advances RX_RD** | `uthernet2.c` | In SN_CR = RECV handler, set Socket’s RX_RD0/RX_RD1 in `u2_memory` to current `sn_rx_wr` (with socket mask) so RSR goes to 0. |
 | **Socket Command = 0 after command** | `uthernet2.c` | After handling OPEN, SEND, RECV, CLOSE, etc. in `write_socket_register`, write 0 to the socket’s Command Register in `u2_memory` so ip65’s “wait for command done” loop sees 0. |
-| **MACRAW RX feed** | `uthernet2_net.c` | **Done:** When socket 0 is opened in MACRAW, the netif input is replaced with `u2_netif_input_wrapper`, which copies the received frame into the W5100 RX buffer via `push_rx_macraw_cb(0, buf, len)` then calls the original `netif->input`. Restored when socket 0 is closed. |
+| **MACRAW RX feed** | `uthernet2_net.cpp` | **Done:** When socket 0 is opened in MACRAW, the netif input is replaced with `u2_netif_input_wrapper`, which copies the received frame into the W5100 RX buffer via `push_rx_macraw_cb(0, buf, len)` then calls the original `netif->input`. Restored when socket 0 is closed. |
 | **RMSR default 0x06 (optional)** | `uthernet2.c` `u2_reset()` | Set `u2_memory[W5100_RMSR] = 0x06` and same for TMSR if you want to avoid ip65’s “not 0x06 → full reset” path on first init. |
 
 ---
@@ -137,5 +137,5 @@ Current code stores the written value in `u2_memory[address]` for SN_CR; the **r
 ## 5. References
 
 - **ip65:** `drivers/ethernet.s`, `drivers/w5100.s`, `drivers/uthernet2.s`, `drivers/w5100driver.s`.
-- **MegaFlash:** `pico/uthernet2.c`, `pico/uthernet2_net.c`, `pico/w5100_regs.h`, `pico/busloop.c` (C0x4–C0x7 dispatch).
+- **MegaFlash:** `pico/uthernet2.c`, `pico/uthernet2_net.cpp`, `pico/w5100_regs.h`, `pico/busloop.c` (C0x4–C0x7 dispatch).
 - **W5100:** Datasheet register map (MR, RTR, RMSR/TMSR, SHAR, Sn_MR, Sn_CR, Sn_SR, Sn_TX_FSR, Sn_TX_WR/RD, Sn_RX_RSR, Sn_RX_RD, MACRAW mode, RECV/SEND semantics).

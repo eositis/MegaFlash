@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* U2 debug logging: independent of NDEBUG. Enable with -DUTHERNET2_DEBUG=1 (e.g. in Debug build). */
+/* U2 debug logging: independent of NDEBUG. Enable with -DUTHERNET2_DEBUG=1 (e.g. in Debug build).
+ * Debug also enables U2_ACTIVITY_MONITOR: UART lines prefixed [u2m] (see u2_monitor.c). */
 #ifndef UTHERNET2_DEBUG
 #define UTHERNET2_DEBUG 0
 #endif
@@ -18,7 +19,7 @@
 /** Call once at startup before the bus loop. */
 void U2_Init(void);
 
-/** Advance network and drain RX; call periodically from the bus loop. */
+/** Advance network (lwIP); call periodically from the bus loop. Monitor UART flush is core 0 only — see U2_MonPollFlush in main. */
 void U2_Poll(void);
 
 /**
@@ -27,5 +28,8 @@ void U2_Poll(void);
  * read_byte_out: on read, set to the byte to drive on the bus; ignored on write.
  */
 void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
+
+/** Byte the W5100 would return on the next read of the DATA port ($C0C7) at current ptr/MR (no increment). */
+uint8_t U2_PeekDataPort(void);
 
 #endif /* _UTHERNET2_H */

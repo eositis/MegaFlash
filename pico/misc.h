@@ -25,6 +25,8 @@ void TurnOffPicoLed();
 void DumpBuffer(const uint8_t *buffer,uint len);
 uint32_t GetTotalHeap(void);
 uint32_t GetFreeHeap(void);
+/** UART: region size, free bytes, mallinfo (arena / used / largest free) — for OOM diagnosis. */
+void DebugPrintHeapState(const char *tag);
 void SystemReset();
 void measure_freqs();
 

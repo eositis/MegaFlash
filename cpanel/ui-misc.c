@@ -152,7 +152,7 @@ void PrintDriveInfo(uint8_t unit) {
 //     2                            (X)
 //              ....
 //     8   --non-ProDOS--   65535   (X)
-//     9   ---RAM Disk---     400   (X)
+//     9   ---RAM Disk---     512   (X)   // 256 KiB / 512 bytes (RP2350 firmware)
 //
 void PrintDriveList(uint8_t unitCount) {
   PrintDriveListWithCheckboxes(unitCount, NULL, false);

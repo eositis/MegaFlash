@@ -31,7 +31,7 @@ This document describes the Uthernet II (W5100) emulation implemented in the Meg
 | `pico/uthernet2.h` | Public API: `U2_Init()`, `U2_Poll()`, `U2_HandleBusAccess(busdata, read_byte_out)`. |
 | `pico/uthernet2.c` | W5100 state (8 KB RAM, mode/data address, sockets), C0x decode, read/write value, RX push into buffer, SEND (read TX buffer → network). |
 | `pico/uthernet2_net.h` | Network API: init with push_rx callback, open/close/connect/listen/send, get status, poll. |
-| `pico/uthernet2_net.c` | lwIP TCP/UDP: per-socket pcbs, OPEN/CONNECT/LISTEN/CLOSE/SEND, recv callbacks → push_rx. Stubbed when `PICO_CYW43_ARCH_POLL` is not set. |
+| `pico/uthernet2_net.cpp` | lwIP TCP/UDP: per-socket pcbs, OPEN/CONNECT/LISTEN/CLOSE/SEND, recv callbacks → push_rx; NetworkPump for UDP poll path. Stubbed when `PICO_CYW43_ARCH_POLL` is not set. |
 | `pico/w5100_regs.h` | W5100/Uthernet II constants: C0x mask, MR/GAR/SUBR/SHAR/SIPR, socket regs, SN_MR/SN_CR/SN_SR, etc. |
 | `pico/defines.h` | `U2_C0X_OFFSET` (4). No GPIO slot select. |
 | `pico/main.c` | `U2_Init()` only (no pin 27 or other slot-select init). |
@@ -100,7 +100,7 @@ RSR (receive size) is **computed** when the Apple reads SN_RX_RSR0/1: `(sn_rx_wr
 
 - **Threading:** All lwIP use is inside `cyw43_arch_lwip_begin()` / `cyw43_arch_lwip_end()`. The bus loop (and thus `U2_Poll()`) runs on core 1; CYW43/lwIP are shared with other tasks (e.g. TFTP on core 0), so the arch lock serializes access.
 - **Polling:** `U2_Poll()` is called every 500 Uthernet II bus cycles (addr ≥ 4) to run `cyw43_arch_poll()` and thus advance TCP/UDP and run recv callbacks.
-- **Non–Pico W builds:** When `PICO_CYW43_ARCH_POLL` is not defined, `uthernet2_net.c` is stubbed (all net calls no-op, status always CLOSED).
+- **Non–Pico W builds:** When `PICO_CYW43_ARCH_POLL` is not defined, `uthernet2_net.cpp` is stubbed (all net calls no-op, status always CLOSED).
 
 ---
 

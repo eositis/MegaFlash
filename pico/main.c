@@ -5,6 +5,7 @@
 #include "hardware/spi.h"
 #include "pico/multicore.h"
 #include "defines.h"
+#include "build_id.h"
 #include "debug.h"
 #include "a2bus.h"
 #include "busloop.h"
@@ -21,6 +22,7 @@
 #include "network.h"
 #include "tftpstate.h"
 #include "uthernet2.h"
+#include "u2_monitor.h"
 
 static inline void InitActLed() {
   gpio_init(ACT_LED_PIN);
@@ -88,6 +90,7 @@ void __no_inline_not_in_flash_func(core0Loop)() {
   if (CheckPicoW()) {
     do {
       updateNTPNow = false;
+      U2_MonPollFlush();
       int err = GetNetworkTime();
       DEBUG_PRINTF("GetNTP err=%d (%d=NETERR_NONE)\n",err,NETERR_NONE);
       if (err==NETERR_NONE) nextUpdateTime = make_timeout_time_ms(NEXTUPDATE_SUCCESS);
@@ -97,6 +100,8 @@ void __no_inline_not_in_flash_func(core0Loop)() {
         do {
           uint32_t param;
           bool msgReceived = multicore_fifo_pop_timeout_us(50*1000,&param);
+          NetworkPump_PollOnce();
+          U2_MonPollFlush();
           if (msgReceived) {
             struct IpcMsg* msg=(struct IpcMsg*)param;
             if (msg->command == IPCCMD_WIFITEST) {
@@ -128,19 +133,20 @@ int main() {
   gpio_pull_down(1);
   gpio_pull_down(26);
 
-  U2_Init();
-
 #ifndef NDEBUG
   //For sending Debug Message to UART
   stdio_uart_init();    //Default baud: 115200
 
   //Disable stdout buffering
   //otherwise, text is not printed to uart or usb correctly.
-  setbuf(stdout, NULL); 
+  setbuf(stdout, NULL);
 #else
   //Disable stdio_uart for Release Build
   stdio_set_driver_enabled(&stdio_uart, false);
 #endif
+
+  /* After UART: U2_Init / U2_MonInit use printf — if this ran earlier, [u2]/[u2m] boot text was lost. */
+  U2_Init();
 
   //Load userConfig and Wifi Settings from security registers
   LoadAllConfigs();  
@@ -179,7 +185,12 @@ int main() {
   //
   //Print Debug Infomation to serial port
   //
-  DEBUG_PRINTF("\nMegaflash DEBUG Firmware Version %d\n",FIRMWAREVER);
+  DEBUG_PRINTF("\nMegaflash DEBUG Firmware Version %d (%s)\n",
+               FIRMWAREVER, FIRMWAREVERSTR);
+  /* Always print: build scripts set Unix time + UTC string; plain CMake leaves 0 / "unknown". */
+  DEBUG_PRINTF("Firmware build: %s  (%lu Unix s)\n",
+               FIRMWARE_BUILD_TIMESTAMP_STR,
+               (unsigned long)(uint32_t)FIRMWARE_BUILD_TIMESTAMP);
   DEBUG_PRINTF("CPU Clock Speed =%dMHz\n",clock_get_hz(clk_sys)/1000000);
   DEBUG_PRINTF("clk_peri =%dMHz\n",clock_get_hz(clk_peri)/1000000);
   DEBUG_PRINTF("SPI Speed = %dMHz\n",spi_get_baudrate(spi0)/1000000);
@@ -208,6 +219,8 @@ int main() {
 
     absolute_time_t nextAppleCheck = make_timeout_time_ms(2000);
     while (true) {
+      /* Drain U2 [u2]/[u2m] queue on core 0 when not in core0Loop (bus still uses core 1). */
+      U2_MonPollFlush();
       // If Apple becomes connected later, enable reset interrupt and start
       // the network loop. Note: this only triggers between terminal sessions.
       if (time_reached(nextAppleCheck)) {

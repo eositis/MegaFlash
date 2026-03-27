@@ -14,7 +14,14 @@
 #include "debug.h"
 #include "network_pump.h"
 #include "tftp.h"
+#include <ctime>
 #include <typeinfo>
+
+static NetworkPump g_networkPump;
+
+NetworkPump &GetNetworkPump() {
+  return g_networkPump;
+}
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,10 +62,6 @@ bool IsTFTPTaskRunning() {
 
 //tftp_state defined in tftpstate.c
 extern "C" volatile tftp_state_t tftp_state;
-
-static NetworkPump g_networkPump;
-
-
 
 ////////////////////////////////////////////////////////////
 // Convert CUDPTask exception to TFTP ERROR
@@ -144,6 +147,10 @@ void NetworkPump_RequestAbortAll() {
   g_networkPump.RequestAbortAll();
 }
 
+void NetworkPump_PollOnce(void) {
+  g_networkPump.PollOnce();
+}
+
 
 ////////////////////////////////////////////////////////////
 //
@@ -153,74 +160,20 @@ NetworkError_t GetNetworkTime() {
   if (!GetNTPClientEnabled()) {
     return NETERR_NONE;
   }
-  
-  try {
-    CNTPTask task;
-    task.Run(GetSSID(),GetWPAKey());
-  
-    if (task.GetCompleted()) {
-      //Successful! Pass to RTC
-      InitRTC(task.GetSecondsSince1970(),GetTimezoneOffset());
-    } else {
-      return NETERR_NTPFAILED;
-    }
-  } catch(int e) {
-    ERROR_PRINTF("CUDPTask Execption caught:%d (%s)\n", e,CUDPTask::GetErrorCodeMessage(e));
-    return (e==CUDPTask::ERR_NOTPICOW)?NETERR_NOTPICOW:NETERR_NTPFAILED;
-  } catch(...) {
-    //make sure no exception goto C code
-    DEBUG_PRINTF("Execption caught: unknown\n");
-    return NETERR_NTPFAILED;
+
+  time_t epoch;
+  NetworkError_t err = g_networkPump.RunNTP(GetSSID(), GetWPAKey(), &epoch);
+  if (err == NETERR_NONE) {
+    InitRTC(epoch, GetTimezoneOffset());
   }
-  
-  return NETERR_NONE;
+  return err;
 }
 
 
 
 void TestWifi(TestResult_t *testResultPtr) {
   DEBUG_PRINTF("TestWifi()\n");
-  try {
-    CTestWifiTask task(testResultPtr);
-    task.Run(GetSSID(),GetWPAKey());
-    
-    if (task.GetCompleted()) {
-      testResultPtr->error = NETERR_NONE;
-      testResultPtr->testCompleted = true;
-      return;
-    }
-  } catch(int e) {
-      NetworkError_t netError =  NETERR_NONE;
-      //Map Exception to NetworkError_t    
-      switch(e) {
-        case CUDPTask::ERR_NOTPICOW: netError = NETERR_NOTPICOW; break;
-        case CUDPTask::ERR_SSIDNOTSET: netError = NETERR_SSIDNOTSET; break;
-        case CUDPTask::ERR_NONET: netError = NETERR_NONET; break;
-        case CUDPTask::ERR_BADAUTH: netError= NETERR_BADAUTH; break;
-        case CUDPTask::ERR_NOIP: netError = NETERR_NOIP; break;
-        case CUDPTask::ERR_WIFINOTCONNECTED : netError = NETERR_WIFINOTCONNECTED; break;
-        case CUDPTask::ERR_CONNECTIONLOST: netError = NETERR_WIFINOTCONNECTED; break;
-        case CUDPTask::ERR_DNSINVALIDHOST: netError = NETERR_DNSFAILED; break;
-        case CUDPTask::ERR_DNSTIMEOUT: netError = NETERR_DNSFAILED; break;
-        case CUDPTask::ERR_WATCHDOG: netError = NETERR_TIMEOUT; break;
-        case CUDPTask::ERR_ABORTED: netError = NETERR_ABORTED; break;
-        case CNTPTask::ERR_NTPFAILED: netError = NETERR_NTPFAILED; break;
-        default: netError = NETERR_UNKNOWN;
-      }
-    
-    testResultPtr->error = netError;
-    testResultPtr->testCompleted = true;    
-    return;
-  } catch(...) {
-    //make sure no exception goto C code
-    testResultPtr->error = NETERR_UNKNOWN;
-    testResultPtr->testCompleted = true;    
-    return;
-  }
-  
-  //Unknown Error
-  testResultPtr->error = NETERR_UNKNOWN;
-  testResultPtr->testCompleted = true;
+  g_networkPump.RunTestWifi(testResultPtr, GetSSID(), GetWPAKey());
 }
 
 

@@ -3,6 +3,7 @@
 
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include <ctime>
 
 extern "C" {
 #include "lwip/ip_addr.h"
@@ -10,53 +11,96 @@ extern "C" {
 #include "lwip/tcp.h"
 }
 
+#include <unordered_map>
+#include <vector>
+
+#include "network.h" /* TestResult_t, NetworkError_t */
+
 // Forward declaration
 class NetworkPump;
+struct pbuf;
+
+// lwIP UDP recv callback; arg = NetworkPump* (§14.10).
+extern "C" void NetworkPump_LegacyUdpRecv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+                                          const ip_addr_t *addr, u16_t port);
+
+// lwIP DNS callback; arg = INetworkSession* (issuer); pump holds `dns_pending_owner_` for stale-drop (§14.11).
+extern "C" void NetworkPump_LegacyDnsCallback(const char *hostname, const ip_addr_t *ipaddr, void *arg);
+
+// lwIP TCP: arg = INetworkSession* (pcb owner). `tcp_err` does not pass pcb; multi-pcb sessions track pcbs internally (§14.12).
+extern "C" err_t NetworkPump_LegacyTcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+extern "C" void NetworkPump_LegacyTcpErr(void *arg, err_t err);
 
 //
 // INetworkSession
 //
-// Abstract interface implemented by protocol-specific sessions
-// (e.g. NTP, TFTP RX/TX, Uthernet II TCP/UDP).
+// Protocol-specific sessions (NTP, TFTP, Uthernet II, …) override the hooks they need.
+// Defaults are no-ops so incremental migration is possible.
 //
 class INetworkSession {
 public:
   virtual ~INetworkSession() {}
 
-  // Called once when the session is added to the pump.
-  virtual void OnStart(NetworkPump &pump) = 0;
+  /// lwIP UDP path: raw pbuf (default no-op). Used by `NetworkPump` dispatch for registered pcbs (§14.10).
+  /// `pcb` identifies which UDP socket when one session owns multiple `udp_pcb`s (e.g. Uthernet II).
+  virtual void OnUdpRecvPbuf(struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port) {
+    (void)pcb;
+    (void)p;
+    (void)addr;
+    (void)port;
+  }
 
-  // DNS result for a hostname previously requested by this session.
-  virtual void OnDNSResult(int dns_err, const ip_addr_t *ipaddr) = 0;
+  /// Result of async `dns_gethostbyname` when registered as pending on the pump. `ipaddr == nullptr` means invalid host.
+  virtual void OnDnsGetHostByNameResult(const ip_addr_t *ipaddr) { (void)ipaddr; }
 
-  // UDP payload received on a pcb owned by this session.
+  /// lwIP TCP recv (`p == nullptr` often means peer closed). Default frees `p` if non-NULL.
+  virtual void OnTcpRecvPbuf(struct tcp_pcb *pcb, struct pbuf *p, err_t err);
+
+  /// lwIP TCP fatal/error path; lwIP does not pass `pcb` here — use for single-pcb sessions or track pcbs internally.
+  virtual void OnTcpErr(err_t err) { (void)err; }
+
+  virtual void OnStart(NetworkPump &pump) { (void)pump; }
+
+  virtual void OnDNSResult(int dns_err, const ip_addr_t *ipaddr) {
+    (void)dns_err;
+    (void)ipaddr;
+  }
+
   virtual void OnUDPReceived(const uint8_t *payload,
-                             uint16_t payloadlen,
-                             const ip_addr_t &remote_addr,
-                             uint16_t remote_port) = 0;
+                               uint16_t payloadlen,
+                               const ip_addr_t &remote_addr,
+                               uint16_t remote_port) {
+    (void)payload;
+    (void)payloadlen;
+    (void)remote_addr;
+    (void)remote_port;
+  }
 
-  // TCP event for a pcb owned by this session (to be refined later).
-  virtual void OnTCPEvent(struct tcp_pcb *pcb, uint8_t event_flags) = 0;
+  virtual void OnTCPEvent(struct tcp_pcb *pcb, uint8_t event_flags) {
+    (void)pcb;
+    (void)event_flags;
+  }
 
-  // Timer expiry for a timer this session scheduled.
-  virtual void OnTimer(uint32_t arg) = 0;
+  virtual void OnTimer(uint32_t arg) { (void)arg; }
 
-  // Watchdog expiry if the session has not made progress for a while.
-  virtual void OnWatchdog() = 0;
+  virtual void OnWatchdog() {}
 
-  // Request to abort the session (e.g. Apple II reset, user cancel).
-  virtual void Abort() = 0;
+  virtual void Abort() {}
 
-  // Whether the session is finished (success or failure).
-  virtual bool IsDone() const = 0;
+  virtual bool IsDone() const { return true; }
+
+  /// Cooperative work each time the shared pump runs (Core 0 idle / future async paths).
+  virtual void OnPump(NetworkPump &pump) { (void)pump; }
 };
 
 //
 // NetworkPump
 //
-// Single owner of cyw43/lwIP event pumping and all pcbs used
-// by INetworkSession instances. This is a planning/skeleton
-// implementation; existing code continues to use CUDPTask.
+// Owns shared cyw43/lwIP polling (PollOnce), session registry, and legacy RunNTP /
+// RunTFTP / RunTestWifi entry points. Those paths register a short-lived
+// INetworkSession adapter that drives PumpNetworkIteration from PollOnce (same
+// work per iteration as CUDPTask::Run's inner loop). CUDPTask::Run remains for
+// any direct callers and uses the same EnterRunSession + BeginRun + loop.
 //
 class NetworkPump {
 public:
@@ -87,6 +131,22 @@ public:
   // the Core 0 loop when we move protocols over.
   void PollOnce();
 
+  /// Register pcb owner for pump-dispatched recv (before `udp_recv`); owner usually implements `OnUdpRecvPbuf`.
+  void RegisterUdpPcbOwner(struct udp_pcb *pcb, INetworkSession *owner);
+  void UnregisterUdpPcb(struct udp_pcb *pcb);
+
+  /// Register owner for `CreateTcpPcb` path (`tcp_arg` = owner). Unregistered in `DestroyTcpPcb`.
+  void RegisterTcpPcbOwner(struct tcp_pcb *pcb, INetworkSession *owner);
+  void UnregisterTcpPcb(struct tcp_pcb *pcb);
+
+  /// Used only by `NetworkPump_LegacyUdpRecv` (lwIP callback); not for app code.
+  void dispatchLegacyUdpRecv(struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port);
+
+  /// In-flight `dns_gethostbyname` (single slot per pump; superseded by a new lookup). Issuer must implement `OnDnsGetHostByNameResult`.
+  void RegisterDnsPendingOwner(INetworkSession *owner);
+  void ClearDnsPendingOwner(INetworkSession *owner);
+  bool IsDnsPendingOwner(const INetworkSession *owner) const { return dns_pending_owner_ == owner; }
+
   // Abort all sessions (e.g. on Apple II reset). Sessions are
   // expected to clean up promptly when Abort() is called.
   void RequestAbortAll();
@@ -105,28 +165,53 @@ public:
                   const char *ssid,
                   const char *wpakey);
 
+  // NTP: legacy CNTPTask path under pump bookkeeping. On success, writes Unix epoch.
+  NetworkError_t RunNTP(const char *ssid, const char *wpakey, time_t *out_seconds);
+
+  // Test WiFi / connectivity: legacy CTestWifiTask path under pump bookkeeping.
+  void RunTestWifi(TestResult_t *testResultPtr, const char *ssid, const char *wpakey);
+
   // --- Helpers intended for future use by sessions ---
 
+  /// Allocate/bind pcb, `RegisterUdpPcbOwner`, `udp_recv(NetworkPump_LegacyUdpRecv, this pump)`. `local_port` 0 = ephemeral.
   udp_pcb *CreateUdpPcb(INetworkSession *owner, uint16_t local_port);
+  /// `UnregisterUdpPcb` + `udp_remove`.
   void DestroyUdpPcb(udp_pcb *pcb);
 
+  /// `tcp_new`, register owner, `tcp_arg(owner)`, `tcp_recv`/`tcp_err` → `OnTcpRecvPbuf`/`OnTcpErr`.
   tcp_pcb *CreateTcpPcb(INetworkSession *owner);
+  /// Unregister, detach callbacks, `tcp_abort`.
   void DestroyTcpPcb(tcp_pcb *pcb);
 
+  /// One-shot timer; `OnTimer(arg)` on expiry. Replaces any prior timer for the same `owner`.
   void ScheduleTimer(INetworkSession *owner, uint32_t timeout_ms, uint32_t arg);
   void CancelTimer(INetworkSession *owner);
 
 private:
+  void DrainSessionTimers();
   void BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid, const char *label);
   void EndLegacyOperation();
 
-  // Internal bookkeeping structures will be filled in when we
-  // migrate the first protocol (NTP/TFTP) to this pump.
   bool cyw43Inited;
   bool wifiConnected;
   LegacyOperationKind activeLegacyOperation;
   uint32_t activeLegacyTaskId;
   const char *activeLegacyLabel;
+
+  static const size_t MAX_SESSIONS = 8;
+  std::vector<INetworkSession *> sessions_;
+
+  std::unordered_map<struct udp_pcb *, INetworkSession *> udp_pcb_owners_;
+  std::unordered_map<struct tcp_pcb *, INetworkSession *> tcp_pcb_owners_;
+
+  struct SessionTimer {
+    INetworkSession *session;
+    absolute_time_t deadline;
+    uint32_t arg;
+  };
+  std::vector<SessionTimer> session_timers_;
+
+  INetworkSession *dns_pending_owner_;
 };
 
 #endif // _NETWORK_PUMP_H

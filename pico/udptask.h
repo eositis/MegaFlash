@@ -1,9 +1,12 @@
 #ifndef _UDPTASK_H
 #define _UDPTASK_H
 
+struct pbuf;
+
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "debug.h"
+#include "network_pump.h"
 
 #define DEFAULT_DNSTIMEOUT 5000       //DNS timeout in msec
 #define UDP_BUFFERSIZE 1500           //UDP Packet Buffer Size
@@ -22,7 +25,7 @@ enum {
 };
 
 
-class CUDPTask {
+class CUDPTask : public INetworkSession {
   public:
     //Constant
     const uint32_t WIFI_COUNTRY = CYW43_COUNTRY_WORLDWIDE;
@@ -50,16 +53,34 @@ class CUDPTask {
     ~CUDPTask();
     virtual void Run(const char* ssid, const char* wpakey);
 
+    /// Mark this task as the active CUDPTask session (runningObject / isRunning).
+    /// Pair with LeaveRunSession when using BeginRun + pump-driven PumpNetworkIteration.
+    void EnterRunSession();
+    void LeaveRunSession();
+
+    /// After BeginRun: watchdog + EvtStart (same as the start of Run() after BeginRun).
+    void StartEventsAfterBeginRun();
+
+    /// WiFi + UDP pcb setup (used by Run and available for pump-driven iteration).
+    void BeginRun(const char* ssid, const char* wpakey);
+
+    /// One iteration of the legacy event loop (poll, DNS/UDP/timer events, wait).
+    /// Returns false when `completed` is true and the loop should stop.
+    bool PumpNetworkIteration();
+
+    void OnUdpRecvPbuf(struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port) override;
+
+    /// lwIP UDP receive path (dispatched from NetworkPump via `OnUdpRecvPbuf`; see §14.10).
+    void NotifyUdpReceived(struct pbuf *p, const ip_addr_t *remote_addr, uint16_t remote_port);
+
+    void OnDnsGetHostByNameResult(const ip_addr_t *ipaddr) override;
+
     //Getter methods
     bool GetWifiConnected() const {return this->wifiConnected;}
     bool GetServerIpResolved() const {return this->serverIpResolved;}
     ip_addr_t GetServerAddr() const {return this->server_addr;}
     bool GetCompleted() const {return this->completed;}
 
-    
-    //Declare callback functions as friend
-    friend void dns_callback(const char *hostname, const ip_addr_t *ipaddr, void *arg);
-    friend void udp_callback(void *arg, struct udp_pcb *pcb, struct pbuf *pbuf, const ip_addr_t *remote_addr, u16_t remote_port);
     
   protected:
     void InitCyw43();

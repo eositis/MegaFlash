@@ -6,6 +6,16 @@ cmake_minimum_required(VERSION 3.13...3.27)
 #All builds share the same PICOTOOL
 set(PICOTOOL_FETCH_FROM_GIT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/picotool)
 
+# Pico SDK: -DPICO_SDK_PATH=... (cache) wins; else ENV{PICO_SDK_PATH}; else same default as cmakeall.sh.
+# This lets `cmake -B build -S .` work in environments that do not inherit the user's shell profile.
+if(NOT PICO_SDK_PATH)
+  if(DEFINED ENV{PICO_SDK_PATH} AND NOT "$ENV{PICO_SDK_PATH}" STREQUAL "")
+    set(PICO_SDK_PATH "$ENV{PICO_SDK_PATH}")
+  else()
+    set(PICO_SDK_PATH "/Users/eositis/pico-sdk")
+  endif()
+endif()
+
 # initialize the SDK based on PICO_SDK_PATH
 # note: this must happen before project()
 include(pico_sdk_import.cmake)
@@ -20,6 +30,11 @@ set(CMAKE_C_FLAGS_RELEASE "-g -Og -DNDEBUG" CACHE STRING "Release C flags" FORCE
 set(CMAKE_CXX_FLAGS_RELEASE "-g -Og -DNDEBUG" CACHE STRING "Release CXX flags" FORCE)
 
 pico_sdk_init()
+
+# Unix time + human-readable UTC string at configure time; build-both.sh / cmakeall.sh pass both.
+# Default 0 / empty = not set (firmware falls back to __DATE__/__TIME__ in device info string).
+set(FIRMWARE_BUILD_TIMESTAMP "0" CACHE STRING "Unix build timestamp (set by build scripts)")
+set(FIRMWARE_BUILD_TIMESTAMP_STR "" CACHE STRING "Human-readable UTC build time (set by build scripts)")
 
 #add source file here
 add_executable(${CMAKE_PROJECT_NAME}
@@ -48,7 +63,8 @@ add_executable(${CMAKE_PROJECT_NAME}
     slinky.c
     fpu.c
     uthernet2.c
-    uthernet2_net.c
+    u2_monitor.c
+    uthernet2_net.cpp
     network.cpp
     udptask.cpp
     ntptask.cpp
@@ -57,6 +73,16 @@ add_executable(${CMAKE_PROJECT_NAME}
     tftprxtask.cpp
     tftptxtask.cpp
     tftpstate.c
+)
+
+set(FIRMWARE_BUILD_TIMESTAMP_STR_DISPLAY "${FIRMWARE_BUILD_TIMESTAMP_STR}")
+if(FIRMWARE_BUILD_TIMESTAMP_STR_DISPLAY STREQUAL "")
+  set(FIRMWARE_BUILD_TIMESTAMP_STR_DISPLAY "unknown")
+endif()
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/build_id.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/build_id.h
+  @ONLY
 )
 
 #standard C lib printf for FPU fout() function
@@ -81,6 +107,7 @@ pico_generate_pio_header(${CMAKE_PROJECT_NAME}
 #include directories
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_CURRENT_BINARY_DIR}
 )
 
 #linked libraries
@@ -108,9 +135,19 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SYS_CLK_MHZ=150)
 endif()
 
 
-# U2 debug logging (independent of NDEBUG): enable in Debug build for [u2] UART output
+# U2 / ip65 debug (Debug builds only): default low noise — use checkpoints to bisect init.
+# Example: cmake -B pico2_debug -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug -DU2_IP65_CHECKPOINT=3
+set(U2_IP65_CHECKPOINT "1" CACHE STRING "ip65 bisect: 0=off, 1=MODE(0x03), 2=RTR0, 3=RTR1, 4=RMSR, 5=MACRAW OPEN ok (default 1)")
+set(U2_MON_LOG_BUS "0" CACHE STRING "1=verbose [u2m] per bus cycle at C0C4-C0C7 (floods UART)")
+set(U2_IP65_TRACE_DATA "0" CACHE STRING "1=verbose 48 DATA reads after MODE=0x03 ([u2])")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE UTHERNET2_DEBUG=1)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    UTHERNET2_DEBUG=1
+    U2_ACTIVITY_MONITOR=1
+    U2_IP65_CHECKPOINT=${U2_IP65_CHECKPOINT}
+    U2_MON_LOG_BUS=${U2_MON_LOG_BUS}
+    U2_IP65_TRACE_DATA=${U2_IP65_TRACE_DATA}
+  )
 endif()
 
 #enable stdio 

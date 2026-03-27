@@ -6,7 +6,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ## Chronology and context (from session work)
 
-- **Version series:** V1.1.23-eo is the last release in the 1.1.x line. As of V1.2.0-eo, the 1.2.x series focuses on bringing **Uthernet II emulation**, **com port**, and **imagewriter emulation** into service.
+- **Version series:** **V1.1.24-eo** is the last **1.1.x** maintenance release. Ongoing work targets **1.2.x** starting from **V1.2.0-eo** (`0x0020` in `pico/defines.h`), focused on **Uthernet II emulation**, **com port**, and **imagewriter emulation**.
 - **ip65 / Uthernet II:** U2 emulation was adapted so the ip65 stack (no changes to ip65) works: RECV command advances RX_RD to sn_rx_wr; socket CR is cleared to 0 after each command; default RMSR/TMSR = 0x06; MACRAW RX is fed by wrapping netif->input when socket 0 is opened in MACRAW. U2 debug logging uses prefix `[u2]` and is gated by UTHERNET2_DEBUG (Debug build only), not NDEBUG. See `docs/ip65-Uthernet-II-integration.md`.
 - **Uthernet II**: Confirmed U2 at $C0C4–$C0C7 only; no GPIO slot select. Fixed read-back of Mode Register (chunk 1 vs chunk 0). Added C0C4 diagnostic LED (1 s on any $C0C4 access).
 - **GPIO pulls**: A2/A3 pulldowns disabled (bus-driven). nDEVSEL pull-up first disabled at user request, then re-enabled when C0C4 was not seen; with pull-up enabled, C0C4 still not recognized.
@@ -37,6 +37,90 @@ This document records the thinking, root-cause analysis, design decisions, and d
 **In code:** The bus loop decodes `addr` (low nibble): 0–3 → MegaFlash (command, param, data, ID); 4–7 → Uthernet II only (`addr >= U2_C0X_OFFSET && addr <= U2_C0X_LAST`); 8–15 left for future ACIA. U2 is restricted to 4–7 so that 8–11 and 12–15 are not consumed by U2 and remain available for ACIA emulation.
 
 **References:** `pico/busloop.c` (address-decode comment and U2 condition).
+
+---
+
+## 1e. U2 activity monitor (`[u2m]`, Debug build)
+
+**What:** Structured tracing of Uthernet II emulation for serial capture (UART 115200).
+
+**Why:** Separate from `[u2]` `U2_DEBUGF` printf-in-place: bus cycles run on **core 1** while lwIP runs on **core 0**, so `printf` from both cores is unsafe. Events are **queued** under a critical section and **drained** from `U2_Poll()` (core 1) as `[u2m]` lines.
+
+**What we did:** `u2_monitor.c` / `u2_monitor.h`; ring 128, up to 48 events flushed per `U2_Poll`; records **every** `$C0C4–$C0C7` bus op (Rd/Wr MODE/ADDRHI/ADDRLO/DATA, `busdata`, byte, internal `ptr`, MR), **reset**, **socket OPEN/CONNECT/LISTEN/CLOSE/SEND/RECV**, **UDP/TCP/MACRAW** net TX/RX. **CMake Debug** defines `U2_ACTIVITY_MONITOR=1`; Release compiles stubs. **`./build-debug.sh`** builds `pico_debug` + `pico2_debug`.
+
+**References:** `pico/u2_monitor.c`, `pico/uthernet2.c`, `pico/uthernet2_net.cpp`, `pico/CMakeLists.txt`, `pico/build-debug.sh`, `pico/README.md`.
+
+---
+
+## 1d. RP2350: U2 branch skipped PIO IRQ 0 wait (ip65 “Device not found”)
+
+**Symptom:** ip65 / telnet65 still reported **Device not found** despite correct RTR emulation and slot 4.
+
+**Why:** On **RP2350**, `a2bus` sets **IRQ 0** while delaying the `rxfifo` pull (`a2bus_rp2350.pio`). The bottom of `BusLoop()` waits for IRQ 0 to clear before `UpdateMegaFlashRegisters`, so the SM finishes reading the **current** cycle’s FIFO value before the CPU overwrites it. The **Uthernet II** branch called `UpdateMegaFlashRegisters(1, …)` and then **`continue`**, **skipping** that wait. That can corrupt **$C0C4–$C0C7** read-back and make the ip65 **W5100 RTR XOR** probe at `$0017/$0018` fail (same user-visible message as a missing card).
+
+**What we did:** Before `UpdateMegaFlashRegisters(1, …)` inside the U2 branch, added the same `pio_sm_is_rx_fifo_empty` + `pio_interrupt_get` wait as the main loop (guarded with `#ifndef PICO_RP2040`).
+
+**References:** `pico/busloop.c`, `pico/a2bus_rp2350.pio` (`irq set 0` / `mov osr,rxfifo[y]` / `irq clear 0`).
+
+---
+
+## 1c. telnet65 “Device not found” vs ip65 W5100 `init` (MegaFlash U2)
+
+**What:** `ip65/apps/telnet65.s` calls `ip65_init` with `A = eth_init_default` (`ip65/drivers/a2init.s`, slot **4** for MegaFlash). On failure it prints **“Device not found”** (`ip65_init` returns carry).
+
+**Why:** `ip65_init` → `eth_init` → Contiki/ip65 **`drivers/w5100.s`** `init`. The **only** path that returns **`SEC`** before socket setup is the **RTR fingerprint** at addresses **$0017 / $0018**: two reads with XOR must produce zero (default **$07,$D0**). Any wrong values (open bus, wrong slot, or bad emulation) → probe fails → “Device not found.” After that, if **RMSR == $06**, ip65 **skips** the software-reset block that **writes SHAR** but still **reads SHAR back** into the driver MAC and then `ethernetcombo.s` copies that into **`cfg_mac`**. With SHAR all zeros, **station MAC is invalid** (DHCP/ARP issues) even though the probe passed.
+
+**What we did:** `u2_reset()` already matched **RTR/RMSR/TMSR** for the probe; added default **SHAR** = same bytes as **`w5100.s`** (`00:08:DC:A2:A2:A2`) so the short init path gets a sane MAC.
+
+**What we didn’t do:** Cannot fix “no device” from firmware if the CPU never addresses **slot 4** `$C0C4–$C0C7` or **nDEVSEL** does not assert (see §2b/§12).
+
+**References:** `ip65/ip65/ip65.s` (`ip65_init`), `ip65/drivers/ethernetcombo.s` (`eth_init`/`init_adaptor`), `ip65/drivers/w5100.s` (`init` through RTR XOR and RMSR branch), `ip65/apps/telnet65.s`, `pico/uthernet2.c` (`u2_reset`).
+
+**UART symptom:** Only one `[u2] mode=0x03…` line then “Device not found” is **normal** for `U2_DEBUGF` volume — the RTR probe uses **ADDRHI/ADDRLO + DATA** reads, which did not log. **Debug** builds also print **`RTR data read addr=0x0017 -> …`** / **`0x0018`** (first 8 such reads per boot) so captures show whether the 6502 reached the probe and got **0x07** / **0xD0**. If those lines never appear, bus cycles are not completing to the DATA port; if values are wrong, XOR fails and `eth_init` returns carry.
+
+**Reconciling UART with the screen:** In stock **`ip65/drivers/w5100.s`**, the **only** **`sec` / `rts`** in **`init`** is the **RTR XOR** failure; after OPEN, **`init` ends with `clc` / `rts`**. **`ip65_init`** only branches to the device-failure path on **`eth_init` carry**; if **`eth_init` clears carry**, **`ip65_init` always ends with `clc` / `rts`** (it unconditionally **`clc`** after `timer_init` / `arp_init` / `ip_init`). So a capture that shows **correct RTR** (`0x0017`/`0x0018`) for the **same** telnet65 attempt **contradicts** a stock **`“Device not found”`** from **`ip65_init`** unless the Apple disk is **not** stock ip65, there is **carry corruption** (extraordinary), or the on-screen line is being **misattributed** to the same UART window.
+
+**UART deep trace (Debug):** On **`MR=0x03`**, firmware arms **48** DATA-read trace events. **`printf` must not run inside `U2_HandleBusAccess`** (same for socket **CR** handling): blocking UART stalls the bus loop so the Apple can see wrong or incomplete cycles; only **`[u2m]`**-style **queue + `U2_MonPollFlush`** from **`U2_Poll`** is safe. **`[u2]`** mode and DATA lines use **`U2_MonQueueModeLine` / `U2_MonDataReadTrace`**; **`busloop.c`** polls **`U2_Poll`** every **32** Uthernet accesses (was 500) so the ring drains. Monitor ring/flush sizes were increased (**256** / **128**).
+
+**Reconciling example log:** `debug/2026-03-21 21-42-20 FT232R USB UART #1.log` — **21:45** / **22:06** mode-only vs **22:14** / **22:26** with **correct RTR**; **DHCP** failures use **`- Error $…`** (`print_error`), not the **device not found** string.
+
+---
+
+## 1f. Manual monitor: two DATA reads both $07 (no advance to RTR1)
+
+**Symptom:** After loading indirect address **$0017** via **$C0C5** / **$C0C6**, the **first** read of **$C0C7** returns **$07** (RTR0 — correct), but the **second** consecutive **$C0C7** read is **also** **$07** instead of **$D0** (RTR1).
+
+**Why (W5100 + this firmware):** Auto-increment of the internal pointer after a DATA read happens only when **MR bit 1** (**`W5100_MR_AI`**, value **$02**) is set. **`read_value()`** in `uthernet2.c` always calls **`auto_increment()`** after the read, but **`auto_increment()`** is a no-op unless **`u2_mode_register & W5100_MR_AI`**. After **`u2_reset()`**, **MR is $00**, so **no** increment until the host writes **$03** (IND+AI, as in ip65) to **$C0C4**. If MR is **$01** (indirect without AI), behaviour matches the real part: repeated DATA reads keep returning the same byte.
+
+**What to verify:** **`LDA $C0C4`** (read Mode Register) must show **$03** (or at least **bit 1 set**) *before* or *between* address setup and the two DATA reads. If it reads **$00** / **$01**, repeat **`LDA #3` / `STA $C0C4`** (slot 4), then reload **$0017** and try again. Optionally read **$C0C5** / **$C0C6** after the first **$C0C7** read: with AI on, the pointer should show **$0018**.
+
+**References:** `pico/uthernet2.c` (`read_value`, `auto_increment`, `u2_reset`), `pico/w5100_regs.h` (`W5100_MR_AI`, `W5100_RTR0` / `W5100_RTR1`).
+
+**Observed variant (bench):** Three consecutive **DATA** reads returned **`$D0`, `$07`, `$D0`**. In our image, **`$0017`→RTR0=`$07`**, **`$0018`→RTR1=`$D0`**, so that triplet is **RTR1, RTR0, RTR1** — the internal pointer behaved like **`$0018` → `$0017` → `$0018`**, not like a monotonic **`$0017` → `$0018` → `$0019`** (which would be **`$07`, `$D0`, `$08`** with default **RCR=`$08`**). Causes to rule out on the bench: (1) **pointer was `$0018`** before the first read (e.g. **`C0C6:18`** or leftover state) — then the **second** byte should be **`$08`** (RCR at `$0019`), not **`$07`**, unless something **reloaded** the address to **`$0017`** between reads; (2) **monitor or test code** touched **`$C0C5`/`$C0C6`** between **`$C0C7`** reads; (3) **stale / reordering** on the data path (compare with **§1d** and pointer dumps below).
+
+**Screenshot (correct setup):** After **`C0C4:03`**, **`C0C5:00`**, **`C0C6:17`**, verify reads **`C0C5`/`C0C6` → `00`/`17`**, then **`C0C7`** returned **`$08`**, **`$07`**, **`$D0`** — i.e. **RCR, RTR0, RTR1** (`$0019`, `$0017`, `$0018`) while the **address registers still showed `$0017`** before the first DATA read. **Why:** On **RP2350**, the **a2bus** SM **prefetches** the chunk‑1 FIFO value for the **next** 6502 read **before** the CPU finishes handling the **previous** cycle (see **§1d**). **`registers.r[7]`** (the **`$C0C7`** shadow) was only updated **during** a DATA read, so after **`C0C6`** it still held whatever was left from an earlier cycle — not **`read_value_at($0017)`=`$07`**. The 6502 then latched a **stale** eighth byte for the first **`$C0C7`** read; the emulator’s internal pointer still advanced correctly, so later reads matched **RTR0/RTR1**.
+
+**What we did:** After every U2 bus op, **`registers.r[7] = U2_PeekDataPort()`** (next DATA byte without increment) before **`UpdateMegaFlashRegisters(1,…)`**, so the PIO’s prefetched **`$C0C7`** byte matches **`read_value()`** for the **next** access. **`U2_PeekDataPort`** in **`uthernet2.c`** / **`uthernet2.h`**; **`busloop.c`** U2 branch.
+
+**What we didn’t do:** No change to W5100 memory layout or RTR defaults; RP2040 gets the same priming (harmless and keeps shadow consistent).
+
+**Verified (bench):** Monitor sequence after the fix returns **`$07`**, **`$D0`**, **`$08`** for three consecutive **`$C0C7`** reads with pointer **`$0017`** and **MR=`$03`**.
+
+---
+
+## 1g. U2 monitor UART on core 1 → `async_context` PANIC; MACRAW RX “no room”
+
+**Symptom:** After **`[u2] ck=5`** (MACRAW OPEN ok), UART showed **`*** PANIC ***`** / **`async_context_poll context check failed (IRQ or wrong core)`**. Separately, **`[u2] MACRAW RX … drop … (no room)`** repeated in a loop while telnet65 stayed on **“obtaining IP”** (DHCP).
+
+**Why (PANIC):** **`U2_MonPollFlush()`** calls **`printf`** to drain the **`[u2]` / `[u2m]`** queue. It was invoked from **`U2_Poll()`** on **core 1** (Apple bus loop). On Pico W, **UART stdio** / **cyw43** **`async_context`** must not be polled from the wrong core — flushing the monitor from core 1 tripped the SDK check the same instant **`ck=5`** was printed.
+
+**What we did:** **`U2_Poll()`** now runs **`U2_Net_Poll()`** only. **`U2_MonPollFlush()`** runs on **core 0** next to **`NetworkPump_PollOnce()`** in **`core0Loop`**, at the start of each NTP cycle, and in the **USB idle** loop when MegaFlash menu runs without **`core0Loop`**. **`u2_monitor.h`** documents core‑0‑only flush.
+
+**Why (no room):** **`u2_netif_input_wrapper`** feeds **every** incoming Ethernet frame into socket 0 **MACRAW** while WiFi is up; the emulated **4K** RX ring fills faster than the II drains it during DHCP.
+
+**What we did:** In **`u2_push_rx_macraw`**, if **`2+len`** does not fit, call **`u2_socket_discard_rx()`** (set **RX_RD** to **sn_rx_wr**, discarding unread data) and **retry** once so a new frame (e.g. DHCP) can land. Removed **`U2_DEBUGF`** spam on the hot path (monitor already queues **`U2_MonNetRxMacraw`** from **`uthernet2_net.cpp`**).
+
+**References:** `pico/main.c`, `pico/uthernet2.c` (`u2_socket_discard_rx`, `u2_push_rx_macraw`), `pico/u2_monitor.h`.
 
 ---
 
@@ -104,7 +188,11 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **Change:** Add `-DPICO_SDK_PATH=/Users/eositis/pico-sdk` to every `cmake -B ...` line in `cmakeall.sh`.
 
-**References:** `pico/cmakeall.sh`, `pico/pico_sdk_import.cmake`.
+**Follow-up:** `pico/CMakeLists.txt` now applies the same fallback (`/Users/eositis/pico-sdk`) when neither `-DPICO_SDK_PATH` nor a non-empty `ENV{PICO_SDK_PATH}` is set, *before* `include(pico_sdk_import.cmake)`, so bare `cmake -B build -S .` works in non-interactive environments (e.g. agent shells without the user’s profile). Edit the fallback path if your SDK lives elsewhere.
+
+**`build-both.sh`:** For verification without bumping `defines.h`, run `./build-both.sh` from `pico/` — it builds **cpanel**, then configures and **`make`s both `pico_release` and `pico2_release`** (same toolchain logic as `cmakeall.sh`). See summary table §11.
+
+**References:** `pico/cmakeall.sh`, `pico/CMakeLists.txt`, `pico/pico_sdk_import.cmake`.
 
 ---
 
@@ -257,6 +345,16 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 **References:** `pico/busloop.c` (CMDREG case, `UpdateMegaFlashRegisters` after clear BUSY), `pico/cmdhandler.c` (`DoTFTPGetLastServer`, `ResetDataPointer`), `pico/tftpstate.c` (`TFTPFormatStatusMessage`), `cpanel/tftp.c` (hostname prefill, `LooksLikeStatusText`).
 
+## 7h. TFTP upload: block line shows only numerator (missing `N/total`)
+
+**Symptom:** Control Panel TFTP upload page showed only blocks transferred (e.g. `42`) instead of `42/2800 (1.5%)` as before.
+
+**Cause:** `TFTPFormatBlocksMessage()` in `tftpstate.c` needs `tftp_state.tsize` (total transfer size in bytes) to append `/totalBlocks` and percent. `CTFTPTXTask::Run()` used to set `tftp_state.tsize = blockCount * PRODOS_BLOCKSIZE` before `CTFTPTask::Run()`. After **`NetworkPump::RunTFTP`** stopped calling `CUDPTask::Run()` and instead uses **`BeginRun` + `StartEventsAfterBeginRun` + `PollOnce`**, **`CTFTPTXTask::Run()` was never invoked**, so `tsize` stayed `TFTPSTATE_INVALIDTSIZE` and the formatter exited after printing the first number.
+
+**Fix:** Implement **`CTFTPTXTask::EvtStart()`** to set the same `tftp_state.status` / `tftp_state.tsize` and call **`CTFTPTask::EvtStart()`** (DNS). **`CTFTPTXTask::Run()`** now only forwards to **`CTFTPTask::Run()`**. For symmetry, **`CTFTPRXTask::EvtStart()`** sets **`TFTPSTATUS_WIFICONNECTING`** (previously only in **`Run()`**).
+
+**References:** `pico/tftptxtask.cpp`, `pico/tftprxtask.cpp`, `pico/tftpstate.c` (`TFTPFormatBlocksMessage`), §14.8.
+
 ---
 
 ## 8. GPIO pull state (A0–A3, nDEVSEL, data bus)
@@ -324,9 +422,9 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ## 10e. Git: `1.1.x` maintenance branch
 
-**Purpose:** Keep a named line of development for **1.1.x** patches (hotfixes on the shipped 1.1.x codebase) while `main` continues with newer work (e.g. 1.2.x).
+**Purpose:** Keep a named line for **1.1.x** hotfixes (baseline **V1.1.24-eo**) while **`main` carries 1.2.x** development (from **V1.2.0-eo**, `pico/defines.h`).
 
-**Branch:** `1.1.x` (created at the same commit as `main` when the branch was introduced; push with `git push -u origin 1.1.x` when credentials allow).
+**Branch:** `1.1.x` — periodically merge or fast-forward from `main` when the maintenance line should pick up a newer snapshot (see session log). Push with `git push -u origin 1.1.x` when credentials allow.
 
 **Typical workflow:**
 
@@ -343,20 +441,40 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
 | U2 address range | `defines.h`, `busloop.c` | C0x4–C0x7 only; no GPIO slot select |
+| ip65 W5100 probe + SHAR | `uthernet2.c` §`u2_reset`, §1c | RTR $07/$D0 + RMSR/TMSR $06 for `w5100.s` probe; default SHAR = `00:08:DC:A2:A2:A2` (matches `w5100.s`) so RMSR=$06 short path does not leave `cfg_mac` all-zero |
+| Two DATA reads both $07 | §1f, `uthernet2.c` `auto_increment` | Pointer only advances when **MR** has **AI** ($02); **$03** = IND+AI; **$00** after reset or **$01** → no increment, second read still RTR0 |
+| First `$C0C7` wrong then RTR OK | §1f, `busloop.c`, `U2_PeekDataPort` | RP2350 PIO prefetches next read’s byte; **`r[7]`** must hold **`U2_PeekDataPort()`** after each U2 cycle so first DATA read after addr setup isn’t stale |
+| **`async_context` PANIC at `ck=5`** | §1g, `main.c`, `u2_monitor.h` | **`U2_MonPollFlush`** only on **core 0** — not from **`U2_Poll`** on core 1 |
+| MACRAW RX `drop (no room)` / DHCP stall | §1g, `uthernet2.c` `u2_socket_discard_rx` | On overflow, discard unread RX (RX_RD→wr) then accept new frame |
+| UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
+| UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from `build-both.sh`/`cmakeall.sh`; **`unknown` / `0`** if configured without timestamp) |
+| ip65 init bisect (Pico 2 W Debug) | `CMakeLists.txt` `U2_IP65_CHECKPOINT`, `uthernet2.c`, `u2_monitor.c` | Default **quiet**: one **`[u2] ck=n`** per run when **`U2_IP65_CHECKPOINT=n`** (1=MODE 0x03 … 5=MACRAW OPEN). Optional **`U2_IP65_TRACE_DATA`**, **`U2_MON_LOG_BUS`** (floods UART) |
+| Apple readback for U2 | `busloop.c` U2 branch, `a2bus.h` | **`registers.r[4..7]`** → **`i32[1]`** chunk **1** → **`UpdateMegaFlashRegisters(1,…)`**; RP2350 waits for IRQ0 before update (§1d) so SM1 presents the merged byte on the next cycle |
 | U2 read data path | `busloop.c`, `a2bus.h` | U2 read byte must update **chunk 1** (SM1), not chunk 0 |
+| RP2350 U2 vs PIO IRQ 0 | `busloop.c` §1d | U2 branch must wait for IRQ 0 clear before `UpdateMegaFlashRegisters(1,…)` (same as main loop); skipping caused bad C0C4–C0C7 reads |
+| U2 `[u2m]` monitor | `u2_monitor.c`, `build-debug.sh` §1e | Debug-only queued UART trace; flush from `U2_Poll`; bus + socket + net hooks |
 | A0–A3, nDEVSEL pulls | `a2bus_rp2040.pio`, `a2bus_rp2350.pio` | A2=GPIO8, A3=GPIO9, no pulls; nDEVSEL pull-up on; data bus pull-up |
-| Build SDK path | `cmakeall.sh` | Explicit `-DPICO_SDK_PATH=...` for all cmake invocations |
-| Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo" |
+| Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses same default when env or `-D` unset (§4) |
+| Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
+| Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
+| Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
 | Release testing | §7b, §7c | Test Release build (NTP/TFTP/WiFi) before shipping; use pre-release checklist (§7c) to avoid Debug-only validation |
 | C0C4 diagnostic | `busloop.c` | LED on 1 s on any $C0C4 access; non-blocking |
 | nDEVSEL sense | Both PIO files | Active-low (trigger on low); inverted sense was tried and reverted |
 | TFTP/UDP performance | `udptask.h`, `udptask.cpp` | HEARTBEAT_PERIOD 50→10 ms; 50 ms added latency per packet; blocking flash erase also stalls loop (see §13) |
+| TFTP OOM panic at start | §13d, `misc.c`, `network_pump.cpp`, `ramdisk.c` | Panic is **pico_malloc** (`new` for ~2.5 KiB); **CP “RAM disk off”** does not free **`ramdisk_data[]`**; **`DebugPrintHeapState("NETPUMP: TFTP pre-new")`** before TFTP `new` |
+| TFTP OOM panic at start | §13b, `misc.c`, `network_pump.cpp`, `ramdisk.c` | Panic is **pico_malloc** (`new` for ~2.5 KiB); **CP “RAM disk off”** does not free **`ramdisk_data[]`**; **`DebugPrintHeapState("NETPUMP: TFTP pre-new")`** before TFTP `new` |
 | TFTP hostname default | `busloop.c`, `cpanel/tftp.c` | After command that sets data buffer, push chunk 0 to PIO immediately (§7g); clear hostname if it looks like status text |
+| TFTP upload block count UI | `tftptxtask.cpp`, `tftprxtask.cpp` | Set `tftp_state.tsize` (TX) / WiFi status (RX) in `EvtStart()`; pump path does not call `Run()` (§7h) |
 | CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
+| NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
+| lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
+| Uthernet II lwIP | `uthernet2_net.{h,cpp}` | Pump: `AddSession`, `CreateUdpPcb`, `PollOnce`; TCP: `U2TcpArg` + `u2_tcp_*` callbacks (§14.10b) |
+| Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |
 
 ---
 
@@ -455,6 +573,22 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ---
 
+## 13d. TFTP start: `*** PANIC ***` / `Out of memory`
+
+**Symptom:** Enabling TFTP download panics immediately (log shows `NETPUMP: RunTFTP …` then panic), not mid-transfer.
+
+**Why (root cause):** The message is from **Pico SDK** `pico_malloc` (`pico-sdk/.../pico_malloc/malloc.c`): `panic("Out of memory")` when **`malloc`/`new` returns NULL** or when **`(ptr + size)` crosses `__StackLimit`** (heap/stack collision). TFTP constructs **`CTFTPRXTask`** / **`CTFTPTXTask`**, whose bases allocate **`CUDPTask::rxbuffer`** (~1500 B, `UDP_BUFFERSIZE`) and **`CTFTPTask::txbuffer`** (~`TXBUFFERSIZE`, order of 1 KiB) — roughly **2.5 KiB** of **heap** in successive allocations. If **free heap** at that moment is near or below that (e.g. boot prints ~2.7–3.9 KiB free in a tight configuration), **`new` fails** and the firmware panics.
+
+**RAM disk “disabled” in CP does not shrink RAM use:** `ramdisk.c` reserves **`static uint8_t ramdisk_data[RAMDISK_SIZE]`** (e.g. 256 KiB on RP2350 as of `defines.h`). **Runtime disable** only skips using it as a volume; the **BSS buffer stays allocated**. To reclaim space you need a **build-time** change (smaller `RAMDISK_SIZE`, or conditional compile to omit the array when the product does not need RAM disk).
+
+**What we did:** **`DebugPrintHeapState()`** in `misc.c` / `misc.h` logs **`heap_region`**, **`free`**, and **`mallinfo`** (`arena`, `uordblks`, `fordblks`) under tag **`NETPUMP: TFTP pre-new`**, immediately before **`new CTFTPRXTask` / `new CTFTPTXTask`** in `NetworkPump::RunTFTP` (`network_pump.cpp`). Use the UART line to confirm **free < ~3 KiB** at TFTP start.
+
+**Further diagnosis (optional):** Enable **PICO_DEBUG_MALLOC** (Pico SDK `PICO_CONFIG`) so the malloc wrapper **prints failing allocation sizes** to `printf` — e.g. **`target_compile_definitions(... PRIVATE PICO_DEBUG_MALLOC=1)`** on the firmware target, or configure-time **`-DPICO_DEBUG_MALLOC=1`** if your SDK picks it up. Inspect **`.map`** / **picotool** for total SRAM layout; compare **`lwipopts.h`** `MEM_SIZE` (lwIP pool, separate from C heap) vs **OOM** — this panic is **C heap / `new`**, not lwIP `MEM_SIZE` unless the same failure path triggers elsewhere.
+
+**References:** `pico/misc.c` (`GetTotalHeap` / `GetFreeHeap` / `DebugPrintHeapState`), `pico/network_pump.cpp` (`RunTFTP`), `pico/udptask.cpp` (`CUDPTask` ctor), `pico/tftptask.cpp` (`CTFTPTask` ctor), `pico/ramdisk.c` (`ramdisk_data`), `pico-sdk/.../pico_malloc/malloc.c`.
+
+---
+
 ## 14. Network architecture: single pump, multiple sessions (NTP, TFTP, Uthernet II)
 
 **Requirement:** Support multiple concurrent network users on the Pico (NTP, TFTP, Test WiFi, and Uthernet II TCP/UDP sockets) without them blocking each other, while still respecting cyw43/lwIP’s requirement that there be a single “driver context” that calls `cyw43_arch_poll`, `cyw43_arch_wait_for_work_until`, and lwIP APIs.
@@ -533,8 +667,8 @@ With this design:
   - Copies the payload into a buffer or small event object.
   - Frees the pbuf.
   - Marks that this session has a pending UDP event.
-- **DNS callbacks:** `dns_callback(..., void *arg)` similarly uses `arg = NetworkPump*`; the pump matches the callback to the session that requested that hostname.
-- **TCP callbacks:** `tcp_accept`, `tcp_recv`, `tcp_sent`, `tcp_poll`, `tcp_err` are all registered by the pump and associated with a given session via their `tcp_pcb*`.
+- **DNS callbacks:** **`arg = INetworkSession*`** (issuer) plus **`dns_pending_owner_`** for stale detection (§14.11). A pump-only **`void*`** without the session pointer cannot disambiguate late completions.
+- **TCP callbacks:** For **`CreateTcpPcb`**-owned pcbs, **`tcp_recv`/`tcp_err`** dispatch to **`INetworkSession`** (§14.12). Full **`tcp_sent`/`tcp_poll`/accept** wiring remains per-session when Uthernet (or others) move off ad-hoc lwIP hooks.
 - **Pump loop:** In each `PollOnce()`:
   - Call `cyw43_arch_poll()` to move data between the WiFi chip and lwIP.
   - Drain any pending UDP/TCP/DNS events and dispatch them to sessions’ handlers.
@@ -616,21 +750,88 @@ Because this is a non-trivial refactor, a staged approach is safest:
    - Implement UDP/TCP sessions for U2, using the same pump.
    - Remove the now-redundant `CUDPTask` singleton fields and the “ignore callback if arg != runningObject” logic.
 
-**Stage 3 status (TFTP lifecycle now managed):** The manager now owns TFTP start/finish/abort bookkeeping even though the packet-level TFTP protocol still uses the legacy task implementation. `ExecuteTFTP()` delegates into `NetworkPump::RunTFTP(...)`, which:
+**Stage 3 status (NTP, Test WiFi, TFTP + shared pump plumbing):** All three Apple-facing flows go through **`NetworkPump`** for **legacy-operation bookkeeping**. **`CUDPTask`** is split into **`BeginRun()`** (WiFi + UDP pcb), **`StartEventsAfterBeginRun()`** (watchdog + **`EvtStart()`**), and **`PumpNetworkIteration()`** (one loop iteration: poll, DNS/UDP/timer, wait). **`CUDPTask::Run()`** still chains **`EnterRunSession()`** + those pieces + a **`while (PumpNetworkIteration())`** loop. **`NetworkPump::RunNTP` / `RunTestWifi` / `RunTFTP`** instead register a short-lived **`LegacyUdpSessionAdapter`** (`INetworkSession::OnPump` → one **`PumpNetworkIteration()`** per **`PollOnce()`**) and spin **`PollOnce()`** until **`GetCompleted()`**—same work per iteration as the inner **`Run()`** loop, but the legacy task is now a **registered pump session** so the architecture matches future multi-session **`OnPump`** use.
 
-- Logs the TFTP run as a manager-owned legacy operation.
-- Constructs the existing RX/TX TFTP task and runs it under pump bookkeeping.
-- Clears the active-op state on success or failure.
-- Exposes `NetworkPump_RequestAbortAll()` so the Apple reset path can abort the active TFTP run through the manager instead of directly poking the legacy task.
+| Entry point | Pump method | Notes |
+|-------------|-------------|--------|
+| `GetNetworkTime()` | `NetworkPump::RunNTP` | `LEGACY_OPERATION_NTP`; `CNTPTask` via `EnterRunSession` + `BeginRun` + `StartEventsAfterBeginRun` + adapter + `PollOnce` loop; epoch on success for `InitRTC`. |
+| `TestWifi()` | `NetworkPump::RunTestWifi` | `LEGACY_OPERATION_TESTWIFI`; same pattern; exception → `NetworkError_t` mapping in pump. |
+| `ExecuteTFTP()` | `NetworkPump::RunTFTP` | `LEGACY_OPERATION_TFTP`; RX/TX tasks use the same pump-driven pattern (no `CUDPTask::Run()` from the pump). |
 
-The pump still currently provides the earlier skeleton pieces too:
+**`NetworkPump::PollOnce()`** calls **`cyw43_arch_poll()`** then **`OnPump()`** on each registered **`INetworkSession`** (max 8). During a legacy NTP/TFTP/Test WiFi operation, **`LegacyUdpSessionAdapter`** is on the list so each **`PollOnce()`** advances one **`PumpNetworkIteration()`** (plus an extra top-level **`cyw43_arch_poll()`** before **`OnPump`**). **`core0Loop`** calls **`NetworkPump_PollOnce()`** during the idle wait between NTP retries / IPC messages so lwIP gets extra polls when no legacy task is blocking Core 0. **`INetworkSession`** methods have **default empty** implementations; **`OnPump`** is the hook for future async work.
 
-- Owns lazy initialisation of cyw43 (`Init` / `EnsureWifiConnected`).
-- Provides helpers to create/destroy UDP/TCP pcbs (`CreateUdpPcb`, `DestroyUdpPcb`, `CreateTcpPcb`, `DestroyTcpPcb`) using `cyw43_arch_lwip_begin/end`.
-- Exposes `AddSession`, `RemoveSession`, `PollOnce`, `ScheduleTimer`, `CancelTimer`, and `RequestAbortAll` as **no-op placeholders** ready to be wired up when NTP/TFTP/Uthernet II are migrated.
-- Is compiled into the Pico firmware (`network_pump.cpp` added to `CMakeLists.txt`) and now has the first real manager-owned operation (`RunTFTP`), but packet-level session routing is still a future step.
+**`NetworkPump::RequestAbortAll()`** calls **`Abort()`** on every registered session, then **`UDPTask_RequestAbortIfRunning()`**.
 
-**Takeaway:** The hardware (Pico W + cyw43 + lwIP) can support multiple concurrent UDP/TCP sockets. The primary limitation in the original design was the **software architecture**, which serialized all UDP work through a single `CUDPTask` instance and event loop. Moving to a pump + sessions model unlocks true concurrency between NTP, TFTP, and Uthernet II, and provides a natural place to reset all network state when the Apple II is reset. The new `NetworkPump`/`INetworkSession` skeleton is the first concrete code step toward that architecture, and TFTP’s lifecycle is now routed through the pump; the next step is to migrate packet handling and then port another protocol into the shared pump model.
+**Takeaway:** One **`CUDPTask`** is still the active **`runningObject`** at a time for NTP/TFTP/Test WiFi (serialized **`runningObject`**). DNS pending owner is **`INetworkSession*`** on **`NetworkPump`** (§14.11); UDP receive is **`NetworkPump`-dispatched** via pcb→**`INetworkSession*`** (§14.10). **Uthernet II** uses **`CreateUdpPcb`**, shared **`PollOnce`**, and **`Uthernet2Session::Abort`** (§14.10b); U2 TCP uses custom **`U2TcpArg`** recv/err rather than **`CreateTcpPcb`**. Further work: **`RequestDNS(hostname, …)`** wrapper; optional **`tcp_sent`/`tcp_poll`** for U2.
+
+### 14.9 Legacy callback routing (incremental)
+
+**Goal:** Stop using **`CUDPTask::runningObject`** as the gate for **lwIP** DNS callbacks so the stack can move toward **pump-dispatched** events and (later) **multiple** concurrent clients.
+
+**Evolution:** §14.9 first used a file-static **`s_dnsPendingTask`** in **`udptask.cpp`**. That is superseded by **`NetworkPump::dns_pending_owner_`** (**`INetworkSession*`**) and **`NetworkPump_LegacyDnsCallback`** (§14.11); behaviour (stale callback drop, clear on result/timeout/**`LeaveRunSession`**) is unchanged.
+
+**References:** `pico/udptask.cpp` (`DNSLookup`, `PumpNetworkIteration`, `LeaveRunSession`, `OnDnsGetHostByNameResult`); `pico/network_pump.{h,cpp}`.
+
+### 14.10 Single UDP recv path via `NetworkPump` (pcb → `INetworkSession*`)
+
+**Goal:** One lwIP **`udp_recv_fn`** for all pump-registered UDP traffic, with **`arg = &GetNetworkPump()`**, matching §14.4’s “pump looks up session by pcb”.
+
+**Mechanics:**
+- **`INetworkSession::OnUdpRecvPbuf(udp_pcb*, pbuf, addr, port)`** — default no-op; **`pcb`** disambiguates when one session owns multiple UDP sockets (Uthernet II). **`CUDPTask`** ignores **`pcb`** and **`NotifyUdpReceived`** as before.
+- **`CUDPTask`** **inherits** **`INetworkSession`** and overrides **`OnUdpRecvPbuf`** to **`NotifyUdpReceived`** (same **`pbuf`** copy path as the old **`udp_callback`** body).
+- **`CUDPTask::BeginRun`** uses **`GetNetworkPump().CreateUdpPcb(this, 0)`** (ephemeral port): **`udp_new`**, **`udp_bind`**, **`RegisterUdpPcbOwner`**, **`udp_recv(..., NetworkPump_LegacyUdpRecv, pump)`**. Non-**`CUDPTask`** sessions use the same API with their own **`INetworkSession`**.
+- **`~CUDPTask`** calls **`DestroyUdpPcb(pcb)`** (**`UnregisterUdpPcb`** + **`udp_remove`**).
+- **`NetworkPump::dispatchLegacyUdpRecv`** looks up **`INetworkSession*`** in **`udp_pcb_owners_`**, then **`OnUdpRecvPbuf(pcb, p, …)`**; frees **`pbuf`** after return.
+- **`GetNetworkPump()`** / **`g_networkPump`** live **outside** **`extern "C"`** in **`network.cpp`** so the function has C++ linkage.
+
+**References:** `pico/network_pump.{h,cpp}`, `pico/network.{h,cpp}`, `pico/udptask.{h,cpp}`.
+
+### 14.10b Uthernet II (`uthernet2_net.cpp`) on the pump
+
+**Requirement:** Drive U2 lwIP traffic through the same **`PollOnce`** path as NTP/TFTP/Test WiFi; register UDP with **`CreateUdpPcb`**; **`RequestAbortAll`** should tear down U2 sockets via **`INetworkSession::Abort`**.
+
+**What we did:**
+- **`Uthernet2Session`** implements **`OnUdpRecvPbuf`** (match **`udp_pcb*`** to emulated socket index) and **`Abort()`** (**`U2_Net_Close`** all slots). **`U2_Net_Init`** calls **`GetNetworkPump().AddSession(&g_u2_session)`** once (duplicate add is ignored by **`AddSession`**).
+- **UDP:** **`CreateUdpPcb` / `DestroyUdpPcb`**; **`U2_Net_Poll`** → **`NetworkPump_PollOnce()`** (no direct **`cyw43_arch_poll`** in U2).
+- **TCP:** Not **`CreateTcpPcb`** / **`NetworkPump_LegacyTcpRecv`**: lwIP **`tcp_err`** does not pass **`tcp_pcb*`**, so **`tcp_arg`** holds **`U2TcpArg { sock_index }`** and **`u2_tcp_recv` / `u2_tcp_err`** (C linkage) handle recv/err. **`RegisterTcpPcbOwner`** still records **`&g_u2_session`** per pcb. **`pcb->callback_arg`** is read before **`tcp_arg(pcb, nullptr)`** in teardown (**`tcp_arg`** is setter-only in this lwIP).
+- **Listen:** Before **`tcp_listen_with_backlog`**, **`u2_release_tcp_arg`** frees the client pcb’s **`U2TcpArg`**; the returned listen pcb is **`u2_attach_tcp_pcb`** + **`tcp_accept(u2_tcp_accept_cb)`**.
+
+**What we did not do:** Wrap **`PollOnce`** in **`cyw43_arch_lwip_begin/end`** (Core 1 **`U2_Net_Poll`** vs Core 0 idle **`PollOnce`** — monitor if stack requires mutex around lwIP from both cores).
+
+**References:** `pico/uthernet2_net.{h,cpp}`, `pico/network_pump.{h,cpp}`.
+
+### 14.11 DNS callback + pending task on `NetworkPump`
+
+**Goal:** Centralize legacy DNS “who is waiting?” state next to the UDP pcb map, without **`static`** state in **`udptask.cpp`**, while preserving correct **stale-callback** behaviour.
+
+**Why `arg` is the issuing session:** **`dns_gethostbyname`** passes a single **`void*`** to the callback. lwIP does not give a per-request handle other than that **`arg`**. If **`arg`** were only **`&GetNetworkPump()`**, a **late** DNS completion for lookup **A** could be applied to session **B** after **`RegisterDnsPendingOwner(B)`** overwrote the single pending slot—**wrong**. The fix is: **`arg = static_cast<void*>(static_cast<INetworkSession*>(issuer))`** **and** **`session == dns_pending_owner_`** in the callback (superseded lookup or session ended clears the slot or replaces it).
+
+**Mechanics:**
+- **`DNSLookup`:** **`RegisterDnsPendingOwner(this)`** is armed **before** **`dns_gethostbyname(..., NetworkPump_LegacyDnsCallback, void_ptr_to_INetworkSession)`** so a fast callback cannot race and be dropped. On immediate **`ERR_OK`** / **`ERR_ARG`** / other immediate failure, clear pending owner right away; on **`ERR_INPROGRESS`** keep the owner set and wait for callback/timeout. This fixes intermittent DNS timeouts caused by callback-before-registration ordering.
+- **`NetworkPump_LegacyDnsCallback`:** If **`!IsDnsPendingOwner(session)`**, ignore (stale). Else **`session->OnDnsGetHostByNameResult(ipaddr)`** (**`nullptr`** **ipaddr** = invalid host). **`CUDPTask`** sets **`dnsCallbackInvoked`**, **`dns_error`**, **`dns_result_ipaddr`** for **`EvtDNSResult`**.
+- **`PumpNetworkIteration`** / DNS timeout / **`LeaveRunSession`:** **`ClearDnsPendingOwner(this)`** when appropriate (same clear points as the old **`s_dnsPendingTask`**).
+
+**What we did not do:** A single **`RequestDNS(hostname, timeout_ms)`** API on the pump that also owns **`dnsTimeout`** / **`EvtDNSResult`** delivery—still **`CUDPTask::DNSLookup`** + **`PumpNetworkIteration`** for legacy tasks.
+
+**References:** `pico/network_pump.{h,cpp}`, `pico/udptask.{h,cpp}`.
+
+### 14.12 TCP pcb helpers + pump session timers
+
+**Goal:** Match §14.4’s TCP routing sketch and unblock future **`INetworkSession`** users (e.g. Uthernet II) without each protocol installing raw lwIP callbacks.
+
+**TCP (`CreateTcpPcb` / `DestroyTcpPcb`):**
+- **`tcp_new`**, **`RegisterTcpPcbOwner(pcb, owner)`**, **`tcp_arg(pcb, owner)`**, **`tcp_recv`/`tcp_err`** → **`NetworkPump_LegacyTcpRecv`** / **`NetworkPump_LegacyTcpErr`**.
+- **`INetworkSession::OnTcpRecvPbuf`** default frees **`pbuf`** if non-NULL; **`OnTcpErr`** is default no-op. lwIP’s **`tcp_err`** callback does **not** pass **`tcp_pcb*`** — sessions with multiple TCP sockets must track which pcb failed internally.
+- **`DestroyTcpPcb`** clears callbacks, **`tcp_abort`**, unregisters from **`tcp_pcb_owners_`**. Code that **replaces** **`tcp_recv`** after **`CreateTcpPcb`** (e.g. **`tcp_listen`**, **`tcp_accept`**) must keep **`tcp_arg`** ownership consistent with the pump.
+
+**Session timers (`ScheduleTimer` / `CancelTimer`):**
+- One **slot per** **`INetworkSession`** (new **`ScheduleTimer`** replaces the previous deadline for that session).
+- **`PollOnce`** runs **`DrainSessionTimers()`** after **`OnPump`**; expired timers call **`OnTimer(arg)`**.
+- **`RequestAbortAll`** clears pending pump timers (legacy **`CUDPTask`** timers unchanged).
+
+**What we did not do:** Use **`CreateTcpPcb`** for Uthernet II TCP (see §14.10b — custom **`tcp_arg`**); additional **`tcp_sent`/`tcp_poll`** wiring if needed later.
+
+**References:** `pico/network_pump.{h,cpp}`; Uthernet path §14.10b.
 
 ---
 
@@ -649,7 +850,5 @@ The pump still currently provides the earlier skeleton pieces too:
 This is intentionally conservative: the common case remains unchanged, but the control panel now catches the exact swapped-host/file pattern observed during debug and avoids sending an obviously wrong TFTP request.
 
 **References:** `cpanel/tftp.c`, `cpanel/ui-textinput.c`, `pico/cmdhandler.c`, `pico/network.cpp`.
-
-*This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

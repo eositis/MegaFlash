@@ -7,6 +7,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Callback: push received data into W5100 RX buffer for socket i.
  * is_udp: 1 = UDP (callback will write 4B IP + 2B port + 2B len then payload); 0 = TCP (payload only).
  * src_ip: IPv4 in host order (for UDP header); src_port host order. */
@@ -34,5 +38,9 @@ uint8_t U2_Net_GetStatus(int i);
 
 /** Advance lwIP and drain recv into RX buffers. Call periodically from bus loop. */
 void U2_Net_Poll(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _UTHERNET2_NET_H */

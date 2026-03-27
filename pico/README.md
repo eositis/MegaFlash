@@ -9,6 +9,22 @@ Summary: set **`PICO_SDK_PATH`** to your Raspberry Pi [Pico SDK](https://github.
 ```
 ./cmakeall.sh
 ```
+
+To **build both boards** (Pico W + Pico 2 W Release) **without** bumping the firmware version in `defines.h` (e.g. CI or a quick compile check):
+
+```
+./build-both.sh
+```
+
+To build **Debug** UF2s for both boards (UART 115200, `[u2]` W5100 trace + **`[u2m]`** U2 activity monitor: every `$C0C4–$C0C7` bus cycle, socket commands, and lwIP RX/TX). Run **`./cmakeall.sh` once** so `pico_debug` / `pico2_debug` exist, then:
+
+```
+./build-debug.sh
+```
+
+Capture serial and filter on `grep u2m` (or `[u2m]`) to follow the queue-drained monitor lines. Heavy traffic can fill the 128-entry ring; the firmware prints a **dropped** warning if events were lost.
+
+Each run passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix seconds) and **`FIRMWARE_BUILD_TIMESTAMP_STR`** (UTC, e.g. `2026-03-21 12:34:56 UTC`) into CMake; **`build_id.h`** is generated with both. The UF2 embeds Unix time in device info / `CMD_GETFIRMWAREVER` bytes 12–15 and shows the human-readable string in the USB device-info text (and Debug UART). Override either variable before running if needed.
 If everything is correct, the following sub-directories should be created.
 
 ```

@@ -4,6 +4,7 @@
 #include "pico/multicore.h"
 #include "pico/aon_timer.h"
 #include "defines.h"
+#include "build_id.h"
 #include "busloop.h"
 #include "mediaaccess.h"
 #include "flash.h"
@@ -20,6 +21,19 @@
 #include "ipc.h"
 #include "network.h"
 #include "tftpstate.h"
+
+// From generated build_id.h (CMake configure_file); 0 if unset (e.g. IDE configure without script).
+static void WriteFirmwareBuildTimestampLE(uint8_t *dst) {
+#if FIRMWARE_BUILD_TIMESTAMP
+  uint32_t ts = (uint32_t)FIRMWARE_BUILD_TIMESTAMP;
+#else
+  uint32_t ts = 0u;
+#endif
+  dst[0] = (uint8_t)(ts & 0xff);
+  dst[1] = (uint8_t)((ts >> 8) & 0xff);
+  dst[2] = (uint8_t)((ts >> 16) & 0xff);
+  dst[3] = (uint8_t)((ts >> 24) & 0xff);
+}
 
 //--------------------------------------------------------------
 //The definitions below must be the same as the ones in a2bus.c
@@ -162,6 +176,7 @@ static void Reconfig() {
 //   Flash Capacity in MB Low Byte
 //   Flash Capacity in MB High Byte
 //   Reserved = 0
+//   Build timestamp Unix (LE) at [12..15] when DeviceInfoVer >= 1
 //
 static void DoGetDeviceInfo() {
   //Don't want random data in parameter buffer
@@ -169,7 +184,7 @@ static void DoGetDeviceInfo() {
   
   parameterBuffer[0] = SIGNATURE1;              //First Signature Byte
   parameterBuffer[1] = SIGNATURE2;              //Second Signature Byte
-  parameterBuffer[2] = 0x00;                    //DeviceInfoVer
+  parameterBuffer[2] = 0x01;                    //DeviceInfoVer (1 = bytes [12..15] build Unix time LE)
   parameterBuffer[3] = FIRMWAREVER & 0xff;      //firmware version low byte
   parameterBuffer[4] = (FIRMWAREVER>>8) & 0xff; //firmware version high byte
   
@@ -196,6 +211,8 @@ static void DoGetDeviceInfo() {
   
   //Reserved for future use
   parameterBuffer[11] = 0;
+
+  WriteFirmwareBuildTimestampLE(&parameterBuffer[12]);
     
   ResetParamPointer();
   ResetDataPointer();
@@ -492,6 +509,7 @@ static void DoGetTimeString(){
 //////////////////////////////////////////////////////
 // Return firmware version string for display (e.g. left of clock)
 // Returns 12 bytes with high bit set, padded with spaces.
+// Bytes [12..15]: firmware build Unix timestamp, little-endian (0 if unknown).
 // Separate from CMD_GETTIMESTR to avoid breaking ProDOS integration.
 //
 static void DoGetFirmwareVer(void){
@@ -506,6 +524,7 @@ static void DoGetFirmwareVer(void){
   for (; i < VERLEN; ++i) {
     parameterBuffer[i] = ' ' | 0x80;
   }
+  WriteFirmwareBuildTimestampLE(&parameterBuffer[12]);
   ClearError();
   ResetParamPointer();
 }

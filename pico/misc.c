@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include "misc.h"
 #include "defines.h"
+#include "build_id.h"
 #include "debug.h"
 #include "flash.h"
 #include "romdisk.h"
@@ -222,6 +223,18 @@ uint32_t GetFreeHeap(void) {
   return GetTotalHeap() - m.uordblks;
 }
 
+void DebugPrintHeapState(const char *tag) {
+  struct mallinfo m = mallinfo();
+  DEBUG_PRINTF(
+      "%s: heap_region=%u free=%u mallinfo arena=%u uordblks=%u fordblks=%u\n",
+      tag ? tag : "heap",
+      (unsigned)GetTotalHeap(),
+      (unsigned)GetFreeHeap(),
+      (unsigned)m.arena,
+      (unsigned)m.uordblks,
+      (unsigned)m.fordblks);
+}
+
 //Reset the CPU
 void SystemReset() {
   hw_set_bits(&watchdog_hw->ctrl, WATCHDOG_CTRL_TRIGGER_BITS);
@@ -374,7 +387,13 @@ void GetDeviceInfoString(char* dest) {
   #ifndef NDEBUG
   dest += sprintf(dest," (DEBUG)");
   #endif
+#if FIRMWARE_BUILD_TIMESTAMP
+  dest += sprintf(dest,"\n\rFirmware build: %s  (%lu Unix s)\n\r",
+                  FIRMWARE_BUILD_TIMESTAMP_STR,
+                  (unsigned long)(uint32_t)FIRMWARE_BUILD_TIMESTAMP);
+#else
   dest += sprintf(dest,"\n\rFirmware Build Timestamp = %s %s\n\r",__DATE__,__TIME__);
+#endif
   dest += sprintf(dest,"Pico SDK Version = %s\n\r",  PICO_SDK_VERSION_STRING);
   
   //

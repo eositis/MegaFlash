@@ -19,7 +19,7 @@ MegaFlash is an internal storage device for Apple IIc/IIc plus computer.
 - FPU for Applesoft BASIC
 - Bug fixes of System ROM and Applesoft
 
-A brief [user guide](/MegaFlash for a2s4000 installation guide.pdf) is available for more information.
+A brief [user guide](https://github.com/eositis/MegaFlash/blob/main/MegaFlash%20for%20a2s4000%20installation%20guide.pdf) is available for more information.
 
 ## Requirement
 - Apple IIc computer with Memory Expansion Card connector or

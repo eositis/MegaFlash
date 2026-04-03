@@ -6,13 +6,13 @@ cmake_minimum_required(VERSION 3.13...3.27)
 #All builds share the same PICOTOOL
 set(PICOTOOL_FETCH_FROM_GIT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/picotool)
 
-# Pico SDK: -DPICO_SDK_PATH=... (cache) wins; else ENV{PICO_SDK_PATH}; else same default as cmakeall.sh.
+# Pico SDK: -DPICO_SDK_PATH=... (cache) wins; else ENV{PICO_SDK_PATH}; else $HOME/pico-sdk (same as cmakeall.sh).
 # This lets `cmake -B build -S .` work in environments that do not inherit the user's shell profile.
 if(NOT PICO_SDK_PATH)
   if(DEFINED ENV{PICO_SDK_PATH} AND NOT "$ENV{PICO_SDK_PATH}" STREQUAL "")
     set(PICO_SDK_PATH "$ENV{PICO_SDK_PATH}")
   else()
-    set(PICO_SDK_PATH "/Users/eositis/pico-sdk")
+    set(PICO_SDK_PATH "$ENV{HOME}/pico-sdk")
   endif()
 endif()
 
@@ -134,6 +134,10 @@ if (PICO_BOARD STREQUAL pico_w)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SYS_CLK_MHZ=150)
 endif()
 
+# RP2350: extra SPI /CS nops in flash.c when CPU is overclocked (Thomas upstream OC_RP2350).
+if (PICO_BOARD STREQUAL pico2_w)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE OC_RP2350=1)
+endif()
 
 # U2 / ip65 debug (Debug builds only): default low noise — use checkpoints to bisect init.
 # Example: cmake -B pico2_debug -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug -DU2_IP65_CHECKPOINT=3

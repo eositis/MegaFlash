@@ -129,9 +129,14 @@ uint32_t GetFlashSize() {
 // Flash Read/Write error may occur when SPI is running at 75MHz
 static inline void enable_spi0(const uint deviceNum) {
   assert(deviceNum <= 1);
-  
+#if OC_RP2350
   asm volatile("nop");
-  gpio_clr_mask(deviceNum==0?1ul<<CS0_PIN:1ul<<CS1_PIN); 
+#endif
+  asm volatile("nop");
+  gpio_clr_mask(deviceNum==0?1ul<<CS0_PIN:1ul<<CS1_PIN);
+#if OC_RP2350
+  asm volatile("nop");
+#endif
   asm volatile("nop");
 }
 
@@ -143,8 +148,14 @@ static inline void enable_spi0(const uint deviceNum) {
 // Otherwise, TFTP Download may freeze and
 // Flash Read/Write error may occur when SPI is running at 75MHz
 static inline void disable_spi0() {
+#if OC_RP2350
+  asm volatile("nop");
+#endif
   asm volatile("nop");
   gpio_set_mask(1ul<<CS0_PIN|1ul<<CS1_PIN);
+#if OC_RP2350
+  asm volatile("nop");
+#endif
   asm volatile("nop");
 }
 
@@ -484,9 +495,9 @@ void tsWriteSecurityRegister(const uint32_t regnum,uint8_t* src,const uint8_t of
     //Copy source data to buffer
     memcpy(buffer+offset,src,len);
 
-    //Write the data back
+    //Write the data back (always program full 256 B after merge; Thomas upstream fix)
     tsEraseSecurityRegister(regnum);
-    tsProgramSecurityRegister(regnum,buffer,len);    
+    tsProgramSecurityRegister(regnum,buffer,256);
   }
 }
 

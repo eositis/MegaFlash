@@ -242,9 +242,21 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **What we did:** **`pico/ramdisk.c`**: dedicated DMA (copy/zero), mutex on exported paths only, **`InitRamdisk()`**; **`pico/ramdisk.h`** / **`pico/main.c`**: declare and call init after **`InitDMAChannel()`**. **`pico/romdisk.c`**: **`memcpy`** for block read; removed **`dmamemops`** include; left **`romdiskFirst`** and defaults as on this fork. **`pico/flash.c`**: replaced **`ReadFromFlashByDMA`** with Thomas’s timeout/abort implementation; **`tsReadOneBlock`** / **`tsReadSector`** pass **`success`** and fall back on failure.
 
-**What we didn’t do (yet):** Full **`dmamemops.c`** / remainder of **`flash.c`** / **`slinky.c`** / **`mediaaccess.c`** upstream refactors (would conflict with **`GetRomdiskFirst()`** or Slinky **`UpdateMegaFlashRegisters`** init). TFTP DOS-order **`imagewriter`** remains separate.
+**What we didn’t do (yet):** Remainder of **`flash.c`** (see §4f for **`dmamemops`**), **`slinky.c`** / **`mediaaccess.c`** upstream refactors (would conflict with **`GetRomdiskFirst()`** or Slinky **`UpdateMegaFlashRegisters`** init). TFTP DOS-order **`imagewriter`** remains separate.
 
 **References:** `pico/ramdisk.c`, `pico/romdisk.c`, `pico/flash.c` (`ReadFromFlashByDMA`, `tsReadOneBlock`, `tsReadSector`), `pico/main.c`.
+
+---
+
+## 4f. Thomas `dmamemops.c` + further `flash.c` (without API rename)
+
+**What:** Align shared memory DMA with Thomas’s **`dmamemops.c`** (separate frozen **`dma_channel_config_t`** per operation width: copy 8/32, zero 8/32, CRC 8/32) so routines no longer mutate and restore a single global config. Add **`OC_RP2350`** (**`CMakeLists.txt`**: **`pico2_w`**) and matching **`enable_spi0` / `disable_spi0`** extra **`nop`** delays. Fix partial **`tsWriteSecurityRegister`** merge path to call **`tsProgramSecurityRegister(..., 256)`** (full page), not **`len`**.
+
+**Why:** Per-call config twiddle was fragile; Thomas’s approach matches hardware channel setup to each use. RP2350 overclock + 75 MHz SPI needed CS timing margin per upstream. Programming **`len`** bytes after a 256 B read/merge could truncate the security register image.
+
+**What we didn’t do:** Thomas renames flash exports (**`ReadBlockFlash`**, **`EraseEverything`**, static **`GetBlockLoc`**, **`ReadUserConfigBlock`** in **`flash.c`**, drops **`blockBuffer`**) — merging that would force **`flash.h`**, **`userconfig.c`**, **`mediaaccess.c`**, **`terminal.c`**, **`misc.c`**, **`encryption.c`** renames and wider regression risk; deferred until a dedicated API pass.
+
+**References:** `pico/dmamemops.c`, `pico/flash.c` (`enable_spi0`, `disable_spi0`, `tsWriteSecurityRegister`), `pico/CMakeLists.txt` (`OC_RP2350`).
 
 ---
 
@@ -511,7 +523,7 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
 | Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
 | **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
-| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d, **§4e** | **Merged (§4e):** RAM disk dedicated DMA + flash read timeout/fallback; ROM disk CPU **`memcpy`**. **Not merged:** full **`dmamemops`/`flash`** refactors, **`slinky`/`mediaaccess`** upstream (fork unit order + Slinky init). **IIc+:** **`fswrts`/`swjmp_ay`**; **TFTP DOS-order** still separate |
+| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4f** | **§4e:** RAM disk DMA, ROM **`memcpy`**, flash read DMA timeout. **§4f:** **`dmamemops`** multi-config; **`OC_RP2350`** CS nops; security register **256 B** program. **Not merged:** Thomas **`flash.h`** / **`ts*→`** rename, mutex-only-on-exports layout. **IIc+** / **TFTP DOS-order** still separate |
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |

@@ -8,6 +8,7 @@ extern "C" {
 bool GetRamdiskEnabled();
 void EnableRamdisk();
 void DisableRamdisk();
+void InitRamdisk();
 uint8_t* GetRamdiskDataPointer();
 size_t GetRamdiskSize(); //RAM Disk Size in bytes
 void tsEraseRamdiskQuick();

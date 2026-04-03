@@ -3,6 +3,7 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/clocks.h"
+#include "hardware/dma.h"
 #include "hardware/spi.h"
 #include "dmamemops.h"
 #include "defines.h"
@@ -103,7 +104,7 @@ static uint32_t flashSize1 = 0;
 //For spi_write_blocking, our speed test shows that DMA has no
 //speed benefits. WriteToFlashByDMA() routine is currently not used.
 //But it is not removed in case it is useful in future.
-static uint32_t ReadFromFlashByDMA(uint8_t *destBuffer, const uint32_t len);
+static uint32_t ReadFromFlashByDMA(uint8_t *destBuffer, const uint32_t len, bool *success_out);
 static void WriteToFlashByDMA(const uint8_t *srcBuffer, const uint32_t len);
 
 
@@ -657,13 +658,23 @@ static uint32_t __no_inline_not_in_flash_func(tsReadOneBlock)(const blockloc_t b
   msg[1] = (uint8_t)(blockAddress);
   msg[5] = 0;   //Dummy 8-bit
   
+  bool success;
   MUTEXLOCK();
   enable_spi0(blockLoc.deviceNum);
   spi_write_blocking(spi0, msg, 6);
-  uint32_t crc=ReadFromFlashByDMA(dest,BLOCKSIZE);
+  uint32_t crc=ReadFromFlashByDMA(dest,BLOCKSIZE,&success);
   disable_spi0();
+
+  //Fall back to non-DMA implementation if ReadFromFlashByDMA() failed.
+  if (!success) {
+    enable_spi0(blockLoc.deviceNum);
+    spi_write_blocking(spi0, msg, 6);
+    spi_read_blocking(spi0, REPEATED_TX_DATA, dest, BLOCKSIZE);
+    disable_spi0();
+    crc = CRC32Aligned(dest,BLOCKSIZE);
+  }
   MUTEXUNLOCK();
-  
+
   return crc;
 }
 
@@ -688,13 +699,23 @@ static uint32_t __no_inline_not_in_flash_func(tsReadSector)(const uint deviceNum
   msg[1] = (uint8_t)(sectorAddress);
   msg[5] = 0;   //Dummy 8-bit
   
+  bool success;
   MUTEXLOCK();
   enable_spi0(deviceNum);
   spi_write_blocking(spi0, msg, 6);
-  uint32_t crc=ReadFromFlashByDMA(sectorBuffer,SECTORSIZE);
+  uint32_t crc=ReadFromFlashByDMA(sectorBuffer,SECTORSIZE,&success);
   disable_spi0();
+
+  //Fall back to non-DMA implementation if ReadFromFlashByDMA() failed.
+  if (!success) {
+    enable_spi0(deviceNum);
+    spi_write_blocking(spi0, msg, 6);
+    spi_read_blocking(spi0, REPEATED_TX_DATA, sectorBuffer, SECTORSIZE);
+    disable_spi0();
+    crc = CRC32Aligned(sectorBuffer,SECTORSIZE);
+  }
   MUTEXUNLOCK();
-  
+
   return crc;
 }
 
@@ -1091,7 +1112,7 @@ static uint32_t ChipIDToCapacity(const uint32_t id) {
 
 
 
-//////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////
 // Read data from flash by DMA
 // Replace spi_read_blocking routine()
 //
@@ -1099,46 +1120,50 @@ static uint32_t ChipIDToCapacity(const uint32_t id) {
 //        len - Number of Bytes
 //
 // Output: CRC32 of the data read from flash
+//         success_out: true/false
 //
-static uint32_t __no_inline_not_in_flash_func(ReadFromFlashByDMA)(uint8_t *destBuffer,const uint32_t len) {
-  static int txChannel;
-  static int rxChannel;
-  
+//ReadFromFlashByDMA() occasionally fails if the CPU is overclocked to 225MHz and SPI
+//is running at 75MHz. The problem is RX DMA does not finish. Setting DMA priority,
+//bus priority and increasing core voltage do not help.
+//The problem occurs only during TFTP file transfer. A disk-to-disk copy with Copy II plus
+//is performed. But there was no such problem.
+//It usually happens less than 6 times during the entire file transfer.
+//So, DMA failure rate < 0.01%.
+//
+//The workaround is to set a timeout. If the RX DMA does not finish, the DMA is aborted
+//and this function returns false to success_out. The caller then falls back to non-DMA
+//implementation.
+static uint32_t __no_inline_not_in_flash_func(ReadFromFlashByDMA)(uint8_t *destBuffer,const uint32_t len,bool* success_out) {
   static bool alreadyConfigured = false;
-  static dma_channel_config_t tx_config;
+  static int rxChannel;
   static dma_channel_config_t rx_config;
-  
-  uint8_t src[] = {REPEATED_TX_DATA}; //Tx data source  
+  static uint32_t dmatimeout;
 
   if (!alreadyConfigured) {
     alreadyConfigured = true;
-    
+
     //DMA Channel Number
-    txChannel = dma_claim_unused_channel(true);
-    rxChannel = dma_claim_unused_channel(true);    
-    
-    //TX DMA Config
-    tx_config = dma_channel_get_default_config(txChannel);
-    channel_config_set_transfer_data_size(&tx_config, DMA_SIZE_8);
-    channel_config_set_dreq(&tx_config,spi_get_dreq(spi0,true));  // true = tx dreq
-    channel_config_set_write_increment(&tx_config, false);  
-    channel_config_set_read_increment(&tx_config, false); 
+    rxChannel = dma_claim_unused_channel(true);
 
     //RX DMA Config
     rx_config = dma_channel_get_default_config(rxChannel);
     channel_config_set_transfer_data_size(&rx_config, DMA_SIZE_8);
     channel_config_set_dreq(&rx_config,spi_get_dreq(spi0,false));  // false = rx dreq
-    channel_config_set_write_increment(&rx_config, true); 
+    channel_config_set_write_increment(&rx_config, true);
     channel_config_set_read_increment(&rx_config, false);
     channel_config_set_sniff_enable(&rx_config, true);
-  }
 
-  //TX DMA Channel
-  dma_channel_configure(txChannel,&tx_config,
-                        &spi_get_hw(spi0)->dr,  //destination
-                        src,                    //source
-                        len,
-                        false);                 //Don't start
+    //Calculate dmatimeout value
+    //The time to complete DMA after TX loop has completed.
+    //SPI 25MHz: 3us
+    //SPI 75MHz: 1us
+    //
+    //dmatimeout is set to 3us if baud>=50MHz
+    //Otherwise, dmatimeout = 6us * 25MHz / current_spi_baud
+    const uint32_t baud = spi_get_baudrate(spi0);
+    if (baud>=50000000ul) dmatimeout = 3;
+    else dmatimeout = 6 * 25000000ul / baud;
+  }
 
   //RX DMA Channel
   dma_channel_configure(rxChannel,&rx_config,
@@ -1148,13 +1173,50 @@ static uint32_t __no_inline_not_in_flash_func(ReadFromFlashByDMA)(uint8_t *destB
                         false);                 //Don't start
   SetCRC32Seed(rxChannel,DEFAULT_CRC32_SEED);
 
-  //start dma 
-  dma_start_channel_mask((1u<<txChannel) | (1u<<rxChannel));
-  
-  //tx should complete before rx
-  dma_channel_wait_for_finish_blocking(rxChannel);
-        
-  return GetCRC();
+  //start RX dma
+  dma_start_channel_mask(1u<<rxChannel);
+
+  //TX with software loop
+  for (size_t i = 0; i < len; ++i) {
+    while (!spi_is_writable(spi0))
+        tight_loop_contents();
+    spi_get_hw(spi0)->dr = REPEATED_TX_DATA;
+  }
+  //All TX data has been put into SPI FIFO
+  //RX DMA should finishes in a few us
+
+  //Assume success
+  *success_out = true;
+
+  //Wait until rxChannel finishes or timeout
+  const uint32_t startTime = time_us_32();
+  do{
+    if (!dma_channel_is_busy(rxChannel)) {
+      //RX DMA finished!
+      // Don't leave overrun flag set
+      spi_get_hw(spi0)->icr = SPI_SSPICR_RORIC_BITS;
+      return GetCRC();
+    }
+  }while((time_us_32()-startTime) < dmatimeout);
+
+  //
+  //timeout - DMA failed
+  //Abort DMA and clean up
+  //
+  *success_out = false;
+  dma_channel_abort(rxChannel);
+
+  //Drain SPI RX FIFO
+  while (spi_is_readable(spi0))
+      (void)spi_get_hw(spi0)->dr;
+
+  // Don't leave overrun flag set
+  spi_get_hw(spi0)->icr = SPI_SSPICR_RORIC_BITS;
+
+  //DEBUG Only. Output to UART
+  INFO_PRINTF("%c",len>512?'!':'@');
+
+  return 0;
 }
 
 

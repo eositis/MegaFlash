@@ -184,15 +184,67 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **Reasoning:**
 - The script was not passing `PICO_SDK_PATH` to CMake. The environment might have it set in an interactive shell, but when the script runs (e.g. from Cursor/IDE), that env may not be set, and CMake’s cache can change (e.g. after toolchain change), causing a re-run where `PICO_SDK_PATH` is empty.
-- Making the build reproducible: pass the SDK path explicitly on the command line so the script does not depend on the environment. The path used was `/Users/eositis/pico-sdk` (user’s machine); others can set `PICO_SDK_PATH` or edit the script.
+- Making the build reproducible: pass the SDK path explicitly on the command line so the script does not depend on the environment. Defaults are portable: **`$HOME/pico-sdk`** in **`cmakeall.sh`** / **`build-both.sh`** and **`$ENV{HOME}/pico-sdk`** in **`CMakeLists.txt`** so Intel vs ARM macOS and different usernames do not require editing the repo. Override with **`PICO_SDK_PATH`** or **`-DPICO_SDK_PATH`** if the SDK lives elsewhere.
 
-**Change:** Add `-DPICO_SDK_PATH=/Users/eositis/pico-sdk` to every `cmake -B ...` line in `cmakeall.sh`.
+**Change:** Scripts pass **`-DPICO_SDK_PATH="$SDK_PATH"`** with **`SDK_PATH="${PICO_SDK_PATH:-$HOME/pico-sdk}"`**.
 
-**Follow-up:** `pico/CMakeLists.txt` now applies the same fallback (`/Users/eositis/pico-sdk`) when neither `-DPICO_SDK_PATH` nor a non-empty `ENV{PICO_SDK_PATH}` is set, *before* `include(pico_sdk_import.cmake)`, so bare `cmake -B build -S .` works in non-interactive environments (e.g. agent shells without the user’s profile). Edit the fallback path if your SDK lives elsewhere.
+**Follow-up:** `pico/CMakeLists.txt` applies the same **`$HOME/pico-sdk`** fallback when neither `-DPICO_SDK_PATH` nor a non-empty `ENV{PICO_SDK_PATH}` is set, *before* `include(pico_sdk_import.cmake)`, so bare `cmake -B build -S .` works in non-interactive environments. **Toolchain discovery:** after **`ARM_TOOLCHAIN_PATH`** and **`/Applications/ArmGNUToolchain/...`**, scripts check **`/opt/homebrew/bin`** then **`/usr/local/bin`** so Apple Silicon Homebrew is preferred over a stale Intel-era **`PATH`**. **`mf_try_arm_toolchain_bin`** also requires **`nosys.specs`** (newlib) so Homebrew’s **`arm-none-eabi-gcc`** alone is rejected; Pico needs the full Arm GNU Embedded **.pkg** (darwin-aarch64 on Apple Silicon). **`pico/build-env.sh`** sets **`CMAKE_BIN`** the same way (**`/opt/homebrew/bin/cmake`** first) so **`cmakeall.sh`**, **`build-both.sh`**, and **`build-debug.sh`** do not invoke an x86_64 CMake on ARM Macs; override with **`CMAKE=/path/to/cmake`**. **`cpanel`:** scripts run **`make release`** only so the test-disk **`java`** step is skipped (avoids x86 Java after Intel→ARM migration). **`set -e`:** **`GCC_PATH=$(command -v …)`** uses **`|| true`** so a missing compiler does not abort before the error message.
 
 **`build-both.sh`:** For verification without bumping `defines.h`, run `./build-both.sh` from `pico/` — it builds **cpanel**, then configures and **`make`s both `pico_release` and `pico2_release`** (same toolchain logic as `cmakeall.sh`). See summary table §11.
 
 **References:** `pico/cmakeall.sh`, `pico/CMakeLists.txt`, `pico/pico_sdk_import.cmake`.
+
+---
+
+## 4b. Vendored picotool (host arch)
+
+**What:** `pico/CMakeLists.txt` sets **`PICOTOOL_FETCH_FROM_GIT_PATH`** to **`pico/picotool`**. The shipped **`picotool/picotool/picotool`** binary may be **x86_64** (e.g. copied from an Intel Mac). On Apple Silicon, the firmware link step fails with **`Bad CPU type in executable`**.
+
+**What we did:** Rebuild from **`pico/picotool/picotool-src`** with **`/opt/homebrew/bin/cmake`**, **`-DPICO_SDK_PATH`**, **`-DPICOTOOL_FLAT_INSTALL=1`**, **`-DCMAKE_INSTALL_PREFIX=.../pico/picotool`**, **`cmake --build`** + **`cmake --install`**.
+
+**libusb (Apple Silicon):** **`picotool-src`** uses **`find_package(LIBUSB)`**. If the only **`libusb-1.0`** on the machine is under **`/usr/local`** (Intel Homebrew or old install), it is often **x86_64** → link fails with **undefined `libusb_*` / wrong architecture**. **Preferred:** install **`libusb`** with Apple Silicon Homebrew (**`brew install libusb`**) so **`/opt/homebrew/lib/libusb-1.0.dylib`** is **arm64**. Ensure **`pkg-config`** is available from the same prefix (**`brew install pkgconf`**) so CMake does not fall back to a broken **`/usr/local/bin/pkg-config`**. Rebuild **picotool** **without** **`PICOTOOL_NO_LIBUSB`** for full USB/picoboot support. **Fallback:** **`-DPICOTOOL_NO_LIBUSB=1`** still produces a **UF2**-capable **picotool** with no USB stack (fine for firmware builds only).
+
+**Takeaway:** The **.pkg** Arm toolchain was fine; the blocker was the **host** picotool. A repo that supports both Intel and ARM Macs should not commit a single-arch picotool binary, or should document rebuilding **`picotool-src`** per host.
+
+**References:** `pico/picotool/picotool-src/CMakeLists.txt`, `pico/CMakeLists.txt` (`PICOTOOL_FETCH_FROM_GIT_PATH`).
+
+---
+
+## 4c. cpanel `make all`, Java, and `java_home` (Apple Silicon)
+
+**What:** **`cpanel/Makefile`** runs **`java -jar ./acx18.jar`** for the test-disk target. **`/usr/bin/java`** delegates to **`/usr/libexec/java_home`**, which only lists JDKs under **`/Library/Java/JavaVirtualMachines/`** (plus some legacy bundles). A **Homebrew arm64 OpenJDK** under **`/opt/homebrew`** is **not** listed until registered. An old **Intel Homebrew** OpenJDK under **`/usr/local/Cellar/openjdk`** *was* picked and failed with **`Bad CPU type`**.
+
+**Uninstall Intel OpenJDK without Intel brew:** On Apple Silicon, **`/usr/local/bin/brew uninstall`** may fail (x86 portable Ruby). If **`/usr/local/Cellar/openjdk`** is owned by your user, remove it directly: **`rm -rf /usr/local/Cellar/openjdk`** and **`rm -f /usr/local/opt/openjdk`** (broken symlink after Cellar removal).
+
+**Register arm64 OpenJDK:** Run **`./tools/register-arm-openjdk-macos.sh`** from the repo root (one **`sudo`** to **`ln -sfn "$(brew --prefix openjdk)/libexec/openjdk.jdk"`** → **`/Library/Java/JavaVirtualMachines/openjdk.jdk`**). Then **`/usr/libexec/java_home -V`** should include **arm64** OpenJDK. **Alternatively** set **`JAVA_HOME`** to **`$(brew --prefix openjdk)/libexec/openjdk.jdk/Contents/Home`** and **`PATH="$JAVA_HOME/bin:$PATH"`** without registering.
+
+**Leftover x86 JVM:** **Oracle Java 8** browser plugin under **`/Library/Internet Plug-Ins/JavaAppletPlugin.plugin`** may still appear in **`java_home`**; remove that install from Oracle’s uninstaller if you want **`-a arm64`** to be unambiguous.
+
+**References:** `cpanel/Makefile`, `tools/register-arm-openjdk-macos.sh`.
+
+---
+
+## 4d. Upstream [ThomasFok/MegaFlash](https://github.com/ThomasFok/MegaFlash): storage & IIc+ / Applesoft
+
+**What:** Periodic diff of **`main`** vs **`upstream/main`** (remote **`ThomasFok/MegaFlash`**) to spot fixes/features not yet merged.
+
+**Where:** Full write-up (open beside the editor): **`ThomasFok-upstream-comparison.md`** (repo root). Highlights: **`fswrts` / `swjmp_ay`** (IIc+ bank switch / boot path), **RAM disk dedicated DMA**, **flash DMA + overclock hang fix**, **TFTP DOS-order image + imagewriter**, **`romdisk` DMA removal** upstream. **`firmware/accel.s`** is unchanged vs upstream in a recent diff.
+
+**References:** `ThomasFok-upstream-comparison.md`, stub `docs/Upstream-ThomasFok-storage-accel-comparison.md`.
+
+---
+
+## 4e. ThomasFok storage stack: first merge (RAM/ROM disk + flash read DMA)
+
+**What:** Bring over Thomas’s storage-related Pico changes without dropping fork-only behaviour (SmartPort unit order with ROM disk first/last, Slinky register init, **`ts*`** flash/RAMdisk symbol names).
+
+**Why:** Shared **`dmamemops`** DMA with RAM disk risks contention when both cores use memory DMA; Thomas gives RAM disk its own channel. Flash read previously used paired TX/RX DMA; at high CPU clock that path can hang—Thomas uses CPU TX + RX DMA with a short timeout and **`spi_read_blocking`** + **`CRC32Aligned`** fallback.
+
+**What we did:** **`pico/ramdisk.c`**: dedicated DMA (copy/zero), mutex on exported paths only, **`InitRamdisk()`**; **`pico/ramdisk.h`** / **`pico/main.c`**: declare and call init after **`InitDMAChannel()`**. **`pico/romdisk.c`**: **`memcpy`** for block read; removed **`dmamemops`** include; left **`romdiskFirst`** and defaults as on this fork. **`pico/flash.c`**: replaced **`ReadFromFlashByDMA`** with Thomas’s timeout/abort implementation; **`tsReadOneBlock`** / **`tsReadSector`** pass **`success`** and fall back on failure.
+
+**What we didn’t do (yet):** Full **`dmamemops.c`** / remainder of **`flash.c`** / **`slinky.c`** / **`mediaaccess.c`** upstream refactors (would conflict with **`GetRomdiskFirst()`** or Slinky **`UpdateMegaFlashRegisters`** init). TFTP DOS-order **`imagewriter`** remains separate.
+
+**References:** `pico/ramdisk.c`, `pico/romdisk.c`, `pico/flash.c` (`ReadFromFlashByDMA`, `tsReadOneBlock`, `tsReadSector`), `pico/main.c`.
 
 ---
 
@@ -454,7 +506,12 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | RP2350 U2 vs PIO IRQ 0 | `busloop.c` §1d | U2 branch must wait for IRQ 0 clear before `UpdateMegaFlashRegisters(1,…)` (same as main loop); skipping caused bad C0C4–C0C7 reads |
 | U2 `[u2m]` monitor | `u2_monitor.c`, `build-debug.sh` §1e | Debug-only queued UART trace; flush from `U2_Poll`; bus + socket + net hooks |
 | A0–A3, nDEVSEL pulls | `a2bus_rp2040.pio`, `a2bus_rp2350.pio` | A2=GPIO8, A3=GPIO9, no pulls; nDEVSEL pull-up on; data bus pull-up |
-| Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses same default when env or `-D` unset (§4) |
+| Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses **`$HOME/pico-sdk`** when env or `-D` unset (§4); SDK is same git repo on all host architectures |
+| Host CMake | `build-env.sh`, `cmakeall.sh`, `build-both.sh`, `build-debug.sh` | **`CMAKE_BIN`**: `/opt/homebrew/bin/cmake` → `/usr/local/bin/cmake` → **`PATH`**; **`CMAKE`** env override |
+| Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
+| Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
+| **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
+| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d, **§4e** | **Merged (§4e):** RAM disk dedicated DMA + flash read timeout/fallback; ROM disk CPU **`memcpy`**. **Not merged:** full **`dmamemops`/`flash`** refactors, **`slinky`/`mediaaccess`** upstream (fork unit order + Slinky init). **IIc+:** **`fswrts`/`swjmp_ay`**; **TFTP DOS-order** still separate |
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |

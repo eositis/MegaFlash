@@ -1,8 +1,8 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "hardware/dma.h"
 #include <string.h>
 #include "defines.h"
-#include "dmamemops.h"
 #include "mediaaccess.h"
 #include "formatter.h"
 #include "ramdisk.h"
@@ -12,12 +12,9 @@ After power on, the MegaFlash is in Slinky Emulation mode.
 The content of RAMDisk is random. After switching to
 MegaFlash native mode, Apple sends CMD_COLDSTART command.
 Then, EnableRamdisk() is called if RAMDisk is enabled.
-The RAMDisk is formatted. tsFormatRamdiskOnce() function
+The RAMDisk is formatted. FormatRamdiskOnce() function
 ensure the RAMDisk is formatted once only.
 *******************************************************/
-
-//Use Mutex to make access to RAMDisk thread-safe
-#define USEMUTEX 1
 
 //Smartport DIB ID String padded to 16 bytes long
 #define IDSTR "RAMDISK         "
@@ -33,18 +30,103 @@ static bool ramdiskEnabled = false;
 //RAMDisk data
 static uint8_t __attribute__((aligned(4))) ramdisk_data[RAMDISK_SIZE];
 
-//Mutex
-//No need to use recursive mutex since all functions are simple and do not call other another.
-//except FormatRamdiskOnce() function
-#if USEMUTEX
-  auto_init_mutex(ramdiskMutex);
-  #define MUTEXLOCK()   mutex_enter_blocking(&ramdiskMutex)
-  #define MUTEXUNLOCK() mutex_exit(&ramdiskMutex)
-#else
-  #define MUTEXLOCK()   do{}while(0)
-  #define MUTEXUNLOCK() do{}while(0)
-#endif
+/////////////////////////////////////////////////////////////////////
+// Mutex
+//
+// To make RAMDisk access thread-safe.
+// Thread-safe is needed because both cores may access to RamDisk at the same
+// time if TFTP is running.
+//
+// The protocol is: all exported functions (non-static functions) which access
+// the RamDisk must be protected by Mutex.
+//
+// No need to use recursive mutex since all functions are simple and do not call other another.
+// except FormatRamdiskOnce() function
+auto_init_mutex(ramdiskMutex);
+#define MUTEXLOCK()   mutex_enter_blocking(&ramdiskMutex)
+#define MUTEXUNLOCK() mutex_exit(&ramdiskMutex)
 
+/////////////////////////////////////////////////////////////////
+// DMA
+// RAMDisk has its own DMA channel to avoid potential conflict
+// with other routines
+//
+static dma_channel_config_t ramdisk_copymem_config;
+static dma_channel_config_t ramdisk_zeromem_config;
+static int ramdisk_dma_channel;
+
+////////////////////////////////////////////////////////
+// Init DMA Channel for Ramdisk
+//
+static void InitRamdiskDMAChannel() {
+  ramdisk_dma_channel = dma_claim_unused_channel(true);
+
+  ramdisk_copymem_config = dma_channel_get_default_config(ramdisk_dma_channel);
+  channel_config_set_transfer_data_size(&ramdisk_copymem_config, DMA_SIZE_32);
+  channel_config_set_read_increment(&ramdisk_copymem_config, true);
+  channel_config_set_write_increment(&ramdisk_copymem_config, true);
+
+  ramdisk_zeromem_config = ramdisk_copymem_config;
+  channel_config_set_read_increment(&ramdisk_zeromem_config, false);
+}
+
+//////////////////////////////////////////////////////
+// Copy Memory by DMA with 32-bit transfer size
+// The src,dest pointers and len must be 32-bit aligned
+//
+// Input: dest - destination pointer
+//        src  - source pointer
+//        len  - Number of bytes to copy
+//
+static void RamdiskCopyMemory(uint8_t* dest,const uint8_t *src,const uint32_t len) {
+  assert(len%4==0);             //must be multiple of 4
+  assert((uint32_t)dest%4==0);  //must be 32-bit aligned
+  assert((uint32_t)src%4==0);   //must be 32-bit aligned
+  assert(!dma_channel_is_busy(ramdisk_dma_channel));
+
+  dma_channel_configure(
+      ramdisk_dma_channel,      // Channel to be configured
+      &ramdisk_copymem_config,  // The DMA configuration
+      dest,                     // The initial write address
+      src,                      // The initial read address
+      len/4,                    // Number of transfers
+      true                      // Start immediately.
+  );
+
+  dma_channel_wait_for_finish_blocking(ramdisk_dma_channel);
+}
+
+//////////////////////////////////////////////////////
+// Fill Memory with zeros with 32-bit transfer size
+// The dest pointer and len must be 32-bit aligned
+//
+// Input: dest - destination pointer
+//        len  - Number of bytes to fill
+//
+static void RamdiskZeroMemory(uint8_t *dest,const uint32_t len) {
+  assert(len%4==0);             //must be multiple of 4
+  assert((uint32_t)dest%4==0);  //must be 32-bit aligned
+  assert(!dma_channel_is_busy(ramdisk_dma_channel));
+  const uint32_t src[] = {0};
+
+  dma_channel_configure(
+      ramdisk_dma_channel,      // Channel to be configured
+      &ramdisk_zeromem_config,  // The DMA configuration
+      dest,                     // The initial write address
+      src,                      // The initial read address
+      len/4,                    // Number of transfers
+      true                      // Start immediately.
+  );
+
+  dma_channel_wait_for_finish_blocking(ramdisk_dma_channel);
+}
+
+//////////////////////////////////////////////////////
+// Initalize Ramdisk
+//
+void InitRamdisk(){
+  InitRamdiskDMAChannel();
+}
 
 ///////////////////////////////////////
 // Getter /Setter function
@@ -96,11 +178,11 @@ size_t GetRamdiskSize() {
 rwerror_t tsReadBlockRamdisk(const uint blockNum, uint8_t* destBuffer){
   //Validate Block Number
   if (blockNum >= GetBlockCountRamdisk()) return SP_IOERR;
-  
+
   MUTEXLOCK();
-  CopyMemoryAligned(destBuffer,ramdisk_data+blockNum*BLOCKSIZE,BLOCKSIZE);
+  RamdiskCopyMemory(destBuffer,ramdisk_data+blockNum*BLOCKSIZE,BLOCKSIZE);
   MUTEXUNLOCK();
-  
+
   return SP_NOERR;
 }
 
@@ -116,11 +198,11 @@ rwerror_t tsReadBlockRamdisk(const uint blockNum, uint8_t* destBuffer){
 rwerror_t tsWriteBlockRamdisk(const uint blockNum, const uint8_t* srcBuffer){
   //Validate Block Number
   if (blockNum >= GetBlockCountRamdisk()) return SP_IOERR;
-  
+
   MUTEXLOCK();
-  CopyMemoryAligned(ramdisk_data+blockNum*BLOCKSIZE,srcBuffer,BLOCKSIZE);
+  RamdiskCopyMemory(ramdisk_data+blockNum*BLOCKSIZE,srcBuffer,BLOCKSIZE);
   MUTEXUNLOCK();
-  
+
   return SP_NOERR;
 }
 
@@ -128,26 +210,26 @@ rwerror_t tsWriteBlockRamdisk(const uint blockNum, const uint8_t* srcBuffer){
 // Get DIB (Device Information Block) of a unit
 //
 // Input: destBuffer - Pointer to destination buffer
-//        
+//
 void GetDIBRamdisk(uint8_t *destBuffer) {
   assert(sizeof(struct dib_t)==25);
-  struct dib_t *dib = (struct dib_t*)destBuffer;  
-  
-  //Device Status Byte  
-  dib->devicestatus = 0b11111000;          
-  
+  struct dib_t *dib = (struct dib_t*)destBuffer;
+
+  //Device Status Byte
+  dib->devicestatus = 0b11111000;
+
   //Block Count
-  uint32_t blockSize = GetBlockCountRamdisk();  
-  dib->blocksize_l  = (uint8_t)blockSize; blockSize>>=8; 
-  dib->blocksize_m  = (uint8_t)blockSize; blockSize>>=8;                    
+  uint32_t blockSize = GetBlockCountRamdisk();
+  dib->blocksize_l  = (uint8_t)blockSize; blockSize>>=8;
+  dib->blocksize_m  = (uint8_t)blockSize; blockSize>>=8;
   dib->blocksize_h  = (uint8_t)blockSize;
-    
-  //ID String    
-  assert(strlen(IDSTR)==16);              
+
+  //ID String
+  assert(strlen(IDSTR)==16);
   assert(IDSTRLEN<=16);
   dib->idstrlen = IDSTRLEN;
   memcpy(dib->idstr,IDSTR,16);
-  
+
   //Device Type, subtype and Firmware Version
   dib->devicetype = 0x00;                  //Device Type. $00 = RAM Disk
   dib->subtype = 0x20;                     //Subtype. $20= not removable, no extended call
@@ -161,7 +243,7 @@ void GetDIBRamdisk(uint8_t *destBuffer) {
 //
 void tsEraseRamdiskQuick() {
   MUTEXLOCK();
-  ZeroMemoryAligned(ramdisk_data,BLOCKSIZE*3); //Erase Block 0-2
+  RamdiskZeroMemory(ramdisk_data,BLOCKSIZE*3); //Erase Block 0-2
   MUTEXUNLOCK();
 }
 
@@ -171,7 +253,7 @@ void tsEraseRamdiskQuick() {
 //
 void tsEraseRamdisk() {
   MUTEXLOCK();
-  ZeroMemoryAligned(ramdisk_data,RAMDISK_SIZE);
+  RamdiskZeroMemory(ramdisk_data,RAMDISK_SIZE);
   MUTEXUNLOCK();
 }
 
@@ -184,13 +266,12 @@ void tsEraseRamdisk() {
 //
 void FormatRamdiskOnce() {
   static bool formatted = false;
-  
+
   if (formatted) return;    //Once only
   formatted = true;
-  
+
   //DONT add mutex lock because FormatUnit will call tsWriteBlockRamdisk()
   //unless recursive mutex is used.
   FormatUnit(GetRamdiskUnitNum(),GetBlockCountRamdisk(),VOLNAME,VOLNAMELEN);
   //Ignore error from FormatUnit(). Nothing we can do if error occurs
 }
-

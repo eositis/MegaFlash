@@ -18,6 +18,7 @@
 #include "cmdhandler.h"
 #include "terminal.h"
 #include "slinky.h"
+#include "ramdisk.h"
 #include "ipc.h"
 #include "network.h"
 #include "tftpstate.h"
@@ -126,6 +127,7 @@ int main() {
   InitFlash();
   InitActLed();
   InitDMAChannel();
+  InitRamdisk();
   InitTFTPState();
   
   //Enable Pull-down resistors of unused GPIOs

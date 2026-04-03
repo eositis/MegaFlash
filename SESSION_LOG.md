@@ -4,6 +4,32 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-03
+
+- **Thomas storage stack (partial port):** Ported **RAM disk** dedicated DMA + **`InitRamdisk()`** (after **`InitDMAChannel()`** in **`pico/main.c`**); kept existing **`ts*`** ramdisk API names. **ROM disk** read uses **`memcpy`** like upstream (no shared **`dmamemops`** DMA); kept **`GetRomdiskFirst()`** / unit-order behaviour in **`mediaaccess.c`**. **Flash read:** **`ReadFromFlashByDMA`** → software TX + RX DMA + **timeout/abort** and **`CRC32Aligned`** fallback (**Thomas overclock/TFTP hang mitigation**). **`./pico/build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4e.
+
+- **ThomasFok upstream diff (storage + IIc+/Applesoft):** Compared **`main`** to **`upstream/main`** ([ThomasFok/MegaFlash](https://github.com/ThomasFok/MegaFlash)). Primary doc for side editor: **`ThomasFok-upstream-comparison.md`** (repo root); **`docs/Upstream-ThomasFok-storage-accel-comparison.md`** → pointer. **§4d** + summary row in **`docs/Implementation-notes-and-reasoning.md`**. Focus: **`fswrts`/`swjmp_ay`**, **`megaflash.s`/`patches.s`**, RAM/ROM disk + flash DMA, TFTP DOS-order **`imagewriter`**; **`firmware/accel.s`** unchanged vs upstream in diff.
+
+- **Cross-check builds:** **`cpanel`** — **`make clean && make release`** and **`make all`** (Java/**`acx18.jar`**) OK. **`firmware`** — **`make clean && make all`** → **`iic.bin`** + **`iicplus.bin`** (32 KiB each). **`pico`** — **`romdisk.po`** present; **`./build-both.sh`** → **`pico_release/megaflash.uf2`** + **`pico2_release/megaflash.uf2`**.
+
+- **Intel OpenJDK removal + JVM registration:** Removed **`/usr/local/Cellar/openjdk`** and **`/usr/local/opt/openjdk`** (user-owned; Intel **`brew uninstall`** fails here with x86 portable Ruby). Added **`tools/register-arm-openjdk-macos.sh`** (**`sudo ln -sfn`** Homebrew **`openjdk`** bundle → **`/Library/Java/JavaVirtualMachines/openjdk.jdk`**). Doc **§4c** + summary row in **`docs/Implementation-notes-and-reasoning.md`**. **User:** run the script locally once (**sudo**).
+
+- **Build chain check:** **`cpanel` `make clean && make release`** OK; **`pico/build-both.sh`** OK (**`pico_release`** + **`pico2_release`** UF2s). **`make all`** in **`cpanel`** still fails: **`java`** invokes **x86_64** **`/usr/local/Cellar/openjdk/.../bin/java`** (use **`/opt/homebrew`** JDK or **`JAVA_HOME`** for test-disk step). **`cc65`**/**`cmake`** on PATH are **arm64**.
+
+- **Implementation notes §4b:** User updated **libusb** (arm64 Homebrew). Doc now states preferred **`brew install libusb`** + **`pkgconf`**, rebuild **picotool** without **`PICOTOOL_NO_LIBUSB`** for USB; **`PICOTOOL_NO_LIBUSB`** remains UF2-only fallback. Summary table **Host picotool** row updated. **`docs/Implementation-notes-and-reasoning.md`**.
+
+- **Verify Apple Silicon toolchain + full build:** Confirmed **`/Applications/ArmGNUToolchain/15.2.rel1/.../arm-none-eabi-gcc`** is **arm64** with valid **`nosys.specs`**; **13.2** / **14.2** remain **x86_64** (skipped by **`mf_try_arm_toolchain_bin`**). **`./build-both.sh`** compiled both firmwares; link failed on vendored **`pico/picotool/picotool/picotool`** (**x86_64**). Rebuilt **picotool** from **`picotool-src`** with **`PICOTOOL_NO_LIBUSB=1`** (avoid **`/usr/local`** x86 **libusb**), **`cmake --install`** into **`pico/picotool/`** → **arm64** binary; **`make -C pico_release`** + **`pico2_release`** succeeded (**`megaflash.uf2`** both).
+
+- **ARM host build defaults:** Pico SDK fallback **`/Users/eositis/pico-sdk` → `$HOME/pico-sdk`** in **`pico/cmakeall.sh`**, **`pico/build-both.sh`**, and **`pico/CMakeLists.txt`** so Apple Silicon / other machines need no hardcoded user path. **`cmakeall.sh`** / **`build-both.sh`**: after Arm GNU pkg dir, probe **`/opt/homebrew/bin`** then **`/usr/local/bin`** for **`arm-none-eabi-gcc`** (Apple Silicon Homebrew vs Intel). Updated **`pico/BUILD-REQUIREMENTS.md`**, **`pico/README.md`**, **`docs/Implementation-notes-and-reasoning.md`** §4 + summary row. **`BUILD-REQUIREMENTS.md`**: note on **`bad CPU type`** after Intel→ARM (reinstall **arm64** CMake/tools).
+
+- **Configure check:** Local **`cmake`** in this environment exited **`bad CPU type in executable`** (host/tool arch mismatch); not a repo issue — use native **arm64** CMake on Apple Silicon.
+
+- **`build-env.sh` + arm64 CMake:** Added **`pico/build-env.sh`** (**`CMAKE_BIN`**: **`/opt/homebrew/bin/cmake`** → **`/usr/local/bin/cmake`** → **`PATH`**; **`CMAKE`** override). Sourced from **`cmakeall.sh`**, **`build-both.sh`**, **`build-debug.sh`**; all **`cmake`** invocations use **`"$CMAKE_BIN"`**. Docs: SDK is same repo on ARM hosts—clone to **`~/pico-sdk`**; **`BUILD-REQUIREMENTS.md`** §1/§3 and **`README`** updated; Implementation notes §4 + summary table row for host CMake.
+
+- **Build test (2026-04-03):** **`./build-both.sh`** — **`cmake`** = **`/opt/homebrew/bin/cmake`** OK; **`cpanel`**: **`make release`** (skip Java test target). Intel **ArmGNUToolchain** + Homebrew **`arm-none-eabi-gcc`** fail Pico (**`nosys.specs`** / newlib). **`mf_try_arm_toolchain_bin`** now requires runnable host GCC **and** existing **`nosys.specs`**; **`cmakeall`/`build-both`** **`exit 1`** with **darwin-aarch64** install hint if none. **`GCC_PATH=$(command -v … \|\| true)`** fixes **`set -e`** early exit. Stale **`pico_release`** had x86 **`pioasm`** — **`rm -rf pico_release pico2_release`** before reconfigure on arch change.
+
+---
+
 ## 2026-03-27
 
 - **Git `1.2.x` branch:** Created **`1.2.x`** at the same commit as **`main`** (`aadb80f`, firmware **`V1.2.0-eo` / `0x0020` in `pico/defines.h`). **`git push -u origin 1.2.x`** — **`main`** and **`1.2.x`** both track the **1.2.x** development line; **`1.1.x`** remains the **1.1.x** maintenance line (e.g. V1.1.25-eo).

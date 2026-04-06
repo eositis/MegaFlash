@@ -272,6 +272,20 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ---
 
+## 4h. Thomas `fswrts` (IIc / IIc+ ROM, ZIP chip)
+
+**What:** Port [ThomasFok/MegaFlash](https://github.com/ThomasFok/MegaFlash) bank-switch + cold return path so aux-ROM init does not rely on **`jmp ($0000)`** from bank 1 or on the stock **`$C784`** SWRTS region (non-cacheable on IIc Plus / ZIP).
+
+**Why:** After init, execution must continue in **bank 0** at the reset vector target. **`fswrts`** at **bank 1 `$FFC8`** executes **`sta rombank`**; the machine’s existing **`RTS` at `$FFCB`** (bank 0) then returns into the intended address (stack set up with **address−1**). Boot menu entry uses the same mechanism (**`BMRUN−1`**) instead of **`jmp BMRUN`** from aux.
+
+**What we did:** **`patches.s`**: **`$FB19`** → **`lda #MODE_INIT` / `jmp slxeq`**; **`B1_FFC8`** **`fswrts`**; **`.export fswrts`**. **`megaflash.s`**: **`.import fswrts`**, **`.export swjmp_ay`**, **`swjmp_ay_sp0` / `swjmp_ay`**, cold-exit loads **`($0000)-1`** into **A/Y** then falls into **`swjmp_ay_sp0`**. **`macros.inc`**: **`ld16iay`**. Linker: **`B1_FFC8`** in **`iic.cfg`**, **`iicplus.cfg`**, **`merge_iic.cfg`**, **`merge_iicp.cfg`**, and matching **`merge_iic.s` / `merge_iicp.s`** **`incbin`**.
+
+**What we didn’t do:** Thomas **`HOMESEGMENT`** throughout **`megaflash.s`** / large **`bootmenu.s`** refactors — only the **`fswrts`** package as above.
+
+**References:** `firmware/patches.s`, `firmware/megaflash.s` (`coldstartinit`, `swjmp_ay`), `firmware/macros.inc`, `firmware/merge_iicp.s`, `firmware/iicplus.cfg`.
+
+---
+
 ## 5. Build script: auto-increment version and “-eo” suffix
 
 **Requirement:** On each build, increment version and date, and append “-eo” to the version string to denote a custom (user) build.
@@ -535,7 +549,7 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
 | Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
 | **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
-| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4g** | **§4e–§4f:** Pico storage/DMA + **`dmamemops`**. **§4g:** **`firmware/smartport.s`** (**`HOMESEGMENT`**, ZP restore loops). **Not merged:** **`fswrts`/`megaflash.s`** IIc+ package; Thomas **`flash.h`** rename; **TFTP DOS-order** |
+| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4h** | **§4e–§4f:** Pico storage/DMA + **`dmamemops`**. **§4g:** **`smartport.s`**. **§4h:** **`fswrts`** + **`swjmp_ay`**, **`B1_FFC8`**. **Not merged:** Thomas **`HOMESEGMENT`** all of **`megaflash.s`**, **`flash.h`** rename, **TFTP DOS-order** |
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |

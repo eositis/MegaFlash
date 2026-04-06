@@ -47,6 +47,12 @@ _MACROS_INC = 1
         .endif                
 .endmacro
 
+;Load 16-bit immediate value to AY (A=LOBYTE, Y=HIBYTE)
+.macro ld16iay immed
+	lda #.LOBYTE(immed)
+	ldy #.HIBYTE(immed)
+.endmacro
+
 .macro skip1
 	.byte $24	;opcode of bit zp, to skip the next 1 byte instruction
 .endmacro

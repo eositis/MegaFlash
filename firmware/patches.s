@@ -14,37 +14,56 @@
                 ;
                 ; Imports
                 ;
-                
-;---------------------------------------------------- 
+
+                ;
+                ; Exports
+                ;
+                .export fswrts
+
+;----------------------------------------------------
 ; Cold Start Initialization
 ; We need to intercept the cold start routine (Power up or 
 ; Ctrl-OA-Reset) to initialize the driver and hardware.
 ;
 ; The code of stock firmware at $FB19 is 
 ; FB19: JMP ($0000)
+;       BRK
+;       BRK
 ; 
 ; It is the last instruction of Power Up routine. ($00) should
-; points to $C400. The jmp instruction starts the booting sequence.
+; points to $C400. The jmp instruction starts the boot sequence.
 ;
 ; We intercept this instruction and call our routine which is in auxrom.
-; Since the screen has been cleared, the routine can display information
-; to screen. It can also modify the pointer at $00 to jump to other routine
-; upon completion of the Initialization.
+; There are two BRK instruction after the JMP instruction. There are 5 Bytes
+; of empty space which is enough to jump to our routine
 ;
 
                 .segment "B0_FB19" ;Size=5 Bytes
                 .reloc
-                lda #MODE_INIT  ;Pre-Load Acc value
-                jmp coldstart2  ;Jump to our routine
+                lda #MODE_INIT  ;Run coldstartinit in aux bank
+                jmp slxeq       ;Jump to our routine, no return
 
-                
-                .segment "SLOTROM"
-coldstart2:     ;Our own initialization routine
-                jsr slxeq       ;Call coldstartinit routine of driver
-                jmp ($0)        ;Original code at $FB19
-                
-                
-                
+;-----------------------------------------------------
+; FSWRTS - Switch from Aux ROM Bank to Main Bank
+;
+; The SWRTS routine is to switch ROM Bank and then a RTS
+; instruction. The routine is at $C784, which is non-cacheable
+; on IIc plus/ZIP Chip.
+; 
+; There is a RTS instruction at $FFCB in bank 0. If we put
+; a ROM switch instruction right before it in bank 1, we can 
+; put a SWRTS routine in cacheable region.
+;
+;       Bank 1         Bank 0
+; FFC8: sta rombank
+; FFCB:                rts
+;
+                .segment "B1_FFC8"
+                .reloc
+fswrts:         sta rombank
+                ;rts at $FFCB in bank0
+
+
 .ifdef IICP     ;For Apple IIc Plus only
 
 ;-----------------------------------------------------
@@ -191,7 +210,9 @@ printwait:      ;A=Delay Duration
 ;Applesoft Integer Variable Conversion Fix
 ;
 ;The range of integer variable is 32767  to -32768
-;For A=-32768: A%=A: PRINT A%
+;
+;If this sequence of instructions are executed
+;   A=-32768: A%=A: PRINT A%
 ;
 ;The result should be -32768. But Illegal Quantity Error
 ;occurs

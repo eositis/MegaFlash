@@ -4,6 +4,12 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-05
+
+- **Flash validate boot disk:** **`tools/flash-validate/build-flashval-disk.sh`** builds **`FLASHVALID.dsk`** (800K ProDOS): **PRODOS** + **BASIC.SYSTEM** from padded **`pico/romdisk.po`**, **`-bas`** **`FLASHVAL`** from **`FLASHVAL.DSK.BAS`**, **`-ptx`** **`FLASHVAL.SRC`** from full **`FLASHVAL.BAS`**. Renamed register ports **`PR`→`PX`**, **`DR`→`D1`** (**`PR`** is **`PRINT`** abbreviation; fixes AppleCommander **`Expecting: [PR, #]`**). **`docs/Implementation-notes-and-reasoning.md`** §17 + summary row.
+
+---
+
 ## 2026-04-03
 
 - **Thomas `fswrts` (ZIP / IIc+):** **`firmware/patches.s`** — **`$FB19`**: **`jmp slxeq`** (drop **`coldstart2`** trampoline); **`B1_FFC8`**: **`fswrts`** = **`sta rombank`** before bank-0 **`RTS`** at **`$FFCB`**. **`megaflash.s`**: **`.import fswrts`**, **`.export swjmp_ay`**, boot menu via **`ld16iay BMRUN-1` / `swjmp_ay_sp0`**, no-boot path computes **`($0000)-1`** and **`swjmp_ay`**. **`macros.inc`**: **`ld16iay`**. **`iic.cfg` / `iicplus.cfg`** + **`merge_iic*.cfg/.s`**: **`B1_FFC8`** fragment. **`make iic.bin` + `iicplus.bin`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4h.

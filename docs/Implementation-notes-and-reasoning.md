@@ -565,7 +565,7 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | TFTP upload block count UI | `tftptxtask.cpp`, `tftprxtask.cpp` | Set `tftp_state.tsize` (TX) / WiFi status (RX) in `EvtStart()`; pump path does not call `Run()` (§7h) |
 | CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
 | Flash JEDEC at boot | `flash.c` `ChipIDToCapacity` | §16: capacity from type+capacity bytes only; manufacturer byte ignored |
-| Flash validate (Applesoft) | `tools/flash-validate/` | §17: `FLASHVAL.BAS`, `build-flashval-disk.sh` → `FLASHVALID.dsk`, baseline `FLASHVAL1` text file |
+| Flash validate (Applesoft) | `tools/flash-validate/` | §17-18: `FLASHVAL.BAS` baseline + `FLASHSOAK.BAS` overnight CSV/TFTP loop; `build-flashval-disk.sh` → `FLASHVALID.dsk` |
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
@@ -975,5 +975,19 @@ This is intentionally conservative: the common case remains unchanged, but the c
 **What we didn’t do:** Destructive tests (`CMD_FORMATDISK`, `CMD_ERASEDISK`, `CMD_WRITEBLOCK`); those need explicit write-enable key handling and should stay a separate tool. Full **`FLASHVAL.BAS`** is not reliably **`-bas`**-tokenized (file I/O and tokenizer quirks); disk boot program is **`FLASHVAL.DSK.BAS`**.
 
 **References:** `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `tools/flash-validate/FLASHVAL.BAS`, `tools/flash-validate/FLASHVAL.DSK.BAS`, `common/defines.h`, `pico/cmdhandler.c`, `pico/romdisk.po`.
+
+---
+
+## 18. Overnight volume/TFTP soak validator (`tools/flash-validate/FLASHSOAK.BAS`)
+
+**What:** Added a second Applesoft validator, **`FLASHSOAK.BAS`**, designed for unattended overnight cycles with CSV logging and destructive media verification. It exercises each writable MegaFlash unit (including RAM disk when enabled) with a repeatable sequence: format, file workload (create/append/delete/fill), whole-volume checksum, TFTP upload to `192.168.0.10` as `validationX.po`, reformat, TFTP download, checksum compare, and cycle-level pass/fail logging.
+
+**Why:** `FLASHVAL` validates command-path integrity and selected reads, but not sustained write/format/file/TFTP churn. The soak tool targets long-duration reliability and data-integrity regressions across flash + RAM media and network image round trips.
+
+**What we did:** Implemented command wrappers in Applesoft for `CMD_GETUNITSTATUS` (`0x12`), `CMD_FORMATDISK` (`0x1D`), `CMD_READBLOCK` (`0x15`), `CMD_TFTPRUN` (`0x50`), and `CMD_TFTPSTATUS` (`0x51`) with firmware-compatible parameter ordering (including write-enable key `0x71` and null-terminated hostname/filename in data buffer). Added CSV event logging (`cycle,unit,event,result,v1,v2`) and repeat-when-pass loop semantics. Updated disk build script to include tokenized `FLASHSOAK` and `FLASHSOAK.SRC`, and refreshed `FLASHVALID.dsk`.
+
+**What we didn’t do:** This pass does not include an external host-side parser/aggregator for CSV statistics; the output is intentionally plain CSV for downstream tooling. We also did not attempt to make this non-destructive.
+
+**References:** `tools/flash-validate/FLASHSOAK.BAS`, `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `pico/cmdhandler.c` (`DoFormatDisk`, `DoReadBlock`, `DoTFTPRun`, `DoTFTPStatus`), `common/defines.h`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build 800K ProDOS disk FLASHVALID.dsk: PRODOS + BASIC.SYSTEM from pico/romdisk.po,
-# tokenized FLASHVAL (screen suite), and FLASHVAL.SRC (full listing as TXT).
+# tokenized FLASHVAL + FLASHSOAK tools, plus source listings as TXT.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,6 +9,7 @@ ROMDISK="${ROMDISK:-$REPO_ROOT/pico/romdisk.po}"
 OUT="${OUT:-$SCRIPT_DIR/FLASHVALID.dsk}"
 DSK_BAS="$SCRIPT_DIR/FLASHVAL.DSK.BAS"
 FULL_BAS="$SCRIPT_DIR/FLASHVAL.BAS"
+SOAK_BAS="$SCRIPT_DIR/FLASHSOAK.BAS"
 
 if [[ ! -f "$ROMDISK" ]]; then
   echo "Missing romdisk image: $ROMDISK" >&2
@@ -49,6 +50,8 @@ dd if="$ROMDISK" of="$WRK/rom800.po" conv=notrunc 2>/dev/null
 "${java_cmd[@]}" -p "$OUT" PRODOS SYS < "$WRK/PRODOS.bin"
 "${java_cmd[@]}" -p "$OUT" BASIC.SYSTEM SYS < "$WRK/BASIC.SYSTEM.bin"
 "${java_cmd[@]}" -bas "$OUT" FLASHVAL < "$DSK_BAS"
+"${java_cmd[@]}" -bas "$OUT" FLASHSOAK < "$SOAK_BAS"
 "${java_cmd[@]}" -ptx "$OUT" FLASHVAL.SRC < "$FULL_BAS"
+"${java_cmd[@]}" -ptx "$OUT" FLASHSOAK.SRC < "$SOAK_BAS"
 
 echo "Wrote $OUT"

@@ -4,6 +4,14 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-06
+
+- **Overnight soak validator:** Added **`tools/flash-validate/FLASHSOAK.BAS`** to stress writable MegaFlash units (incl. RAM disk), with cycle loop: format, file create/append/delete/fill, whole-volume checksum, TFTP upload/download (`validationX.po` on `192.168.0.10`), checksum compare, CSV logging to `SOAK.CSV`, and auto-repeat on pass.
+- **Disk build integration:** Updated **`tools/flash-validate/build-flashval-disk.sh`** + docs so `FLASHVALID.dsk` now includes tokenized **`FLASHSOAK`** and text **`FLASHSOAK.SRC`**; rebuilt and verified directory contents with AppleCommander.
+- **Reasoning/docs:** Extended **`docs/Implementation-notes-and-reasoning.md`** with §18 and summary-row update to capture why soak coverage was added and the exact command/data-buffer contract used for `CMD_TFTPRUN`/`CMD_TFTPSTATUS`.
+
+---
+
 ## 2026-04-05
 
 - **Flash validate boot disk:** **`tools/flash-validate/build-flashval-disk.sh`** builds **`FLASHVALID.dsk`** (800K ProDOS): **PRODOS** + **BASIC.SYSTEM** from padded **`pico/romdisk.po`**, **`-bas`** **`FLASHVAL`** from **`FLASHVAL.DSK.BAS`**, **`-ptx`** **`FLASHVAL.SRC`** from full **`FLASHVAL.BAS`**. Renamed register ports **`PR`→`PX`**, **`DR`→`D1`** (**`PR`** is **`PRINT`** abbreviation; fixes AppleCommander **`Expecting: [PR, #]`**). **`docs/Implementation-notes-and-reasoning.md`** §17 + summary row.

@@ -3,8 +3,11 @@
 ; Module: Smartport Core Implementation
 ;
 
+                ;All codes default to this segment except debug routines
+                .define HOMESEGMENT "ROM1"
+
                 .setcpu "65c02"
-                .segment "ROM1"
+                .segment HOMESEGMENT
                 .reloc
 
                 .include "buildflags.inc"
@@ -124,10 +127,6 @@ spBlockNum24    := spParamList+3        ;3 Bytes Block Number
 spIOPointer     := spParamList+1        ;2 Bytes IO Buffer Pointer
 
 
-
-                .segment "ROM1"
-                .reloc
-                        
 ;**************************************************************
 ; #######                               
 ; #        #    #  #####  #####   #   # 
@@ -138,7 +137,8 @@ spIOPointer     := spParamList+1        ;2 Bytes IO Buffer Pointer
 ; #######  #    #    #    #    #    #   
 ;**************************************************************
 
-
+                .segment HOMESEGMENT
+                .reloc
 
 ;-----------------------------------------------
 ;Entry point for ProDOS and Smartport Driver
@@ -199,12 +199,24 @@ exit:           .if DEBUG
                 ; if RESTOREZPSCRATCH is TRUE
                 ;
 .if RESTOREZPSCRATCH
-                ldx #0
-:               pla
-                sta zpscratch,x
+;If we offset the x-register by -ZPSCRATCHSIZE and add ZPSCRATCHSIZE to
+;address of sta instruction. The code becomes:
+;
+;                Original Code                  New Code
+;                ldx #0                         ldx #0-ZPSCRATCHSIZE
+;@loop:          pla                            pla
+;                sta zpscratch,x                sta zpscratch+ZPSCRATCHSIZE,x
+;                inx                            inx
+;                cpx #ZPSCRATCHSIZE             cpx #ZPSCRATCHSIZE-ZPSCRATCHSIZE
+;                bne @loop                      bne @loop
+;
+;The cpx instruction is not needed since it is cpx #0.
+;
+                ldx #.LOBYTE(0-ZPSCRATCHSIZE)   ;.LOBYTE() is needed for negative number
+@loop:          pla
+                sta z:zpscratch+ZPSCRATCHSIZE,x
                 inx
-                cpx #ZPSCRATCHSIZE
-                blt :-  
+                bne @loop 
 .endif
 
                 ;
@@ -221,7 +233,7 @@ exit:           .if DEBUG
                 sta zpstart,x
                 inx
                 cpx #ZPSIZE
-                blt :-                
+                bne :-                
 .endif
                 rts
 
@@ -245,7 +257,7 @@ exit:           .if DEBUG
 ; Output: Setup errorno, xval and yval before return
 ;
 ;*********************************************************
-                .segment "ROM1"
+                .segment HOMESEGMENT
                 .reloc
 p8driver:
                 .if DEBUG
@@ -379,7 +391,7 @@ pwrite:         jmp writeblock
 ;  Output: Setup errorno, xval and yval before return
 ;
 ;*********************************************************
-                .segment "ROM1"
+                .segment HOMESEGMENT
                 .reloc
 spdriver:       ;errorno is the value returned in Acc
                 ;Default to BadCmd (Not implemented) error
@@ -968,15 +980,6 @@ putstatus:      ldx lcstate
 ; #     #  #       #    #  #    #  #    #     
 ; ######   ######  #####    ####    ####      
 ;**************************************************************** 
-
-;------------------------------------------------------------
-;Segment Allocation
-;
-;On IIc plus, code running in IOROM segment is slower because
-;the memory region is not cacheable.
-;
-;So, put as many debug routines into IOROM segement as possible
-;
 
                 .segment "DEBUG"
                 .reloc

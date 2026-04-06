@@ -6,6 +6,8 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-04-03
 
+- **Thomas `smartport.s` port:** **`firmware/smartport.s`** — **`HOMESEGMENT`** (default **`ROM1`**) for relocatable segment name; **`RESTOREZPSCRATCH`** restore loop uses indexed **`sta z:zpscratch+ZPSCRATCHSIZE,x`** + **`bne`** (no **`cpx`**); **`ZPSIZE`** restore uses **`bne`** vs **`blt`**; removed IIc+ debug-segment comment block before **`DEBUG`**. Matches **`upstream/main`** SmartPort diff; **`make iic.bin iicplus.bin`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4g.
+
 - **Thomas `dmamemops` + flash SPI/security (follow-up commit):** Replaced **`pico/dmamemops.c`** with **`upstream/main`** (per-operation DMA configs, no global config save/restore). **`pico/CMakeLists.txt`**: **`OC_RP2350=1`** for **`pico2_w`**; **`pico/flash.c`**: extra **`nop`** on CS assert/deassert when **`OC_RP2350`**, and **`tsWriteSecurityRegister`** partial path programs **256** B (Thomas fix). Full upstream **`flash.c`/`flash.h`** API rename still not merged. **`docs/Implementation-notes-and-reasoning.md`** §4f.
 
 - **Thomas storage stack (partial port):** Ported **RAM disk** dedicated DMA + **`InitRamdisk()`** (after **`InitDMAChannel()`** in **`pico/main.c`**); kept existing **`ts*`** ramdisk API names. **ROM disk** read uses **`memcpy`** like upstream (no shared **`dmamemops`** DMA); kept **`GetRomdiskFirst()`** / unit-order behaviour in **`mediaaccess.c`**. **Flash read:** **`ReadFromFlashByDMA`** → software TX + RX DMA + **timeout/abort** and **`CRC32Aligned`** fallback (**Thomas overclock/TFTP hang mitigation**). **`./pico/build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4e.

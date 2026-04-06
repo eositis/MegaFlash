@@ -260,6 +260,18 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ---
 
+## 4g. Thomas `firmware/smartport.s` (segment + ZP restore)
+
+**What:** Port [ThomasFok/MegaFlash](https://github.com/ThomasFok/MegaFlash) **`smartport.s`** changes without touching **`fswrts` / `megaflash.s`**.
+
+**Why:** **`HOMESEGMENT`** lets a future linker map the SmartPort “home” code to a segment other than **`ROM1`** in one place. The **`RESTOREZPSCRATCH`** epilogue uses a negative starting **`X`** and **`sta z:zpscratch+ZPSCRATCHSIZE,x`** so the loop ends with **`bne`** (no **`cpx #ZPSCRATCHSIZE`**). **`ZPSIZE`** restore uses **`bne`** instead of **`blt`** (same iteration count for the counted loop). Comment block about IIc+ IOROM/debug placement removed upstream—behaviour unchanged.
+
+**What we didn’t do:** **`patches.s`**, **`megaflash.s`**, **`bootmenu.s`** Thomas package (IIc+ bank return)—still separate.
+
+**References:** `firmware/smartport.s`, `git diff main upstream/main -- firmware/smartport.s`.
+
+---
+
 ## 5. Build script: auto-increment version and “-eo” suffix
 
 **Requirement:** On each build, increment version and date, and append “-eo” to the version string to denote a custom (user) build.
@@ -523,7 +535,7 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
 | Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
 | **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
-| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4f** | **§4e:** RAM disk DMA, ROM **`memcpy`**, flash read DMA timeout. **§4f:** **`dmamemops`** multi-config; **`OC_RP2350`** CS nops; security register **256 B** program. **Not merged:** Thomas **`flash.h`** / **`ts*→`** rename, mutex-only-on-exports layout. **IIc+** / **TFTP DOS-order** still separate |
+| **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4g** | **§4e–§4f:** Pico storage/DMA + **`dmamemops`**. **§4g:** **`firmware/smartport.s`** (**`HOMESEGMENT`**, ZP restore loops). **Not merged:** **`fswrts`/`megaflash.s`** IIc+ package; Thomas **`flash.h`** rename; **TFTP DOS-order** |
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |

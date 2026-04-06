@@ -6,6 +6,8 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-04-03
 
+- **Thomas `fswrts` (ZIP / IIc+):** **`firmware/patches.s`** — **`$FB19`**: **`jmp slxeq`** (drop **`coldstart2`** trampoline); **`B1_FFC8`**: **`fswrts`** = **`sta rombank`** before bank-0 **`RTS`** at **`$FFCB`**. **`megaflash.s`**: **`.import fswrts`**, **`.export swjmp_ay`**, boot menu via **`ld16iay BMRUN-1` / `swjmp_ay_sp0`**, no-boot path computes **`($0000)-1`** and **`swjmp_ay`**. **`macros.inc`**: **`ld16iay`**. **`iic.cfg` / `iicplus.cfg`** + **`merge_iic*.cfg/.s`**: **`B1_FFC8`** fragment. **`make iic.bin` + `iicplus.bin`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4h.
+
 - **Thomas `smartport.s` port:** **`firmware/smartport.s`** — **`HOMESEGMENT`** (default **`ROM1`**) for relocatable segment name; **`RESTOREZPSCRATCH`** restore loop uses indexed **`sta z:zpscratch+ZPSCRATCHSIZE,x`** + **`bne`** (no **`cpx`**); **`ZPSIZE`** restore uses **`bne`** vs **`blt`**; removed IIc+ debug-segment comment block before **`DEBUG`**. Matches **`upstream/main`** SmartPort diff; **`make iic.bin iicplus.bin`** OK. **`docs/Implementation-notes-and-reasoning.md`** §4g.
 
 - **Thomas `dmamemops` + flash SPI/security (follow-up commit):** Replaced **`pico/dmamemops.c`** with **`upstream/main`** (per-operation DMA configs, no global config save/restore). **`pico/CMakeLists.txt`**: **`OC_RP2350=1`** for **`pico2_w`**; **`pico/flash.c`**: extra **`nop`** on CS assert/deassert when **`OC_RP2350`**, and **`tsWriteSecurityRegister`** partial path programs **256** B (Thomas fix). Full upstream **`flash.c`/`flash.h`** API rename still not merged. **`docs/Implementation-notes-and-reasoning.md`** §4f.

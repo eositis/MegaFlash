@@ -97,7 +97,9 @@
                 
                 ;From bootmenu.s
                 .import copybm
-                
+
+                ;From patches.s (ZIP / IIc Plus: bank switch + RTS at $FFCB)
+                .import fswrts
 
                 
 .ifdef IICP
@@ -112,6 +114,7 @@
                 .export isonline,getdevstatus,getunitstatus,readblock,writeblock,coldstartinit,writeblocksizetovdh
                 .export getdsb,getdib
                 .export clockdriver,clockdriverimpl,loadcpanel
+                .export swjmp_ay
                 
                 ;.exportzp SPNUMDEV
                 .if DEBUG
@@ -247,8 +250,42 @@ nomf:
                 stz toshowbootmenu      ;Clear the MSB of toshowbootmenu
       
                 jsr copybm              ;Copy Boot Menu code to RAM
-                jmp BMRUN               ;Execute Boot Menu
-nobootmenu:     rts
+                ld16iay BMRUN-1         ;Execute Boot Menu. Load AY = BMRUN-1
+                bra swjmp_ay_sp0        ;jmp to it (bank 0 via fswrts)
+
+nobootmenu:     ;exit here
+                ;The original code at $FB19 is jmp($0000)
+                ;Since this routine is in aux ROM bank,
+                ;We cannot execute jmp($0000) directly.
+                ;Use RTS instruction to jmp to the destination
+
+                ;Load ($0000)-1 to A and Y
+                ldy $01         ;Y=High Byte
+                lda $00         ;A=Low Byte
+                bne :+          ;If not 0, dec low byte only
+                dey             ;Dec High Byte
+:               dec             ;Dec Low Byte
+                ;fall into swjmp_ay_sp0
+
+;----------------------------------------------------------
+;JMP to Bank 0 address
+;After coldstartinit, we need to jump back to main bank
+;to start boot sequence or Boot Menu. This routine
+;Reset stack pointer.
+;Push the destination address-1 to stack.
+;Jump to fswrts to Switch bank, then use RTS instruction
+;to jump to the destination
+;
+;swjmp_ay is the entry point without resetting SP
+;
+; Input: A = Low byte of destination Address-1
+;        Y = High byte of destination Address-1
+;
+swjmp_ay_sp0:   ldx #$ff        ;Reset Stack Pointer
+                txs             ;
+swjmp_ay:       phy             ;Push High Byte
+                pha             ;Push Low Byte
+                jmp fswrts      ;Switch to main bank, then RTS
 
 ;-----
 ;A short delay sub-routine.

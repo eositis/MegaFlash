@@ -564,6 +564,8 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | TFTP hostname default | `busloop.c`, `cpanel/tftp.c` | After command that sets data buffer, push chunk 0 to PIO immediately (§7g); clear hostname if it looks like status text |
 | TFTP upload block count UI | `tftptxtask.cpp`, `tftprxtask.cpp` | Set `tftp_state.tsize` (TX) / WiFi status (RX) in `EvtStart()`; pump path does not call `Run()` (§7h) |
 | CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
+| Flash JEDEC at boot | `flash.c` `ChipIDToCapacity` | §16: capacity from type+capacity bytes only; manufacturer byte ignored |
+| Flash validate (Applesoft) | `tools/flash-validate/` | §17: `FLASHVAL.BAS`, `build-flashval-disk.sh` → `FLASHVALID.dsk`, baseline `FLASHVAL1` text file |
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
@@ -945,5 +947,33 @@ Because this is a non-trivial refactor, a staged approach is safest:
 This is intentionally conservative: the common case remains unchanged, but the control panel now catches the exact swapped-host/file pattern observed during debug and avoids sending an obviously wrong TFTP request.
 
 **References:** `cpanel/tftp.c`, `cpanel/ui-textinput.c`, `pico/cmdhandler.c`, `pico/network.cpp`.
+
+---
+
+## 16. Flash boot: JEDEC capacity without manufacturer check
+
+**What:** `InitFlash()` only enables storage when `ChipIDToCapacity(tsReadJEDECID(...))` is non-zero; previously that function matched the full 24-bit ID, which fixed the manufacturer byte to Winbond (`0xEF`).
+
+**Why:** Drop-in SPI NOR parts from other vendors (e.g. Alliance) can use the same memory-type and capacity bytes as W25Q*JV but a different JEP106 manufacturer ID, and were incorrectly rejected at boot.
+
+**What we did:** `ChipIDToCapacity()` in `pico/flash.c` now compares **`id & 0xFFFF`** (memory type + capacity code) to the same supported pairs as before (`0x4020`/`0x7020` → 64 MB, `0x4021`/`0x7021` → 128 MB, `0x7022` → 256 MB).
+
+**What we did not do:** SFDP-based detection for unrelated ID layouts; guarding `SetFlashDriveStrength()` when SR3 layout differs — operators should verify Alliance/other datasheets match Winbond-style commands and status registers, or extend firmware if not.
+
+**References:** `pico/flash.c` (`ChipIDToCapacity`, `InitFlash`, `SetFlashDriveStrength`).
+
+---
+
+## 17. Applesoft flash-path validator (`tools/flash-validate`)
+
+**What:** An Applesoft program (`FLASHVAL.BAS`) drives the same **`$C0C0`–`$C0C3`** command/parameter/data path documented in `cpanel/asm-megaflash.s`, runs non-destructive **`CMD_*`** calls that hit the Pico flash stack (`CMD_GETDEVINFO`, `CMD_GETDIB`, `CMD_READBLOCK`, etc.), and can save or compare a **text baseline** of 16-bit checksums.
+
+**Why:** Validates end-to-end behaviour (Apple ↔ bus interface ↔ firmware ↔ SPI flash) without requiring the Control Panel binary; useful when swapping flash vendors or firmware builds.
+
+**What we did:** Added `tools/flash-validate/FLASHVAL.BAS` and `README.md` (file format `FLASHVAL1`, slot base formula, volatile fields). **`build-flashval-disk.sh`** builds **`FLASHVALID.dsk`**: pads **`pico/romdisk.po`** to 800K (zeros) so AppleCommander can open it, **`-g`** copies **PRODOS** and **BASIC.SYSTEM** into a new **`-pro800`** volume, **`-bas`** adds tokenized **FLASHVAL** from **`FLASHVAL.DSK.BAS`** (screen-only suite), **`-ptx`** adds **`FLASHVAL.SRC`** (full **`FLASHVAL.BAS`** as TXT). Port variables must not be named **`PR`**: Applesoft treats **`PR`** as **`PRINT`**, and AppleCommander’s bastools fails with **`Expecting: [PR, #]`**; use **`PX`** (param port) and **`D1`** (data port) instead.
+
+**What we didn’t do:** Destructive tests (`CMD_FORMATDISK`, `CMD_ERASEDISK`, `CMD_WRITEBLOCK`); those need explicit write-enable key handling and should stay a separate tool. Full **`FLASHVAL.BAS`** is not reliably **`-bas`**-tokenized (file I/O and tokenizer quirks); disk boot program is **`FLASHVAL.DSK.BAS`**.
+
+**References:** `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `tools/flash-validate/FLASHVAL.BAS`, `tools/flash-validate/FLASHVAL.DSK.BAS`, `common/defines.h`, `pico/cmdhandler.c`, `pico/romdisk.po`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

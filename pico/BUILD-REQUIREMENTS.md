@@ -4,23 +4,23 @@ This document describes what is needed to build the MegaFlash Pico firmware on a
 
 ## Supported hosts
 
-- **Linux** (primary; original target)
-- **macOS** (tested; ARM toolchain and `sed` behaviour may differ — see below)
+- **Linux** — x86_64 or **aarch64** (ARM64). Install `gcc-arm-none-eabi` / CMake from your distro (or Arm’s tarball for **aarch64** if you need a specific GCC version).
+- **macOS** — **Apple Silicon (ARM64)** and Intel. On Apple Silicon, **Homebrew** lives under **`/opt/homebrew`** (not `/usr/local`). Use the **macOS arm64 / darwin-aarch64** build of the [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) when installing the `.pkg`, or `brew install arm-none-eabi-gcc`. `sed` behaviour matches BSD sed (see §6).
 
 ## 1. Raspberry Pi Pico SDK
 
-The firmware uses the official [Raspberry Pi Pico C/C++ SDK](https://github.com/raspberrypi/pico-sdk).
+The firmware uses the official [Raspberry Pi Pico C/C++ SDK](https://github.com/raspberrypi/pico-sdk). The SDK is **one source tree** for all host CPUs (Intel Mac, Apple Silicon, Linux x86_64/aarch64); there is no separate “ARM SDK” package—clone it on your ARM machine the same way and point **`PICO_SDK_PATH`** at it (or use **`~/pico-sdk`** as below).
 
 - **Obtain:** Clone the repo, then initialize **all required submodules** (see list below):
   ```bash
-  git clone https://github.com/raspberrypi/pico-sdk
-  cd pico-sdk
+  git clone https://github.com/raspberrypi/pico-sdk ~/pico-sdk
+  cd ~/pico-sdk
   git submodule update --init
   ```
   If you use a release tag, check out the tag before running `git submodule update --init` so submodule commits match that release.
 - **Version:** Use a recent stable release or the tag that matches your SDK clone. The project has been built with SDK versions that support both **Pico W (RP2040)** and **Pico 2 W (RP2350)**.
 - **Path:** Set the environment variable **`PICO_SDK_PATH`** to the absolute path of the SDK directory (e.g. `export PICO_SDK_PATH=/path/to/pico-sdk`).  
-  The build script `cmakeall.sh` uses this; if unset, it will use a default path that you must change for your machine (see script comments).
+  If unset, **`cmakeall.sh`** and **`build-both.sh`** default to **`$HOME/pico-sdk`**, and **`CMakeLists.txt`** uses the same **`$ENV{HOME}/pico-sdk`** fallback so bare `cmake` runs work. On **Apple Silicon**, keeping the clone at **`~/pico-sdk`** matches the defaults and avoids editing the repo.
 
 ### 1.1 Pico SDK add-ons (externals / submodules) required for this build
 
@@ -42,8 +42,9 @@ The RP2040 and RP2350 are built with the **arm-none-eabi** toolchain (no OS, bar
 
 - **Required programs:** `arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-ar`, `arm-none-eabi-ranlib` (and `arm-none-eabi-as` via gcc).
 - **Obtain:**
-  - **macOS:** [Arm GNU Toolchain for Arm Embedded Processors](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) (e.g. “Arm GNU Toolchain arm-none-eabi”). Install so that the `arm-none-eabi/bin` directory is available; the script looks under `/Applications/ArmGNUToolchain/*/arm-none-eabi/bin` or uses `ARM_TOOLCHAIN_PATH` (see below).
-  - **Linux:** Install the package (e.g. `sudo apt install gcc-arm-none-eabi` on Debian/Ubuntu) or use the same Arm GNU Toolchain tarball.
+  - **macOS:** [Arm GNU Toolchain for Arm Embedded Processors](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) (e.g. “Arm GNU Toolchain arm-none-eabi”). Pick the installer matching your Mac: **darwin-aarch64** on Apple Silicon, **darwin-x86_64** on Intel. Install so that the `arm-none-eabi/bin` directory is available; the scripts look under `/Applications/ArmGNUToolchain/*/arm-none-eabi/bin`, then **`/opt/homebrew/bin`** and **`/usr/local/bin`** (Homebrew), then **`PATH`**, or use **`ARM_TOOLCHAIN_PATH`** (see below).
+  - **Not enough for Pico:** **`brew install arm-none-eabi-gcc`** provides a cross-GCC **without newlib** (no **`nosys.specs`**). The Pico SDK boot stage and C runtime need the **full** Arm GNU Embedded toolchain. Use the **.pkg** from Arm (correct host arch), not Homebrew’s standalone GCC, unless you know you have a complete newlib layout.
+  - **Linux:** Install the package (e.g. `sudo apt install gcc-arm-none-eabi` on Debian/Ubuntu) or use the Arm GNU Toolchain tarball for **aarch64** or **x86_64** matching your host.
 - **Important:** The build script explicitly passes the C/C++/AR/RANLIB paths to CMake so that the correct toolchain is used (e.g. on macOS, Xcode’s `ranlib` must not be used). Use a toolchain that provides `nosys.specs` and is intended for bare-metal.
 - **Optional override:** Set **`ARM_TOOLCHAIN_PATH`** to the **bin** directory containing `arm-none-eabi-gcc` (e.g. `export ARM_TOOLCHAIN_PATH="/Applications/ArmGNUToolchain/12.3.rel1/arm-none-eabi/bin"`) to force a specific toolchain.
 
@@ -52,7 +53,12 @@ The RP2040 and RP2350 are built with the **arm-none-eabi** toolchain (no OS, bar
 - **CMake:** Version **3.13 or later** (up to 3.27). The top-level `CMakeLists.txt` requires `cmake_minimum_required(VERSION 3.13...3.27)`.
 - **Make:** Standard `make` for the configured build directories.
 
-Install via your system package manager or from [cmake.org](https://cmake.org/download/).
+Install via your system package manager or from [cmake.org](https://cmake.org/download/) — on **Apple Silicon**, install the **macOS arm64** build (or `brew install cmake` into **`/opt/homebrew`**).
+
+- **Scripts (`cmakeall.sh`, `build-both.sh`, `build-debug.sh`):** They **`source build-env.sh`**, which sets **`CMAKE_BIN`** to the first executable found among **`/opt/homebrew/bin/cmake`** (Apple Silicon Homebrew), **`/usr/local/bin/cmake`** (Intel Mac / some Linux), then **`cmake`** on **`PATH`**. That avoids using an old **x86_64** CMake when an **arm64** one exists. Override with **`export CMAKE=/path/to/cmake`**.
+- **Hand-invoked `cmake`:** If you configure build dirs yourself, call the same binary (e.g. **`/opt/homebrew/bin/cmake`**) or put **`/opt/homebrew/bin`** early in **`PATH`** so **`CMakeCache.txt`** records the correct program.
+
+- **macOS Intel → Apple Silicon:** If **`cmake`** (or **cc65**, **java**, etc.) fails with **`bad CPU type in executable`**, the binary is still **x86_64**. Reinstall for **arm64** so tools match the host CPU.
 
 ## 4. Control panel binary (prerequisite)
 

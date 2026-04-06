@@ -4,7 +4,7 @@
 
 For full requirements (SDK, ARM toolchain, CMake, Control Panel prerequisite, and how to recreate the build on another machine), see **[BUILD-REQUIREMENTS.md](BUILD-REQUIREMENTS.md)**.
 
-Summary: set **`PICO_SDK_PATH`** to your Raspberry Pi [Pico SDK](https://github.com/raspberrypi/pico-sdk) directory. From the MegaFlash `pico` directory run:
+Summary: clone [pico-sdk](https://github.com/raspberrypi/pico-sdk) to **`~/pico-sdk`** (or set **`PICO_SDK_PATH`**). On **Apple Silicon**, install **arm64** CMake (e.g. Homebrew **`/opt/homebrew`**); **`build-env.sh`** picks that **`cmake`** before **`/usr/local`**. From the MegaFlash `pico` directory run:
 
 ```
 ./cmakeall.sh
@@ -38,6 +38,14 @@ picotool
 Note: You need to execute the shell script only once unless `CMakeLists.txt` file is changed or you want to recreate the build directories.
 
 `pico_debug` and `pico_release` are the build directories for Pico Board (RP2040).  `pico2_debug` and `pico2_release` are the build directories for Pico2 Board (RP2350).
+
+## Datasheets (flash and related parts)
+
+Vendor PDFs (e.g. Winbond, Alliance) for SPI flash and related ICs live in the **MegaFlash repo root**, next to `pico/`:
+
+- From this directory: **`../datasheets/`** (i.e. `MegaFlash/datasheets/`).
+
+That folder is for human reference when comparing command sets, SFDP, and status-register layouts with what `flash.c` assumes.
 
 ## Build Instruction
 

@@ -72,6 +72,27 @@ Keys emitted:
 
 `common/defines.h` / `common/defines.inc` (`CMD_*`), and `pico/cmdhandler.c` (`DoGetDeviceInfo`, `DoReadBlock`, …).
 
+## Overnight soak tool (`FLASHSOAK`)
+
+`FLASHSOAK.BAS` is a destructive, long-running validator intended to run overnight and emit parseable CSV rows.
+
+Per cycle, for each writable MegaFlash volume (including RAM disk when enabled), it:
+
+- Formats the unit.
+- Creates/appends/deletes files, plus a fill-to-error pass.
+- Computes a whole-volume checksum (sum of all bytes from `CMD_READBLOCK`).
+- Uploads image to TFTP server `192.168.0.10` as `validationX.po` (X = unit number).
+- Reformats unit, downloads `validationX.po` back into place.
+- Recomputes checksum and verifies it matches pre-upload value.
+- Logs each step to a CSV log file (`cycle,unit,event,result,v1,v2`).
+
+If all units pass, it reformats all writable units again and starts the next cycle.
+
+**Files:**
+
+- `FLASHSOAK.BAS` - source for the overnight test.
+- On disk image, `FLASHSOAK` (tokenized) and `FLASHSOAK.SRC` (text) are both included.
+
 ## Bootable disk (`FLASHVALID.dsk`)
 
 Requires **Java** and [AppleCommander](https://applecommander.github.io/) (CLI jar). Default jar path: **`$HOME/Library/Application Support/AppleCommander/AppleCommander-ac-13.0.jar`** — override with **`AC_JAR`**.
@@ -88,6 +109,8 @@ Contents:
 
 - **PRODOS** / **BASIC.SYSTEM** — copied raw from **`pico/romdisk.po`** (the same image embedded in firmware).
 - **FLASHVAL** — tokenized Applesoft from **`FLASHVAL.DSK.BAS`** (screen-only test suite; run under BASIC.SYSTEM).
+- **FLASHSOAK** — tokenized Applesoft overnight stress validator.
 - **FLASHVAL.SRC** — text copy of **`FLASHVAL.BAS`** (full program including ProDOS baseline/compare); use for reference or manual entry; AppleCommander **`-bas`** on the full file is still unreliable.
+- **FLASHSOAK.SRC** — text copy of `FLASHSOAK.BAS`.
 
 **Note:** **`PR`** is not a safe variable name in Applesoft (it abbreviates **PRINT**). This tree uses **`PX`** and **`D1`** for the parameter and data ports at **`CR+1`** and **`CR+2`**.

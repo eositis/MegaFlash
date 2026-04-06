@@ -3,6 +3,8 @@
 # Run from pico directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+# shellcheck source=build-env.sh
+source "$SCRIPT_DIR/build-env.sh"
 
 # Bump version and date for this build (append -eo to denote custom build)
 DEFINES="defines.h"
@@ -42,19 +44,33 @@ fi
 #   ./cmakeall.sh
 #
 TOOLCHAIN_BIN=""
-if [ -n "$ARM_TOOLCHAIN_PATH" ] && [ -x "$ARM_TOOLCHAIN_PATH/arm-none-eabi-gcc" ]; then
+if [ -n "$ARM_TOOLCHAIN_PATH" ] && mf_try_arm_toolchain_bin "$ARM_TOOLCHAIN_PATH"; then
   TOOLCHAIN_BIN="$ARM_TOOLCHAIN_PATH"
 elif [ -d /Applications/ArmGNUToolchain ]; then
   for d in /Applications/ArmGNUToolchain/*/arm-none-eabi/bin; do
-    if [ -x "$d/arm-none-eabi-gcc" ]; then
+    if mf_try_arm_toolchain_bin "$d"; then
       TOOLCHAIN_BIN="$d"
       break
     fi
   done
 fi
+# Homebrew: Apple Silicon uses /opt/homebrew; Intel macOS often /usr/local. Prefer before generic PATH.
 if [ -z "$TOOLCHAIN_BIN" ]; then
-  GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null)
-  [ -n "$GCC_PATH" ] && TOOLCHAIN_BIN=$(dirname "$GCC_PATH")
+  for _hb in /opt/homebrew /usr/local; do
+    if mf_try_arm_toolchain_bin "$_hb/bin"; then
+      TOOLCHAIN_BIN="$_hb/bin"
+      break
+    fi
+  done
+fi
+if [ -z "$TOOLCHAIN_BIN" ]; then
+  GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null || true)
+  if [ -n "$GCC_PATH" ]; then
+    _gdir=$(dirname "$GCC_PATH")
+    if mf_try_arm_toolchain_bin "$_gdir"; then
+      TOOLCHAIN_BIN="$_gdir"
+    fi
+  fi
 fi
 
 CMAKE_ARM_TOOLCHAIN=""
@@ -69,44 +85,52 @@ if [ -n "$TOOLCHAIN_BIN" ]; then
   CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJDUMP=$TOOLCHAIN_BIN/arm-none-eabi-objdump"
   CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJCOPY=$TOOLCHAIN_BIN/arm-none-eabi-objcopy"
   echo "Using ARM toolchain: $TOOLCHAIN_BIN"
+else
+  echo "Error: no usable arm-none-eabi toolchain (need host-native GCC + newlib, e.g. Arm GNU Toolchain)." >&2
+  echo "  macOS Apple Silicon: install the **darwin-aarch64** arm-none-eabi package from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads" >&2
+  echo "  (Intel-only /Applications/ArmGNUToolchain and Homebrew arm-none-eabi-gcc are not sufficient for Pico.)" >&2
+  echo "  Then set ARM_TOOLCHAIN_PATH to the .../arm-none-eabi/bin directory, or fix your PATH." >&2
+  exit 1
 fi
 
 # Build cpanel first (Control Panel binary embedded in firmware)
 CPANEL_DIR="$(cd "$SCRIPT_DIR/../cpanel" 2>/dev/null && pwd)"
 if [ -d "$CPANEL_DIR" ] && [ -f "$CPANEL_DIR/Makefile" ]; then
-  echo "Building cpanel..."
-  make -C "$CPANEL_DIR" || exit 1
+  echo "Building cpanel (release only; skips test disk + Java)..."
+  make -C "$CPANEL_DIR" release || exit 1
 else
   echo "Warning: cpanel directory not found, using existing cpanel.bin"
 fi
 
-# PICO_SDK_PATH: use environment if set, else default (edit default for your machine)
-SDK_PATH="${PICO_SDK_PATH:-/Users/eositis/pico-sdk}"
+# PICO_SDK_PATH: use environment if set, else ~/pico-sdk (portable across users / Intel vs ARM macOS)
+SDK_PATH="${PICO_SDK_PATH:-$HOME/pico-sdk}"
 if [ ! -d "$SDK_PATH" ]; then
-  echo "Error: Pico SDK not found at $SDK_PATH. Set PICO_SDK_PATH to your pico-sdk directory." >&2
+  echo "Error: Pico SDK not found at $SDK_PATH. Set PICO_SDK_PATH or clone: git clone https://github.com/raspberrypi/pico-sdk \"\$HOME/pico-sdk\" && (cd \"\$HOME/pico-sdk\" && git submodule update --init)" >&2
   exit 1
 fi
+
+echo "Using CMake: $CMAKE_BIN"
 
 FIRMWARE_BUILD_TIMESTAMP="${FIRMWARE_BUILD_TIMESTAMP:-$(date +%s)}"
 FIRMWARE_BUILD_TIMESTAMP_STR="${FIRMWARE_BUILD_TIMESTAMP_STR:-$(date -u +"%Y-%m-%d %H:%M:%S UTC")}"
 echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMESTAMP_STR)"
 
 #Pico Build
-cmake -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
+"$CMAKE_BIN" -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   $CMAKE_ARM_TOOLCHAIN
-cmake -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
+"$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   $CMAKE_ARM_TOOLCHAIN
 
 #Pico2 Build
-cmake -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
+"$CMAKE_BIN" -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   $CMAKE_ARM_TOOLCHAIN
-cmake -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
+"$CMAKE_BIN" -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   $CMAKE_ARM_TOOLCHAIN

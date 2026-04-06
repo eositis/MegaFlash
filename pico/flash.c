@@ -1107,17 +1107,20 @@ void InitSpi(){
 //////////////////////////////////////////////////////
 // Convert supported Flash chip ID to capacity in MB
 //
-// Input:  id - Flash JEDECID
+// Input:  id - JEDEC ID from 0x9F: manufacturer (high 8), memory type, capacity code
 //
-// Output: uint32_t - capacity in MB
+// Output: uint32_t - capacity in MB, or 0 if unsupported
+//
+// Match memory type + capacity only (ignore JEP106 manufacturer byte) so drop-in
+// parts (e.g. Alliance with same type/capacity codes as W25Q*JV) are accepted.
+// Command/register compatibility is still assumed; SR3 drive strength may be
+// vendor-specific (see SetFlashDriveStrength).
 //
 static uint32_t ChipIDToCapacity(const uint32_t id) {
-  if (id==0xef4021) return 128;         //Winbond W25Q01JV
-  else if (id==0xef7021) return 128;    //Winbond W25Q01JV-DTR
-  else if (id==0xef4020) return 64;     //Winbond W25Q512JV
-  else if (id==0xef7020) return 64;     //Winbond W25Q512JV-DTR  
-  else if (id==0xef7022) return 256;    //Winbond W25Q02JV-DTR
-    
+  const uint32_t type_cap = id & 0xffffu;
+  if (type_cap == 0x4021 || type_cap == 0x7021) return 128;  // 1 Gbit class
+  if (type_cap == 0x4020 || type_cap == 0x7020) return 64;   // 512 Mbit class
+  if (type_cap == 0x7022) return 256;                        // 2 Gbit (DTR) class
   return 0;
 }
 

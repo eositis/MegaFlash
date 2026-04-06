@@ -1,0 +1,2506 @@
+
+---------- 2026-03-21 21:42:20 -0400: Logging Started ----------
+
+gp  3p@r
+Megaflash DEBUG Firmware Version 32
+CPU Clock Speed =150MHz
+clk_peri =150MHz
+SPI Speed = 75MHz
+WIFI Supported = Yes
+Total heap = 6480
+Free heap  = 5368
+GetNetworkTime()
+NETPUMP: begin op=1 label=NTP taskid=0
+Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+API: 12.2
+Data: RaspberryPi.PicoW
+Compiler: 1.29.4
+ClmImport: 1.47.1
+Customization: v5 22/06/24
+Creation: 2022-06-24 06:55:08
+
+SSID=OIS-new
+
+Connecting to Wifi Attempt:#1
+connect status: 1
+connect status: 2
+connect status: 3
+link_status=3
+WIFI connected
+IP address: 192.168.0.238
+Gateway: 192.168.0.1
+Netmask: 255.255.255.0
+DNS Server: 192.168.0.1
+CreateUdpPcb() pcb = 0x20010a34
+NTP: EvtStart()
+DNSLooup(): waiting for callback
+NTP: EvtDNSResult dnserr=0
+EvtDNSResult(): IP Addr = 72.14.182.49
+Sending NTP Request Attempt: #1
+NTP: EvtUDPReceived len=48 port=123
+NTP: Valid response: mode=0x04 stratum=2
+NTP: unix epoch = 1774143621
+NETPUMP: end op=1 label=NTP taskid=0
+GetNTP err=11 (11=NETERR_NONE)
+GetNetworkTime()
+NETPUMP: begin op=1 label=NTP taskid=0
+CreateUdpPcb() pcb = 0x20010a34
+NTP: EvtStart()
+DNSLooup(): waiting for callback
+NTP: EvtDNSResult dnserr=0
+EvtDNSResult(): IP Addr = 23.142.248.9
+Sending NTP Request Attempt: #1
+NTP: EvtUDPReceived len=48 port=123
+NTP: Valid response: mode=0x04 stratum=2
+NTP: unix epoch = 1774143621
+NETPUMP: end op=1 label=NTP taskid=0
+GetNTP err=11 (11=NETERR_NONE)
+03-21 21:45:15.312: [u2] mode=0x03 (AI=1 IND=1)
+03-21 21:55:34.061: NETPUMP: RequestAbortAll()
+03-21 21:56:15.201: CMD_TFTPRUN Parameters:
+03-21 21:56:15.251: dir = 0
+03-21 21:56:15.251: unitNum = 5
+03-21 21:56:15.251: Hostname = 192.168.0.10
+03-21 21:56:15.251: filename = /ip65/ip65.dsk
+03-21 21:56:15.251: NETPUMP: begin op=3 label=TFTP taskid=1
+03-21 21:56:15.251: NETPUMP: RunTFTP dir=0 unit=5 host=192.168.0.10 file=/ip65/ip65.dsk
+03-21 21:56:15.251: blockCapacity = 800
+03-21 21:56:15.324: CreateUdpPcb() pcb = 0x20010a34
+03-21 21:56:15.324: tftp_state.status = TFTPSTATUS_WIFICONNECTING
+03-21 21:56:15.375: DNSLookup: hostname=192.168.0.10
+03-21 21:56:15.375: dns_gethostbyname() returns ERR_OK. resolved IP Address=192.168.0.10
+03-21 21:56:15.375: EvtDNSResult(): IP Addr = 192.168.0.10
+03-21 21:56:15.375: tftp_state.status = TFTPSTATUS_REQUEST
+03-21 21:56:15.426: OACK Received
+03-21 21:56:15.426: Setting server_port to 69
+03-21 21:56:15.426: option: blksize=1024
+03-21 21:56:15.477: Switching TFTP blockSize to 1024
+03-21 21:56:15.477: option: tsize=143360
+03-21 21:56:15.477: tftp_state.tsize = 143360
+03-21 21:56:15.478: Sending Ack of the OACK packet
+03-21 21:56:15.527: First data packet received
+03-21 21:56:15.528: tftp_state.status = TFTPSTATUS_TRANSFER
+
+03-21 21:56:16.386: tftp_state.status = TFTPSTATUS_COMPLETING
+03-21 21:56:19.483: tftp_state.status = TFTPSTATUS_COMPLETED
+03-21 21:56:19.483: RX Transfer Completed! Block Count = 280
+03-21 21:56:19.534: NETPUMP: end op=3 label=TFTP taskid=1
+03-21 21:56:57.572: NETPUMP: RequestAbortAll()
+03-21 21:56:57.572: NETPUMP: RequestAbortAll()
+03-21 21:57:42.473: CMD_TFTPRUN Parameters:
+03-21 21:57:42.473: dir = 0
+03-21 21:57:42.473: unitNum = 4
+03-21 21:57:42.473: Hostname = 192.168.0.10
+03-21 21:57:42.524: filename = /ip65/ip65.dsk
+03-21 21:57:42.524: NETPUMP: begin op=3 label=TFTP taskid=2
+03-21 21:57:42.524: NETPUMP: RunTFTP dir=0 unit=4 host=192.168.0.10 file=/ip65/ip65.dsk
+03-21 21:57:42.524: blockCapacity = 65536
+03-21 21:57:42.592: CreateUdpPcb() pcb = 0x20010a34
+03-21 21:57:42.592: tftp_state.status = TFTPSTATUS_WIFICONNECTING
+03-21 21:57:42.643: DNSLookup: hostname=192.168.0.10
+03-21 21:57:42.643: dns_gethostbyname() returns ERR_OK. resolved IP Address=192.168.0.10
+03-21 21:57:42.643: EvtDNSResult(): IP Addr = 192.168.0.10
+03-21 21:57:42.643: tftp_state.status = TFTPSTATUS_REQUEST
+03-21 21:57:42.643: OACK Received
+03-21 21:57:42.643: Setting server_port to 69
+03-21 21:57:42.644: option: blksize=1024
+03-21 21:57:42.644: Switching TFTP blockSize to 1024
+03-21 21:57:42.644: option: tsize=143360
+03-21 21:57:42.644: tftp_state.tsize = 143360
+03-21 21:57:42.644: Sending Ack of the OACK packet
+03-21 21:57:42.693: First data packet received
+03-21 21:57:42.694: tftp_state.status = TFTPSTATUS_TRANSFER
+
+03-21 21:57:49.175: tftp_state.status = TFTPSTATUS_COMPLETING
+03-21 21:57:52.275: tftp_state.status = TFTPSTATUS_COMPLETED
+03-21 21:57:52.275: RX Transfer Completed! Block Count = 280
+03-21 21:57:52.326: NETPUMP: end op=3 label=TFTP taskid=2
+03-21 22:06:50.919: [u2] mode=0x03 (AI=1 IND=1)
+
+03-21 22:13:25.920: Megaflash DEBUG Firmware Version 32
+03-21 22:13:25.971: CPU Clock Speed =150MHz
+03-21 22:13:25.971: clk_peri =150MHz
+03-21 22:13:25.971: SPI Speed = 75MHz
+03-21 22:13:25.971: WIFI Supported = Yes
+03-21 22:13:25.972: Total heap = 6476
+03-21 22:13:25.972: Free heap  = 5360
+03-21 22:13:27.736: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:13:27.941: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 22:13:27.942: #     #                          #######
+03-21 22:13:27.992: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 22:13:27.992: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 22:13:27.992: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 22:13:27.992: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 22:13:27.993: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 22:13:27.993: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 22:13:27.993: Main Menu
+03-21 22:13:27.993: =========
+
+03-21 22:13:27.993: 1) Device Information
+03-21 22:13:27.993: 2) Upload ProDOS Image file to MegaFlash
+03-21 22:13:28.042: 3) Download ProDOS Image file from MegaFlash
+03-21 22:13:28.042: 4) Erase Flash Content
+
+03-21 22:13:28.043: Please Select:
+03-21 22:13:34.330: Megaflash DEBUG Firmware Version 32
+03-21 22:13:34.330: CPU Clock Speed =150MHz
+03-21 22:13:34.330: clk_peri =150MHz
+03-21 22:13:34.330: SPI Speed = 75MHz
+03-21 22:13:34.330: WIFI Supported = Yes
+03-21 22:13:34.330: Total heap = 6476
+03-21 22:13:34.381: Free heap  = 5360
+03-21 22:13:34.381: GetNetworkTime()
+03-21 22:13:34.381: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:13:34.680: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:13:34.887: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 22:13:34.962: API: 12.2
+03-21 22:13:34.963: Data: RaspberryPi.PicoW
+03-21 22:13:34.963: Compiler: 1.29.4
+03-21 22:13:34.963: ClmImport: 1.47.1
+03-21 22:13:35.013: Customization: v5 22/06/24
+03-21 22:13:35.013: Creation: 2022-06-24 06:55:08
+
+03-21 22:13:35.095: SSID=OIS-new
+
+03-21 22:13:35.095: Connecting to Wifi Attempt:#1
+03-21 22:13:35.145: connect status: 1
+03-21 22:13:38.147: connect status: 2
+03-21 22:13:38.197: connect status: 3
+03-21 22:13:38.247: link_status=3
+03-21 22:13:38.247: WIFI connected
+03-21 22:13:38.247: IP address: 192.168.0.238
+03-21 22:13:38.247: Gateway: 192.168.0.1
+03-21 22:13:38.248: Netmask: 255.255.255.0
+03-21 22:13:38.248: DNS Server: 192.168.0.1
+03-21 22:13:38.248: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:13:38.248: NTP: EvtStart()
+03-21 22:13:38.248: DNSLooup(): waiting for callback
+03-21 22:13:38.349: NTP: EvtDNSResult dnserr=0
+03-21 22:13:38.349: EvtDNSResult(): IP Addr = 172.235.154.118
+03-21 22:13:38.349: Sending NTP Request Attempt: #1
+03-21 22:13:38.399: NTP: EvtUDPReceived len=48 port=123
+03-21 22:13:38.399: NTP: Valid response: mode=0x04 stratum=4
+03-21 22:13:38.399: NTP: unix epoch = 1774145618
+03-21 22:13:38.399: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:13:38.400: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:13:38.449: GetNetworkTime()
+03-21 22:13:38.449: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:13:38.538: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:13:38.588: NTP: EvtStart()
+03-21 22:13:38.588: DNSLooup(): waiting for callback
+03-21 22:13:38.588: NTP: EvtDNSResult dnserr=0
+03-21 22:13:38.588: EvtDNSResult(): IP Addr = 172.233.189.68
+03-21 22:13:38.589: Sending NTP Request Attempt: #1
+03-21 22:13:38.639: NTP: EvtUDPReceived len=48 port=123
+03-21 22:13:38.640: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:13:38.640: NTP: unix epoch = 1774145618
+03-21 22:13:38.640: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:13:38.640: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:14:06.860: [u2] mode=0x03 (AI=1 IND=1)
+03-21 22:14:06.860: [u2] RTR data read addr=0x0017 -> 0x07 (MR=0x03)
+03-21 22:14:06.911: [u2] RTR data read addr=0x0018 -> 0xD0 (MR=0x03)
+
+03-21 22:23:43.036: Megaflash DEBUG Firmware Version 32
+03-21 22:23:43.036: CPU Clock Speed =150MHz
+03-21 22:23:43.087: clk_peri =150MHz
+03-21 22:23:43.087: SPI Speed = 75MHz
+03-21 22:23:43.087: WIFI Supported = Yes
+03-21 22:23:43.087: Total heap = 6476
+03-21 22:23:43.087: Free heap  = 5360
+03-21 22:23:44.421: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:23:44.623: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 22:23:44.623: #     #                          #######
+03-21 22:23:44.674: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 22:23:44.674: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 22:23:44.674: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 22:23:44.674: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 22:23:44.674: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 22:23:44.674: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 22:23:44.675: Main Menu
+03-21 22:23:44.675: =========
+
+03-21 22:23:44.675: 1) Device Information
+03-21 22:23:44.675: 2) Upload ProDOS Image file to MegaFlash
+03-21 22:23:44.724: 3) Download ProDOS Image file from MegaFlash
+03-21 22:23:44.724: 4) Erase Flash Content
+
+03-21 22:23:44.724: Please Select:
+03-21 22:25:47.607: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:25:47.607: Firmware build: unknown  (0 Unix s)
+03-21 22:25:47.657: CPU Clock Speed =150MHz
+03-21 22:25:47.657: clk_peri =150MHz
+03-21 22:25:47.657: SPI Speed = 75MHz
+03-21 22:25:47.657: WIFI Supported = Yes
+03-21 22:25:47.657: Total heap = 6476
+03-21 22:25:47.658: Free heap  = 5360
+03-21 22:25:49.416: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:25:49.618: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 22:25:49.619: #     #                          #######
+03-21 22:25:49.680: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 22:25:49.680: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 22:25:49.681: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 22:25:49.681: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 22:25:49.681: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 22:25:49.681: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 22:25:49.682: Main Menu
+03-21 22:25:49.682: =========
+
+03-21 22:25:49.682: 1) Device Information
+03-21 22:25:49.730: 2) Upload ProDOS Image file to MegaFlash
+03-21 22:25:49.730: 3) Download ProDOS Image file from MegaFlash
+03-21 22:25:49.730: 4) Erase Flash Content
+
+03-21 22:25:49.730: Please Select:
+03-21 22:25:56.233: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:25:56.233: Firmware build: unknown  (0 Unix s)
+03-21 22:25:56.233: CPU Clock Speed =150MHz
+03-21 22:25:56.233: clk_peri =150MHz
+03-21 22:25:56.283: SPI Speed = 75MHz
+03-21 22:25:56.283: WIFI Supported = Yes
+03-21 22:25:56.283: Total heap = 6476
+03-21 22:25:56.283: Free heap  = 5360
+03-21 22:25:56.283: GetNetworkTime()
+03-21 22:25:56.283: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:25:56.587: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:25:56.795: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 22:25:56.870: API: 12.2
+03-21 22:25:56.870: Data: RaspberryPi.PicoW
+03-21 22:25:56.870: Compiler: 1.29.4
+03-21 22:25:56.870: ClmImport: 1.47.1
+03-21 22:25:56.921: Customization: v5 22/06/24
+03-21 22:25:56.921: Creation: 2022-06-24 06:55:08
+
+03-21 22:25:57.002: SSID=OIS-new
+
+03-21 22:25:57.002: Connecting to Wifi Attempt:#1
+03-21 22:25:57.053: connect status: 1
+03-21 22:26:00.006: connect status: 2
+03-21 22:26:01.763: connect status: 3
+03-21 22:26:01.814: link_status=3
+03-21 22:26:01.814: WIFI connected
+03-21 22:26:01.814: IP address: 192.168.0.238
+03-21 22:26:01.814: Gateway: 192.168.0.1
+03-21 22:26:01.814: Netmask: 255.255.255.0
+03-21 22:26:01.815: DNS Server: 192.168.0.1
+03-21 22:26:01.865: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:26:01.865: NTP: EvtStart()
+03-21 22:26:01.865: DNSLooup(): waiting for callback
+03-21 22:26:01.915: NTP: EvtDNSResult dnserr=0
+03-21 22:26:01.916: EvtDNSResult(): IP Addr = 162.244.81.139
+03-21 22:26:01.916: Sending NTP Request Attempt: #1
+03-21 22:26:01.916: NTP: EvtUDPReceived len=48 port=123
+03-21 22:26:01.916: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:26:01.916: NTP: unix epoch = 1774146361
+03-21 22:26:01.916: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:26:01.966: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:26:01.966: GetNetworkTime()
+03-21 22:26:01.966: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:26:02.068: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:26:02.068: NTP: EvtStart()
+03-21 22:26:02.119: DNSLooup(): waiting for callback
+03-21 22:26:02.119: NTP: EvtDNSResult dnserr=0
+03-21 22:26:02.119: EvtDNSResult(): IP Addr = 129.146.193.200
+03-21 22:26:02.120: Sending NTP Request Attempt: #1
+03-21 22:26:02.169: NTP: EvtUDPReceived len=48 port=123
+03-21 22:26:02.169: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:26:02.169: NTP: unix epoch = 1774146362
+03-21 22:26:02.220: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:26:02.220: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:26:24.380: [u2] mode=0x03 (AI=1 IND=1)
+03-21 22:26:24.381: [u2] RTR data read addr=0x0017 -> 0x07 (MR=0x03)
+03-21 22:26:24.432: [u2] RTR data read addr=0x0018 -> 0xD0 (MR=0x03)
+
+03-21 22:34:10.819: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:34:10.819: Firmware build: unknown  (0 Unix s)
+03-21 22:34:10.869: CPU Clock Speed =150MHz
+03-21 22:34:10.869: clk_peri =150MHz
+03-21 22:34:10.870: SPI Speed = 75MHz
+03-21 22:34:10.870: WIFI Supported = Yes
+03-21 22:34:10.870: Total heap = 6476
+03-21 22:34:10.870: Free heap  = 5360
+
+03-21 22:34:11.197: *** PANIC ***
+
+03-21 22:34:11.197: Can't continue xfer on inactive ep 80
+
+
+03-21 22:34:21.633: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:34:21.633: Firmware build: unknown  (0 Unix s)
+03-21 22:34:21.633: CPU Clock Speed =150MHz
+03-21 22:34:21.633: clk_peri =150MHz
+03-21 22:34:21.684: SPI Speed = 75MHz
+03-21 22:34:21.684: WIFI Supported = Yes
+03-21 22:34:21.684: Total heap = 6476
+03-21 22:34:21.684: Free heap  = 5360
+03-21 22:34:21.684: GetNetworkTime()
+03-21 22:34:21.684: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:34:21.987: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:34:22.194: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 22:34:22.269: API: 12.2
+03-21 22:34:22.269: Data: RaspberryPi.PicoW
+03-21 22:34:22.270: Compiler: 1.29.4
+03-21 22:34:22.270: ClmImport: 1.47.1
+03-21 22:34:22.321: Customization: v5 22/06/24
+03-21 22:34:22.321: Creation: 2022-06-24 06:55:08
+
+03-21 22:34:22.402: SSID=OIS-new
+
+03-21 22:34:22.403: Connecting to Wifi Attempt:#1
+03-21 22:34:22.403: connect status: 1
+03-21 22:34:25.390: connect status: 2
+03-21 22:34:31.190: connect status: 3
+03-21 22:34:31.240: link_status=3
+03-21 22:34:31.240: WIFI connected
+03-21 22:34:31.240: IP address: 192.168.0.238
+03-21 22:34:31.240: Gateway: 192.168.0.1
+03-21 22:34:31.241: Netmask: 255.255.255.0
+03-21 22:34:31.241: DNS Server: 192.168.0.1
+03-21 22:34:31.291: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:34:31.291: NTP: EvtStart()
+03-21 22:34:31.291: DNSLooup(): waiting for callback
+03-21 22:34:31.342: NTP: EvtDNSResult dnserr=0
+03-21 22:34:31.342: EvtDNSResult(): IP Addr = 23.168.24.210
+03-21 22:34:31.342: Sending NTP Request Attempt: #1
+03-21 22:34:31.392: NTP: EvtUDPReceived len=48 port=123
+03-21 22:34:31.393: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:34:31.393: NTP: unix epoch = 1774146871
+03-21 22:34:31.393: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:34:31.443: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:34:31.443: GetNetworkTime()
+03-21 22:34:31.443: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:34:31.536: CreateUdpPcb() pcb = 0x20010a34
+03-21 22:34:31.536: NTP: EvtStart()
+03-21 22:34:31.587: DNSLooup(): waiting for callback
+03-21 22:34:31.587: NTP: EvtDNSResult dnserr=0
+03-21 22:34:31.587: EvtDNSResult(): IP Addr = 23.186.168.124
+03-21 22:34:31.587: Sending NTP Request Attempt: #1
+03-21 22:34:31.650: NTP: EvtUDPReceived len=48 port=123
+03-21 22:34:31.650: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:34:31.701: NTP: unix epoch = 1774146871
+03-21 22:34:31.701: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:34:31.701: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:35:04.104: [u2] mode=0x03 (AI=1 IND=1)
+03-21 22:35:04.105: [u2] DATA read addr=0x0017 -> 0x07 (MR=0x03)
+03-21 22:35:04.156: [u2] DATA read addr=0x0018 -> 0xD0 (MR=0x03)
+
+03-21 22:57:31.812: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:57:31.813: Firmware build: unknown  (0 Unix s)
+03-21 22:57:31.863: CPU Clock Speed =150MHz
+03-21 22:57:31.863: clk_peri =150MHz
+03-21 22:57:31.863: SPI Speed = 75MHz
+03-21 22:57:31.863: WIFI Supported = Yes
+03-21 22:57:31.863: Total heap = 3928
+03-21 22:57:31.863: Free heap  = 2816
+03-21 22:57:33.612: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:57:33.814: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 22:57:33.814: #     #                          #######
+03-21 22:57:33.864: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 22:57:33.865: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 22:57:33.865: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 22:57:33.865: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 22:57:33.865: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 22:57:33.865: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 22:57:33.865: Main Menu
+03-21 22:57:33.865: =========
+
+03-21 22:57:33.866: 1) Device Information
+03-21 22:57:33.866: 2) Upload ProDOS Image file to MegaFlash
+03-21 22:57:33.915: 3) Download ProDOS Image file from MegaFlash
+03-21 22:57:33.915: 4) Erase Flash Content
+
+03-21 22:57:33.915: Please Select:
+03-21 22:57:41.493: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 22:57:41.494: Firmware build: unknown  (0 Unix s)
+03-21 22:57:41.494: CPU Clock Speed =150MHz
+03-21 22:57:41.494: clk_peri =150MHz
+03-21 22:57:41.544: SPI Speed = 75MHz
+03-21 22:57:41.544: WIFI Supported = Yes
+03-21 22:57:41.544: Total heap = 3928
+03-21 22:57:41.545: Free heap  = 2816
+03-21 22:57:41.545: GetNetworkTime()
+03-21 22:57:41.545: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:57:41.848: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 22:57:42.055: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 22:57:42.131: API: 12.2
+03-21 22:57:42.131: Data: RaspberryPi.PicoW
+03-21 22:57:42.131: Compiler: 1.29.4
+03-21 22:57:42.131: ClmImport: 1.47.1
+03-21 22:57:42.182: Customization: v5 22/06/24
+03-21 22:57:42.182: Creation: 2022-06-24 06:55:08
+
+03-21 22:57:42.263: SSID=OIS-new
+
+03-21 22:57:42.264: Connecting to Wifi Attempt:#1
+03-21 22:57:42.314: connect status: 1
+03-21 22:57:45.235: connect status: 2
+03-21 22:57:47.040: connect status: 3
+03-21 22:57:47.091: link_status=3
+03-21 22:57:47.091: WIFI connected
+03-21 22:57:47.091: IP address: 192.168.0.238
+03-21 22:57:47.091: Gateway: 192.168.0.1
+03-21 22:57:47.091: Netmask: 255.255.255.0
+03-21 22:57:47.091: DNS Server: 192.168.0.1
+03-21 22:57:47.142: CreateUdpPcb() pcb = 0x20010a2c
+03-21 22:57:47.142: NTP: EvtStart()
+03-21 22:57:47.142: DNSLooup(): waiting for callback
+03-21 22:57:47.192: NTP: EvtDNSResult dnserr=0
+03-21 22:57:47.243: EvtDNSResult(): IP Addr = 23.186.168.123
+03-21 22:57:47.243: Sending NTP Request Attempt: #1
+03-21 22:57:47.293: NTP: EvtUDPReceived len=48 port=123
+03-21 22:57:47.293: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:57:47.293: NTP: unix epoch = 1774148267
+03-21 22:57:47.293: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:57:47.344: GetNTP err=11 (11=NETERR_NONE)
+03-21 22:57:47.395: GetNetworkTime()
+03-21 22:57:47.395: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 22:57:47.452: CreateUdpPcb() pcb = 0x20010a2c
+03-21 22:57:47.452: NTP: EvtStart()
+03-21 22:57:47.503: DNSLooup(): waiting for callback
+03-21 22:57:47.503: NTP: EvtDNSResult dnserr=0
+03-21 22:57:47.503: EvtDNSResult(): IP Addr = 23.186.168.129
+03-21 22:57:47.503: Sending NTP Request Attempt: #1
+03-21 22:57:47.553: NTP: EvtUDPReceived len=48 port=123
+03-21 22:57:47.554: NTP: Valid response: mode=0x04 stratum=2
+03-21 22:57:47.605: NTP: unix epoch = 1774148267
+03-21 22:57:47.605: NETPUMP: end op=1 label=NTP taskid=0
+03-21 22:57:47.605: GetNTP err=11 (11=NETERR_NONE)
+03-21 23:02:30.387: [u2] init
+03-21 23:02:30.438: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-21 23:02:30.438: [u2] ip65 debug: U2_IP65_CHECKPOINT=0 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-21 23:02:30.439: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 23:02:30.439: Firmware build: unknown  (0 Unix s)
+03-21 23:02:30.439: CPU Clock Speed =150MHz
+03-21 23:02:30.439: clk_peri =150MHz
+03-21 23:02:30.440: SPI Speed = 75MHz
+03-21 23:02:30.440: WIFI Supported = Yes
+03-21 23:02:30.440: Total heap = 3928
+03-21 23:02:30.440: Free heap  = 2816
+03-21 23:02:32.189: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 23:02:32.391: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 23:02:32.392: #     #                          #######
+03-21 23:02:32.442: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 23:02:32.442: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 23:02:32.442: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 23:02:32.443: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 23:02:32.443: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 23:02:32.443: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 23:02:32.443: Main Menu
+03-21 23:02:32.443: =========
+
+03-21 23:02:32.443: 1) Device Information
+03-21 23:02:32.443: 2) Upload ProDOS Image file to MegaFlash
+03-21 23:02:32.492: 3) Download ProDOS Image file from MegaFlash
+03-21 23:02:32.492: 4) Erase Flash Content
+
+03-21 23:02:32.492: Please Select:[u2] init
+03-21 23:02:43.660: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-21 23:02:43.660: [u2] ip65 debug: U2_IP65_CHECKPOINT=0 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-21 23:02:43.710: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 23:02:43.711: Firmware build: unknown  (0 Unix s)
+03-21 23:02:43.711: CPU Clock Speed =150MHz
+03-21 23:02:43.711: clk_peri =150MHz
+03-21 23:02:43.711: SPI Speed = 75MHz
+03-21 23:02:43.711: WIFI Supported = Yes
+03-21 23:02:43.711: Total heap = 3928
+03-21 23:02:43.711: Free heap  = 2816
+03-21 23:02:43.711: GetNetworkTime()
+03-21 23:02:43.711: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 23:02:44.032: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 23:02:44.240: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 23:02:44.315: API: 12.2
+03-21 23:02:44.315: Data: RaspberryPi.PicoW
+03-21 23:02:44.315: Compiler: 1.29.4
+03-21 23:02:44.315: ClmImport: 1.47.1
+03-21 23:02:44.365: Customization: v5 22/06/24
+03-21 23:02:44.366: Creation: 2022-06-24 06:55:08
+
+03-21 23:02:44.447: SSID=OIS-new
+
+03-21 23:02:44.447: Connecting to Wifi Attempt:#1
+03-21 23:02:44.497: connect status: 1
+03-21 23:02:47.451: connect status: 2
+03-21 23:02:49.224: connect status: 3
+03-21 23:02:49.275: link_status=3
+03-21 23:02:49.275: WIFI connected
+03-21 23:02:49.275: IP address: 192.168.0.238
+03-21 23:02:49.275: Gateway: 192.168.0.1
+03-21 23:02:49.275: Netmask: 255.255.255.0
+03-21 23:02:49.275: DNS Server: 192.168.0.1
+03-21 23:02:49.326: CreateUdpPcb() pcb = 0x20010a2c
+03-21 23:02:49.326: NTP: EvtStart()
+03-21 23:02:49.326: DNSLooup(): waiting for callback
+03-21 23:02:49.381: NTP: EvtDNSResult dnserr=0
+03-21 23:02:49.381: EvtDNSResult(): IP Addr = 23.186.168.128
+03-21 23:02:49.432: Sending NTP Request Attempt: #1
+03-21 23:02:49.482: NTP: EvtUDPReceived len=48 port=123
+03-21 23:02:49.483: NTP: Valid response: mode=0x04 stratum=2
+03-21 23:02:49.483: NTP: unix epoch = 1774148569
+03-21 23:02:49.483: NETPUMP: end op=1 label=NTP taskid=0
+03-21 23:02:49.534: GetNTP err=11 (11=NETERR_NONE)
+03-21 23:02:49.585: GetNetworkTime()
+03-21 23:02:49.585: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 23:02:49.641: CreateUdpPcb() pcb = 0x20010a2c
+03-21 23:02:49.641: NTP: EvtStart()
+03-21 23:02:49.692: DNSLooup(): waiting for callback
+03-21 23:02:49.692: NTP: EvtDNSResult dnserr=0
+03-21 23:02:49.692: EvtDNSResult(): IP Addr = 23.186.168.127
+03-21 23:02:49.692: Sending NTP Request Attempt: #1
+03-21 23:02:49.742: NTP: EvtUDPReceived len=48 port=123
+03-21 23:02:49.742: NTP: Valid response: mode=0x04 stratum=2
+03-21 23:02:49.793: NTP: unix epoch = 1774148569
+03-21 23:02:49.793: NETPUMP: end op=1 label=NTP taskid=0
+03-21 23:02:49.794: GetNTP err=11 (11=NETERR_NONE)
+03-21 23:19:27.785: NETPUMP: RequestAbortAll()
+03-21 23:28:46.447: NETPUMP: RequestAbortAll()
+03-21 23:28:50.713: NETPUMP: RequestAbortAll()
+03-21 23:28:54.436: NETPUMP: RequestAbortAll()
+03-21 23:28:54.436: NETPUMP: RequestAbortAll()
+03-21 23:28:56.113: NETPUMP: RequestAbortAll()
+03-21 23:28:57.727: NETPUMP: RequestAbortAll()
+03-21 23:28:59.835: NETPUMP: RequestAbortAll()
+03-21 23:30:01.632: [u2m] 14934 reset
+03-21 23:46:26.966: [u2] init
+03-21 23:46:26.966: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-21 23:46:27.017: [u2] ip65 debug: U2_IP65_CHECKPOINT=0 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-21 23:46:27.018: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 23:46:27.018: Firmware build: unknown  (0 Unix s)
+03-21 23:46:27.018: CPU Clock Speed =150MHz
+03-21 23:46:27.018: clk_peri =150MHz
+03-21 23:46:27.018: SPI Speed = 75MHz
+03-21 23:46:27.019: WIFI Supported = Yes
+03-21 23:46:27.019: Total heap = 3912
+03-21 23:46:27.019: Free heap  = 2800
+03-21 23:46:28.763: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 23:46:28.965: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-21 23:46:28.965: #     #                          #######
+03-21 23:46:29.015: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-21 23:46:29.015: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-21 23:46:29.016: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-21 23:46:29.016: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-21 23:46:29.016: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-21 23:46:29.016: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-21 23:46:29.016: Main Menu
+03-21 23:46:29.016: =========
+
+03-21 23:46:29.016: 1) Device Information
+03-21 23:46:29.017: 2) Upload ProDOS Image file to MegaFlash
+03-21 23:46:29.065: 3) Download ProDOS Image file from MegaFlash
+03-21 23:46:29.065: 4) Erase Flash Content
+
+03-21 23:46:29.066: Please Select:[u2] init
+03-21 23:46:35.550: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-21 23:46:35.550: [u2] ip65 debug: U2_IP65_CHECKPOINT=0 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-21 23:46:35.600: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-21 23:46:35.600: Firmware build: unknown  (0 Unix s)
+03-21 23:46:35.600: CPU Clock Speed =150MHz
+03-21 23:46:35.600: clk_peri =150MHz
+03-21 23:46:35.601: SPI Speed = 75MHz
+03-21 23:46:35.601: WIFI Supported = Yes
+03-21 23:46:35.601: Total heap = 3912
+03-21 23:46:35.601: Free heap  = 2800
+03-21 23:46:35.601: GetNetworkTime()
+03-21 23:46:35.601: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 23:46:35.922: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-21 23:46:36.129: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-21 23:46:36.204: API: 12.2
+03-21 23:46:36.205: Data: RaspberryPi.PicoW
+03-21 23:46:36.205: Compiler: 1.29.4
+03-21 23:46:36.205: ClmImport: 1.47.1
+03-21 23:46:36.255: Customization: v5 22/06/24
+03-21 23:46:36.255: Creation: 2022-06-24 06:55:08
+
+03-21 23:46:36.337: SSID=OIS-new
+
+03-21 23:46:36.337: Connecting to Wifi Attempt:#1
+03-21 23:46:36.387: connect status: 1
+03-21 23:46:39.309: connect status: 2
+03-21 23:46:41.146: connect status: 3
+03-21 23:46:41.147: link_status=3
+03-21 23:46:41.147: WIFI connected
+03-21 23:46:41.197: IP address: 192.168.0.238
+03-21 23:46:41.197: Gateway: 192.168.0.1
+03-21 23:46:41.197: Netmask: 255.255.255.0
+03-21 23:46:41.197: DNS Server: 192.168.0.1
+03-21 23:46:41.197: CreateUdpPcb() pcb = 0x20010a3c
+03-21 23:46:41.197: NTP: EvtStart()
+03-21 23:46:41.197: DNSLooup(): waiting for callback
+03-21 23:46:41.247: NTP: EvtDNSResult dnserr=0
+03-21 23:46:41.247: EvtDNSResult(): IP Addr = 74.6.168.73
+03-21 23:46:41.247: Sending NTP Request Attempt: #1
+03-21 23:46:41.297: NTP: EvtUDPReceived len=48 port=123
+03-21 23:46:41.297: NTP: Valid response: mode=0x04 stratum=2
+03-21 23:46:41.297: NTP: unix epoch = 1774151201
+03-21 23:46:41.298: NETPUMP: end op=1 label=NTP taskid=0
+03-21 23:46:41.348: GetNTP err=11 (11=NETERR_NONE)
+03-21 23:46:41.398: GetNetworkTime()
+03-21 23:46:41.398: NETPUMP: begin op=1 label=NTP taskid=0
+03-21 23:46:41.450: CreateUdpPcb() pcb = 0x20010a3c
+03-21 23:46:41.450: NTP: EvtStart()
+03-21 23:46:41.500: DNSLooup(): waiting for callback
+03-21 23:46:41.501: NTP: EvtDNSResult dnserr=0
+03-21 23:46:41.501: EvtDNSResult(): IP Addr = 45.77.126.122
+03-21 23:46:41.501: Sending NTP Request Attempt: #1
+03-21 23:46:41.551: NTP: EvtUDPReceived len=48 port=123
+03-21 23:46:41.551: NTP: Valid response: mode=0x04 stratum=2
+03-21 23:46:41.551: NTP: unix epoch = 1774151201
+03-21 23:46:41.551: NETPUMP: end op=1 label=NTP taskid=0
+03-21 23:46:41.601: GetNTP err=11 (11=NETERR_NONE)
+03-21 23:50:31.310: NETPUMP: RequestAbortAll()
+03-22 00:01:52.063: [u2] MACRAW RX socket 0 len=117
+03-22 00:01:52.666: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:52.666: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:53.269: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:53.269: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:57.870: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:57.921: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:58.174: [u2] MACRAW RX socket 0 len=63
+03-22 00:01:58.174: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:02.830: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:02.831: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:03.133: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:03.134: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:07.734: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:07.786: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:08.340: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:08.341: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:09.250: [u2] MACRAW RX socket 0 len=243
+03-22 00:02:12.645: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:12.645: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:13.248: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:13.248: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:17.848: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:17.899: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:18.152: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:18.203: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:22.759: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:22.759: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:23.062: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:23.062: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:27.663: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:27.714: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:28.317: [u2] MACRAW RX socket 0 len=62
+03-22 00:02:28.317: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:28.368: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:28.368: [u2] MACRAW RX socket 0 len=62
+03-22 00:02:28.368: [u2] MACRAW RX socket 0 len=62
+03-22 00:02:32.929: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:32.929: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:33.232: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:33.232: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:35.692: [u2] MACRAW RX socket 0 len=342
+03-22 00:02:37.833: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:37.884: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:38.136: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:38.187: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:38.440: [u2] MACRAW RX socket 0 len=60
+03-22 00:02:39.351: [u2] MACRAW RX socket 0 len=92
+03-22 00:02:41.195: [u2] MACRAW RX socket 0 len=92
+03-22 00:02:41.195: [u2] MACRAW RX socket 0 len=92
+03-22 00:02:42.744: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:42.795: [u2] MACRAW RX socket 0 len=63
+03-22 00:02:43.352: [u2] MACRAW RX socket 0 len=92
+03-22 00:02:43.352: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 00:02:43.402: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:43.402: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:44.914: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:44.915: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:44.965: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:44.965: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:44.965: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:44.966: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.536: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.537: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.587: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.587: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.588: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.588: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.808: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.808: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.858: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.858: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.858: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:45.859: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:47.678: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:47.728: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:48.287: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:48.287: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:52.893: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:52.894: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:53.196: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:53.247: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:54.415: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:54.511: [u2m] 14937 reset
+03-22 00:02:54.511: [u2m] 915832472 sock0 OPEN mr=0x44 port=0 ok
+03-22 00:02:54.561: [u2m] 916496503 net sock0 MACRAW rx len=117
+03-22 00:02:54.561: [u2m] 917097172 net sock0 MACRAW rx len=63
+03-22 00:02:54.561: [u2m] 917097443 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 917700328 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 917700564 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 922304148 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 922304399 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 922607227 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 922607465 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 927261049 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 927261295 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 927564130 net sock0 MACRAW rx len=63
+03-22 00:02:54.562: [u2m] 927564370 net sock0 MACRAW rx len=63
+03-22 00:02:54.611: [u2m] 932167938 net sock0 MACRAW rx len=63
+03-22 00:02:54.611: [u2m] 932168193 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 932771086 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 932771322 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 933674299 net sock0 MACRAW rx len=243
+03-22 00:02:54.612: [u2m] 937075378 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 937075631 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 937678531 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 937678773 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 942282344 net sock0 MACRAW rx len=63
+03-22 00:02:54.612: [u2m] 942282595 net sock0 MACRAW rx len=63
+03-22 00:02:54.613: [u2m] 942585435 net sock0 MACRAW rx len=63
+03-22 00:02:54.613: [u2m] 942585667 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 947189245 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 947189497 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 947492314 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 947492547 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 952096119 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 952146470 net sock0 MACRAW rx len=63
+03-22 00:02:54.662: [u2m] 952746941 net sock0 MACRAW rx len=62
+03-22 00:02:54.662: [u2m] 952747179 net sock0 MACRAW rx len=63
+03-22 00:02:54.663: [u2m] 952749829 net sock0 MACRAW rx len=63
+03-22 00:02:54.663: [u2m] 952752601 net sock0 MACRAW rx len=62
+03-22 00:02:54.663: [u2m] 952755376 net sock0 MACRAW rx len=62
+03-22 00:02:54.663: [u2m] 957359071 net sock0 MACRAW rx len=63
+03-22 00:02:54.663: [u2m] 957359321 net sock0 MACRAW rx len=63
+03-22 00:02:54.663: [u2m] 957662153 net sock0 MACRAW rx len=63
+03-22 00:02:54.712: [u2m] 957662388 net sock0 MACRAW rx len=63
+03-22 00:02:54.712: [u2m] 960116086 net sock0 MACRAW rx len=342
+03-22 00:02:54.712: [u2m] 962267091 net sock0 MACRAW rx len=63
+03-22 00:02:54.712: [u2m] 962267376 net sock0 MACRAW rx len=63
+03-22 00:02:54.712: [u2m] 962570201 net sock0 MACRAW rx len=63
+03-22 00:02:54.713: [u2m] 962570441 net sock0 MACRAW rx len=63
+03-22 00:02:54.713: [u2m] 962873263 net sock0 MACRAW rx len=60
+03-22 00:02:54.713: [u2m] 963773826 net sock0 MACRAW rx len=92
+03-22 00:02:54.713: [u2m] 965624597 net sock0 MACRAW rx len=92
+03-22 00:02:54.713: [u2m] 965624855 net sock0 MACRAW rx len=92
+03-22 00:02:54.713: [u2m] 967177956 net sock0 MACRAW rx len=63
+03-22 00:02:54.713: [u2m] 967178200 net sock0 MACRAW rx len=63
+03-22 00:02:54.762: [u2m] 967781094 net sock0 MACRAW rx len=92
+03-22 00:02:54.762: [u2m] 967781336 net sock0 MACRAW rx len=225
+03-22 00:02:54.763: [u2m] 967785360 net sock0 MACRAW rx len=63
+03-22 00:02:54.763: [u2m] 967789435 net sock0 MACRAW rx len=63
+03-22 00:02:54.763: [u2m] 969343974 net sock0 MACRAW rx len=60
+03-22 00:02:54.763: [u2m] 969345432 net sock0 MACRAW rx len=60
+03-22 00:02:54.763: [u2m] 969349481 net sock0 MACRAW rx len=60
+03-22 00:02:54.763: [u2m] 969353546 net sock0 MACRAW rx len=60
+03-22 00:02:54.764: [u2m] 969357623 net sock0 MACRAW rx len=60
+03-22 00:02:54.764: [u2m] 969361701 net sock0 MACRAW rx len=60
+03-22 00:02:54.764: [u2m] 969966039 net sock0 MACRAW rx len=60
+03-22 00:02:54.764: [u2m] 969967477 net sock0 MACRAW rx len=60
+03-22 00:02:54.764: [u2m] 969971527 net sock0 MACRAW rx len=60
+03-22 00:02:54.812: [u2m] 969975597 net sock0 MACRAW rx len=60
+03-22 00:02:54.812: [u2m] 969979675 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 969983757 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970238048 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970239496 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970243548 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970247613 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970251691 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 970255771 net sock0 MACRAW rx len=60
+03-22 00:02:54.813: [u2m] 972110374 net sock0 MACRAW rx len=63
+03-22 00:02:54.813: [u2m] 972111812 net sock0 MACRAW rx len=63
+03-22 00:02:54.813: [u2m] 972716125 net sock0 MACRAW rx len=63
+03-22 00:02:54.814: [u2m] 972717552 net sock0 MACRAW rx len=63
+03-22 00:02:54.814: [u2m] 977322527 net sock0 MACRAW rx len=63
+03-22 00:02:54.863: [u2m] 977323980 net sock0 MACRAW rx len=63
+03-22 00:02:54.863: [u2m] 977628231 net sock0 MACRAW rx len=63
+03-22 00:02:54.863: [u2m] 977629666 net sock0 MACRAW rx len=63
+03-22 00:02:54.863: [u2m] 978834107 net sock0 MACRAW rx len=60
+03-22 00:02:55.658: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:56.856: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:56.907: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:56.907: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.229: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:57.468: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 00:02:57.519: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 00:02:57.519: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.519: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.520: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.520: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.788: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.839: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.839: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:57.840: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:02:57.840: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:57.840: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:58.112: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.163: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.163: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.163: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.163: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:58.163: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:02:58.432: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.482: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:58.482: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.046: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.047: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.098: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.098: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.310: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.310: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:02:59.360: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:03:01.168: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:01.219: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:01.472: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 00:03:02.728: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:02.728: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:03.334: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:03.334: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:07.640: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:07.640: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:08.246: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:08.246: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:12.852: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:12.853: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:13.156: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:13.206: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:17.765: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:17.765: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:18.370: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:18.371: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:22.677: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:22.677: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:23.283: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:23.283: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:27.884: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:27.935: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:28.193: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:28.244: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:32.801: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:32.802: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:33.152: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:33.203: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:36.209: [u2] MACRAW RX socket 0 drop len=342 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.260: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.261: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.261: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.261: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.310: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:36.508: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:37.466: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:37.714: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:37.714: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:38.368: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:38.418: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:38.676: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:38.726: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:40.482: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:42.633: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:42.634: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:43.287: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:43.338: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:44.198: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 00:03:47.897: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:47.897: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:48.200: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:48.251: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:50.309: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:50.309: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:03:52.162: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:03:52.817: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:52.817: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:53.423: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:53.423: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:57.679: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:57.680: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:58.333: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:03:58.384: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:02.942: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:02.942: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:03.245: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:03.326: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:07.854: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:07.854: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:08.157: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:08.207: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:12.764: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:12.815: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:13.371: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:13.372: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:14.628: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 00:04:14.628: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 00:04:14.678: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 00:04:17.684: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:04:17.735: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:04:17.735: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:04:17.736: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:17.736: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:17.736: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:04:18.311: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:18.311: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:22.912: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:22.963: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:23.221: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:23.342: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:25.378: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:04:25.378: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:04:26.289: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:04:27.837: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:27.839: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:28.139: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:28.190: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:32.746: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:32.796: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:33.355: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:33.355: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:35.815: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 00:04:37.663: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:37.664: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:38.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:38.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:42.872: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:42.923: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:43.181: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:43.242: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:47.788: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:47.788: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:52.102: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:04:52.693: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:52.744: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:53.302: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:53.302: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:57.903: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:57.954: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:58.212: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:04:58.262: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:01.327: [u2] MACRAW RX socket 0 drop len=812 (no room)
+03-22 00:05:02.822: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:02.823: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:03.126: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:03.177: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:07.735: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:07.735: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:08.389: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:08.440: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:10.496: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:05:10.497: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:05:10.547: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:05:12.657: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:12.657: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:13.263: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:13.263: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:18.168: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:18.169: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:22.776: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:22.776: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:23.430: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:23.480: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:27.738: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:27.738: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:28.344: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:28.344: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:29.558: [u2] MACRAW RX socket 0 drop len=776 (no room)
+03-22 00:05:29.909: [u2] MACRAW RX socket 0 drop len=892 (no room)
+03-22 00:05:32.954: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:32.955: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:33.257: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:33.308: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:37.864: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:37.915: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:38.168: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:38.218: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:38.476: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:05:38.527: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:05:42.784: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:42.785: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:43.391: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:47.689: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:47.740: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:48.298: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:48.299: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:52.309: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:05:52.906: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:52.907: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:53.210: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:53.260: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:57.819: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:57.819: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:58.122: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:05:58.173: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:02.729: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:02.779: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:03.336: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:03.337: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:04.593: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:06:04.594: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:06:06.446: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:06:06.496: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:06:06.497: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:06:06.497: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:06:07.663: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:07.663: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:08.268: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:08.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:08.874: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:06:08.875: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:06:08.926: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 00:06:08.926: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 00:06:12.889: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:12.890: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:13.192: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:13.243: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:18.402: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:18.402: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:22.708: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:22.709: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:23.314: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:23.314: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:26.365: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 00:06:28.219: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:28.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:32.825: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:32.876: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:33.134: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:33.134: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:37.736: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:37.787: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:38.396: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:38.396: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:40.202: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:06:42.655: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:42.655: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:43.310: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:43.310: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:47.912: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:47.965: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:48.221: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:48.271: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:52.183: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:06:52.831: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:52.832: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:53.437: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:53.438: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:57.744: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:57.744: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:58.349: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:06:58.350: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:00.505: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:07:00.506: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:07:00.557: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:07:02.966: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:02.966: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:03.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:03.320: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:07.878: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:07.878: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:08.181: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:08.232: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:10.343: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:07:12.787: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:12.839: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:13.398: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:13.398: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:17.704: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:17.705: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:18.310: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:18.310: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:22.913: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:22.964: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:23.268: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:23.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:27.829: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:27.829: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:28.133: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:28.184: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:32.741: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:32.742: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:33.347: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:33.348: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:37.953: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:37.954: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:38.256: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:38.308: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:41.968: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:07:42.863: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:42.914: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:43.172: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:43.223: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:46.575: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:46.626: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:46.626: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:46.627: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:46.627: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:46.627: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:47.740: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:47.741: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:48.346: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:48.346: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:48.396: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.398: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.398: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.398: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.399: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.670: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.721: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:48.974: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:49.025: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:49.025: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:49.026: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:49.026: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:51.146: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 00:07:51.147: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 00:07:52.057: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:07:52.654: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:52.655: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:53.259: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:53.260: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:53.310: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 00:07:54.169: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:07:54.170: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:07:57.888: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:57.889: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:58.182: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:07:58.182: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:02.783: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:02.834: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:03.092: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:03.142: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:07.700: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:07.701: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:08.306: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:08.307: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:12.613: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:12.614: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:13.267: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:13.318: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:17.821: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:17.872: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:18.130: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:18.130: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:23.387: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:23.388: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:24.889: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:08:24.990: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:08:26.151: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:08:27.700: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:27.700: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:28.306: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:28.306: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:32.912: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:32.913: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:33.215: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:37.817: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:37.867: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:38.125: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:38.126: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:42.733: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:42.734: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:43.339: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:43.340: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:44.895: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:08:44.896: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:08:44.946: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:08:47.656: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:47.656: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:52.863: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:52.864: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:53.166: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:53.217: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:57.775: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:57.775: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:58.381: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:08:58.381: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:02.688: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:02.688: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:03.294: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:03.294: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:07.900: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:07.901: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:08.204: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:08.255: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:12.214: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:09:12.814: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:12.815: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:13.165: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:13.216: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:18.377: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:18.378: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:22.684: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:22.684: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:23.289: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:23.290: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:27.896: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:27.897: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:28.199: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:28.250: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:32.806: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:32.856: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:33.114: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:33.115: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:35.571: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:09:35.571: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:09:35.621: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:09:35.879: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 00:09:37.732: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:37.733: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:38.338: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:38.339: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:42.645: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:42.646: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:43.251: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:43.251: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:46.366: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:09:47.859: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:47.860: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:48.162: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:48.214: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:52.177: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 00:09:52.769: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:52.820: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:53.379: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:53.380: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:57.686: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:57.686: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:58.292: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:09:58.292: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:02.898: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:02.899: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:03.202: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:03.253: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:07.811: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:07.811: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:08.113: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:08.164: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:08.470: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 00:10:12.720: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:10:12.771: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 00:12:10.772: [u2] init
+03-22 00:12:10.773: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-22 00:12:10.823: [u2] ip65 debug: U2_IP65_CHECKPOINT=5 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-22 00:12:10.823: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-22 00:12:10.824: Firmware build: unknown  (0 Unix s)
+03-22 00:12:10.824: CPU Clock Speed =150MHz
+03-22 00:12:10.824: clk_peri =150MHz
+03-22 00:12:10.824: SPI Speed = 75MHz
+03-22 00:12:10.824: WIFI Supported = Yes
+03-22 00:12:10.824: Total heap = 3912
+03-22 00:12:10.824: Free heap  = 2800
+03-22 00:12:12.569: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-22 00:12:12.771: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+
+
+03-22 00:12:12.771: #     #                          #######
+03-22 00:12:12.822: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-22 00:12:12.822: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-22 00:12:12.822: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-22 00:12:12.823: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-22 00:12:12.823: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-22 00:12:12.823: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-22 00:12:12.823: Main Menu
+03-22 00:12:12.824: =========
+
+03-22 00:12:12.824: 1) Device Information
+03-22 00:12:12.824: 2) Upload ProDOS Image file to MegaFlash
+03-22 00:12:12.872: 3) Download ProDOS Image file from MegaFlash
+03-22 00:12:12.872: 4) Erase Flash Content
+
+03-22 00:12:12.872: Please Select:[u2] init
+03-22 00:12:20.496: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-22 00:12:20.496: [u2] ip65 debug: U2_IP65_CHECKPOINT=5 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-22 00:12:20.546: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-22 00:12:20.546: Firmware build: unknown  (0 Unix s)
+03-22 00:12:20.546: CPU Clock Speed =150MHz
+03-22 00:12:20.546: clk_peri =150MHz
+03-22 00:12:20.546: SPI Speed = 75MHz
+03-22 00:12:20.547: WIFI Supported = Yes
+03-22 00:12:20.547: Total heap = 3912
+03-22 00:12:20.547: Free heap  = 2800
+03-22 00:12:20.547: GetNetworkTime()
+03-22 00:12:20.547: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 00:12:20.868: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-22 00:12:21.075: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-22 00:12:21.150: API: 12.2
+03-22 00:12:21.151: Data: RaspberryPi.PicoW
+03-22 00:12:21.151: Compiler: 1.29.4
+03-22 00:12:21.151: ClmImport: 1.47.1
+03-22 00:12:21.201: Customization: v5 22/06/24
+03-22 00:12:21.201: Creation: 2022-06-24 06:55:08
+
+03-22 00:12:21.283: SSID=OIS-new
+
+03-22 00:12:21.283: Connecting to Wifi Attempt:#1
+03-22 00:12:21.334: connect status: 1
+03-22 00:12:24.272: connect status: 2
+03-22 00:12:26.061: connect status: 3
+03-22 00:12:26.111: link_status=3
+03-22 00:12:26.112: WIFI connected
+03-22 00:12:26.112: IP address: 192.168.0.238
+03-22 00:12:26.162: Gateway: 192.168.0.1
+03-22 00:12:26.162: Netmask: 255.255.255.0
+03-22 00:12:26.162: DNS Server: 192.168.0.1
+03-22 00:12:26.162: CreateUdpPcb() pcb = 0x20010a3c
+03-22 00:12:26.162: NTP: EvtStart()
+03-22 00:12:26.162: DNSLooup(): waiting for callback
+03-22 00:12:26.212: NTP: EvtDNSResult dnserr=0
+03-22 00:12:26.212: EvtDNSResult(): IP Addr = 23.186.168.126
+03-22 00:12:26.212: Sending NTP Request Attempt: #1
+03-22 00:12:26.266: NTP: EvtUDPReceived len=48 port=123
+03-22 00:12:26.266: NTP: Valid response: mode=0x04 stratum=2
+03-22 00:12:26.316: NTP: unix epoch = 1774152746
+03-22 00:12:26.316: NETPUMP: end op=1 label=NTP taskid=0
+03-22 00:12:26.316: GetNTP err=11 (11=NETERR_NONE)
+03-22 00:12:26.366: GetNetworkTime()
+03-22 00:12:26.367: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 00:12:26.431: CreateUdpPcb() pcb = 0x20010a3c
+03-22 00:12:26.431: NTP: EvtStart()
+03-22 00:12:26.482: DNSLooup(): waiting for callback
+03-22 00:12:26.532: NTP: EvtDNSResult dnserr=0
+03-22 00:12:26.532: EvtDNSResult(): IP Addr = 162.159.200.123
+03-22 00:12:26.532: Sending NTP Request Attempt: #1
+03-22 00:12:26.532: NTP: EvtUDPReceived len=48 port=123
+03-22 00:12:26.532: NTP: Valid response: mode=0x04 stratum=3
+03-22 00:12:26.532: NTP: unix epoch = 1774152746
+03-22 00:12:26.532: NETPUMP: end op=1 label=NTP taskid=0
+03-22 00:12:26.533: GetNTP err=11 (11=NETERR_NONE)
+03-22 10:35:58.272: [u2] init
+03-22 10:35:58.272: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-22 10:35:58.273: [u2] ip65 debug: U2_IP65_CHECKPOINT=5 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-22 10:35:58.324: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-22 10:35:58.324: Firmware build: unknown  (0 Unix s)
+03-22 10:35:58.324: CPU Clock Speed =150MHz
+03-22 10:35:58.324: clk_peri =150MHz
+03-22 10:35:58.324: SPI Speed = 75MHz
+03-22 10:35:58.324: WIFI Supported = Yes
+03-22 10:35:58.324: Total heap = 3912
+03-22 10:35:58.324: Free heap  = 2800
+03-22 10:35:58.325: GetNetworkTime()
+03-22 10:35:58.325: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 10:35:58.643: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-22 10:35:58.849: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-22 10:35:58.925: API: 12.2
+03-22 10:35:58.925: Data: RaspberryPi.PicoW
+03-22 10:35:58.925: Compiler: 1.29.4
+03-22 10:35:58.926: ClmImport: 1.47.1
+03-22 10:35:58.976: Customization: v5 22/06/24
+03-22 10:35:58.976: Creation: 2022-06-24 06:55:08
+
+03-22 10:35:59.058: SSID=OIS-new
+
+03-22 10:35:59.058: Connecting to Wifi Attempt:#1
+03-22 10:35:59.109: connect status: 1
+03-22 10:36:02.015: connect status: 2
+03-22 10:36:03.804: connect status: 3
+03-22 10:36:03.854: link_status=3
+03-22 10:36:03.854: WIFI connected
+03-22 10:36:03.854: IP address: 192.168.0.238
+03-22 10:36:03.854: Gateway: 192.168.0.1
+03-22 10:36:03.854: Netmask: 255.255.255.0
+03-22 10:36:03.854: DNS Server: 192.168.0.1
+03-22 10:36:03.854: CreateUdpPcb() pcb = 0x20010a3c
+03-22 10:36:03.854: NTP: EvtStart()
+03-22 10:36:03.854: DNSLooup(): waiting for callback
+03-22 10:36:03.905: NTP: EvtDNSResult dnserr=0
+03-22 10:36:03.905: EvtDNSResult(): IP Addr = 207.58.172.126
+03-22 10:36:03.905: Sending NTP Request Attempt: #1
+03-22 10:36:03.905: NTP: EvtUDPReceived len=48 port=123
+03-22 10:36:03.905: NTP: Valid response: mode=0x04 stratum=3
+03-22 10:36:03.905: NTP: unix epoch = 1774190163
+03-22 10:36:03.905: NETPUMP: end op=1 label=NTP taskid=0
+03-22 10:36:03.956: GetNTP err=11 (11=NETERR_NONE)
+03-22 10:36:04.006: GetNetworkTime()
+03-22 10:36:04.006: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 10:36:04.060: CreateUdpPcb() pcb = 0x20010a3c
+03-22 10:36:04.060: NTP: EvtStart()
+03-22 10:36:04.111: DNSLooup(): waiting for callback
+03-22 10:36:04.111: NTP: EvtDNSResult dnserr=0
+03-22 10:36:04.111: EvtDNSResult(): IP Addr = 66.118.228.14
+03-22 10:36:04.111: Sending NTP Request Attempt: #1
+03-22 10:36:04.281: NTP: EvtUDPReceived len=48 port=123
+03-22 10:36:04.332: NTP: Valid response: mode=0x04 stratum=2
+03-22 10:36:04.332: NTP: unix epoch = 1774190164
+03-22 10:36:04.332: NETPUMP: end op=1 label=NTP taskid=0
+03-22 10:36:04.332: GetNTP err=11 (11=NETERR_NONE)
+03-22 12:01:34.277: [u2m] 14932 reset
+03-22 12:01:34.277: [u2m] 841041154 sock0 OPEN mr=0x44 port=0 ok
+03-22 12:01:34.328: [u2] ck=5
+
+03-22 12:01:34.328: *** PANIC ***
+
+03-22 12:01:34.328: async_context_poll context check failed (IRQ or wrong core)
+
+03-22 12:01:34.617: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:34.667: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:38.925: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:38.925: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:39.528: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:39.528: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:44.128: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:44.179: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:44.432: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:44.482: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:49.039: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:49.039: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:49.342: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:49.342: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:52.154: [u2] MACRAW RX socket 0 len=117
+03-22 12:01:53.943: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:53.993: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:54.598: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:54.598: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:57.353: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:57.353: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:58.903: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:58.953: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:59.510: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:59.510: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:59.562: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:59.562: [u2] MACRAW RX socket 0 len=92
+03-22 12:01:59.562: [u2] MACRAW RX socket 0 len=63
+03-22 12:01:59.562: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:01.325: [u2] MACRAW RX socket 0 len=92
+03-22 12:02:01.325: [u2] MACRAW RX socket 0 len=92
+03-22 12:02:01.375: [u2] MACRAW RX socket 0 len=225
+03-22 12:02:01.375: [u2] MACRAW RX socket 0 len=225
+03-22 12:02:04.084: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:04.084: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:04.435: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:04.435: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:09.037: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:09.087: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:09.644: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:09.644: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:13.948: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:13.949: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:14.552: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:14.552: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:19.153: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:19.203: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:19.456: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:19.456: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:21.310: [u2] MACRAW RX socket 0 len=62
+03-22 12:02:24.063: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:24.063: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:24.366: [u2] MACRAW RX socket 0 len=63
+03-22 12:02:24.366: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:28.967: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:29.019: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:29.627: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:29.627: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:33.934: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:33.934: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:34.540: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:34.540: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:36.345: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:02:36.345: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:02:39.152: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:39.153: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:39.455: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:39.505: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:40.685: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:02:44.062: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:44.115: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:44.672: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:44.673: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:48.978: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:48.979: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:49.584: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:49.585: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:52.044: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:02:54.193: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:54.193: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:54.495: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:54.545: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:59.101: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:59.155: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:59.409: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:02:59.410: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:04.017: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:04.017: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:04.623: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:04.623: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:08.929: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:08.930: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:09.535: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:09.536: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:11.691: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:03:11.691: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:03:14.207: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:14.207: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:14.453: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:14.454: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:19.060: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:19.060: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:19.362: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:19.413: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:23.969: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:24.020: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:24.578: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:24.578: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:26.734: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:03:26.734: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:03:27.692: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:03:27.996: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:03:28.891: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:28.941: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:29.499: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:29.499: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:34.106: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:34.106: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:34.409: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:34.459: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:39.015: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:39.066: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:39.674: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:39.674: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:43.939: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:44.578: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:44.629: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:48.546: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:03:49.201: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:49.488: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:49.539: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:51.954: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:03:54.095: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:54.146: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:54.404: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:54.454: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:58.363: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:03:58.364: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:03:58.414: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:03:58.414: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:03:58.414: [u2] MACRAW RX socket 0 drop len=342 (no room)
+03-22 12:03:58.980: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:58.981: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:59.635: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:03:59.686: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:03.944: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:03.944: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:04.550: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:04.550: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:07.010: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:08.208: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:04:09.159: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:09.160: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:09.462: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:09.512: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:12.222: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.222: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.272: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.272: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.272: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.272: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.844: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.844: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.895: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.895: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.895: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:12.896: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.504: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.505: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.556: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.556: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.556: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:13.556: [u2] MACRAW RX socket
+03-22 12:04:14.038:                      [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:14.038: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:14.692: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:14.742: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:18.950: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:18.951: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:19.604: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:19.655: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:23.263: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:24.214: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:24.215: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:24.517: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:24.567: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:24.568: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:25.433: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:26.328: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:26.378: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:04:26.378: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:04:26.642: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:04:26.642: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:04:27.600: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:28.207: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:29.101: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:29.101: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:29.403: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:29.454: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:30.012: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:30.013: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:34.019: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:34.019: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:34.624: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:34.625: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:35.583: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:38.933: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:38.933: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:39.538: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:39.539: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:42.645: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:42.645: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:44.147: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:44.198: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:44.455: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:44.456: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:49.063: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:49.063: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:49.367: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:52.179: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:04:53.968: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:54.019: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:54.628: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:54.629: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:58.586: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.586: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.636: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.636: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.636: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.636: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.636: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:04:58.910: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:04:58.961: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:58.961: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:59.522: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:04:59.522: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:03.836: [u2] MACRAW RX socket 0 drop len=812 (no room)
+03-22 12:05:04.130: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:04.130: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:04.433: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:04.483: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:09.039: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:09.090: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:09.648: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:09.648: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:13.954: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:13.955: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:14.561: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:14.561: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:19.162: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:19.213: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:19.471: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:19.522: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:24.079: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:24.079: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:24.383: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:24.433: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:29.041: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:29.042: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:29.647: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:29.648: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:31.148: [u2] MACRAW RX socket 0 drop len=779 (no room)
+03-22 12:05:33.956: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:33.956: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:34.562: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:34.562: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:34.612: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:05:34.612: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:05:34.612: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:05:34.612: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:05:39.483: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:39.533: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:43.791: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 12:05:43.791: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:43.842: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:44.071: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:44.072: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:44.677: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:44.677: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:45.635: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:05:48.985: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:48.986: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:49.591: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:49.591: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:50.853: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:05:52.051: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:05:54.229: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:54.230: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:54.280: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:05:54.280: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:05:54.515: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:54.515: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:54.565: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:05:54.824: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:56.373: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:56.424: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:57.880: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:57.931: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:58.839: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:58.839: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:58.890: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:58.890: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:59.152: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:59.153: [u2] MACRAW RX socket 0 drop len=110 (no room)
+03-22 12:05:59.203: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:59.412: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:59.413: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:05:59.513: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:05:59.513: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:00.026: [u2] MACRAW RX socket 0 drop len=110 (no room)
+03-22 12:06:00.076: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.077: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.128: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.355: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:00.356: [u2] MACRAW RX socket 0 drop len=342 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.407: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.408: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.408: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.457: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:00.956: [u2] MACRAW RX socket 0 drop len=110 (no room)
+03-22 12:06:00.956: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:01.007: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:01.008: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:01.292: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:01.595: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:01.595: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:01.899: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:04.054: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:04.054: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:04.660: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:04.660: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:08.966: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:08.967: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:09.572: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:09.572: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:11.728: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:11.728: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:06:14.484: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:14.485: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:16.945: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:06:19.093: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:19.093: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:19.699: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:19.699: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:24.005: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:24.006: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:24.611: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:24.611: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:28.918: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:28.918: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:29.523: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:29.524: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:34.125: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:34.176: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:34.482: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:34.532: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:36.892: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:06:36.892: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:36.942: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:36.943: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:37.206: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:37.206: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:39.059: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:39.110: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:39.668: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:39.668: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:43.071: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:43.121: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:43.122: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:43.122: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:06:43.988: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:43.988: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:44.595: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:44.898: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:06:49.197: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:49.247: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:49.500: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:49.551: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:51.966: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:06:54.107: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:54.158: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:54.416: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:54.466: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:59.074: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:59.075: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:59.630: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:06:59.630: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:03.033: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:03.084: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:03.084: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:03.084: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:03.085: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:03.955: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:03.955: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:04.560: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:04.561: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:05.166: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:05.167: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:05.217: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:05.218: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:07.030: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:07.030: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:07.083: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:07:07.083: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:07:09.145: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:09.145: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:10.101: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:10.101: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:10.151: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:11.608: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:11.659: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:11.659: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:13.171: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:07:13.171: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:07:13.222: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:13.222: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:13.222: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:13.222: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:07:14.093: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:14.093: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:14.699: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:14.699: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:14.750: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 12:07:14.750: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 12:07:19.014: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:19.014: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:19.619: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:19.620: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:24.222: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:24.273: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:24.530: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:24.531: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:29.138: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:29.139: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:29.441: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:29.492: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:34.048: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:34.099: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:34.352: [u2] MACRAW RX socket 0 drop len=42 (no room)
+03-22 12:07:34.655: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:34.707: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:38.965: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:38.965: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:39.571: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:39.571: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:44.172: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:44.223: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:44.481: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:44.531: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:44.532: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:44.532: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:46.047: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:46.047: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:47.548: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:47.599: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:07:49.109: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:49.109: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:49.715: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:49.715: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:51.871: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:07:54.023: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:54.023: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:54.628: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:54.629: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:59.231: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:59.288: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:59.539: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:07:59.589: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:04.147: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:04.148: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:04.451: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:04.501: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:09.060: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:09.060: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:09.666: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:09.666: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:13.676: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:08:13.974: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:13.974: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:14.579: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:14.580: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:19.182: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:19.232: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:19.538: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:19.589: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:20.148: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:08:20.148: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:08:24.105: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:24.105: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:24.407: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:24.458: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:27.513: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:08:27.563: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:08:27.564: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:08:27.564: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:08:29.031: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:29.031: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:29.636: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:29.637: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:33.943: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:33.943: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:34.549: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:34.549: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:39.151: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:39.201: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:39.507: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:39.558: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:44.115: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:44.167: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:44.723: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:44.723: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:49.030: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:49.030: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:49.636: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:49.636: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:52.097: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:08:54.244: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:54.245: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:54.547: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:54.598: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:59.154: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:59.205: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:59.458: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:08:59.508: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:04.066: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:04.117: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:04.674: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:04.675: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:08.989: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:09.581: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:09.631: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:14.189: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:14.190: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:14.493: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:14.543: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:19.102: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:19.102: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:19.708: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:19.708: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:24.014: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:24.014: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:24.669: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:24.669: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:27.426: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:27.427: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:27.477: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.036: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.036: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.086: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.087: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.087: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.087: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.958: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:28.959: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.009: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.009: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.009: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.272: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:29.343: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:29.594: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:29.645: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:29.944: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.945: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.945: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.995: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:29.995: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:31.706: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:09:31.706: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:09:32.317: [u2] MACRAW RX socket 0 drop len=240 (no room)
+03-22 12:09:34.164: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:34.164: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:34.467: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:34.517: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:39.076: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:39.076: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:39.682: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:39.682: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:43.988: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:43.989: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:44.643: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:44.643: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:49.246: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:49.296: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:49.506: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:49.507: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:52.015: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:09:54.115: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:54.115: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:54.466: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:54.517: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:54.775: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:09:55.382: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:09:59.080: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:59.081: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:59.686: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:09:59.686: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:03.697: [u2] MACRAW RX socket 0 drop len=812 (no room)
+03-22 12:10:03.944: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:03.945: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:04.600: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:04.600: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:05.207: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:10:09.219: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:09.506: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:09.557: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:10.725: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:10:14.118: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:14.119: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:14.724: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:14.724: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:19.031: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:19.031: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:19.637: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:19.637: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:24.240: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:24.290: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:29.150: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:29.150: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:29.453: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:29.503: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:30.720: [u2] MACRAW RX socket 0 drop len=776 (no room)
+03-22 12:10:31.311: [u2] MACRAW RX socket 0 drop len=779 (no room)
+03-22 12:10:34.066: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:34.066: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:34.720: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:34.770: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:36.526: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:10:38.980: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:38.980: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:44.237: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:44.538: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:44.539: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:49.140: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:49.191: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:49.750: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:49.751: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:51.907: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:10:54.059: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:54.059: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:54.665: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:54.665: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:59.267: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:59.319: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:59.576: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:10:59.576: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:04.179: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:04.230: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:04.487: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:04.538: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:09.096: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:09.096: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:09.702: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:09.702: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:14.008: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:14.009: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:14.614: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:14.614: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:19.216: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:19.268: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:19.572: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:19.624: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:19.832: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:11:19.832: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:11:21.989: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:24.140: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:24.141: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:24.443: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:24.495: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:29.051: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:29.101: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:29.658: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:29.658: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:33.965: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:33.965: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:34.571: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:34.571: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:34.922: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:11:34.973: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:11:39.233: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:39.233: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:39.488: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:42.917: [u2] MACRAW RX socket 0 drop len=243 (no room)
+03-22 12:11:44.138: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:44.189: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:44.749: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:44.749: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:49.055: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:49.055: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:49.661: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:49.661: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:52.122: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:11:54.269: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:54.270: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:54.572: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:54.624: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:58.382: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.382: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.433: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.433: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.434: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.434: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.434: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.434: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:11:58.434: [u2] MACRAW RX socket 0 drop len=342 (no room)
+03-22 12:11:59.167: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:59.167: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:59.470: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:11:59.521: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:01.025: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:01.075: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:02.884: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:02.884: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:02.935: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:02.935: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:02.935: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:04.103: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:04.103: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:04.708: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:04.709: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:05.012: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.064: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.064: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.064: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.326: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.378: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.378: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.378: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:05.378: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:06.246: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:06.246: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:06.296: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:12:08.106: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:12:08.157: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:12:09.012: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:09.013: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:09.618: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:09.618: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:10.225: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:11.183: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:12.084: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:13.277: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:14.232: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:14.233: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:14.534: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:14.584: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:18.853: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:19.141: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:19.292: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:19.751: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:19.751: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:23.154: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:12:24.059: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:24.059: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:24.665: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:24.665: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:29.266: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:29.317: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:29.575: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:29.626: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:34.178: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:34.229: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:34.487: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:34.537: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:39.096: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:39.096: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:39.702: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:39.702: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:44.008: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:44.009: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:44.709: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:44.710: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:49.266: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:49.317: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:49.575: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:49.625: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:52.036: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:12:54.185: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:54.185: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:54.790: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:54.791: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:59.097: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:59.097: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:59.703: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:59.703: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:12:59.760: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:13:04.310: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:04.361: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:04.619: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:04.619: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:09.221: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:09.272: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:09.530: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:09.581: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:14.138: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:14.138: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:14.744: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:14.744: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:19.050: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:19.051: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:19.656: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:19.656: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:24.258: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:24.309: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:24.567: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:24.617: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:29.175: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:29.175: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:29.477: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:29.528: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:34.085: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:34.136: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:34.740: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:34.792: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:39.000: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:39.000: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:39.654: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:39.704: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:44.208: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:44.259: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:44.565: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:44.615: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:49.172: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:49.222: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:49.779: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:49.779: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:51.936: [u2] MACRAW RX socket 0 drop len=117 (no room)
+03-22 12:13:54.088: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:54.089: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:54.694: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:54.694: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:59.295: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:59.346: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:59.604: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:13:59.654: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:04.213: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:04.213: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:04.516: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:04.566: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:09.725: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:09.725: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:10.029: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.034: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.034: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.084: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.084: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.084: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.085: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.085: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:14.085: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:14.664: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.664: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.714: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.714: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.714: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.714: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.714: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:14.715: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:14.944: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.944: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.995: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.995: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.995: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:14.995: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:19.267: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:19.267: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:19.569: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:19.620: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:24.176: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:24.227: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:24.785: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:24.785: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:29.091: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:29.092: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:29.697: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:29.697: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:32.157: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.305: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:34.306: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:34.356: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.356: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.619: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.620: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.670: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:34.670: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:34.670: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:36.435: [u2] MACRAW RX socket 0 drop len=92 (no room)
+03-22 12:14:36.536: [u2] MACRAW RX socket 0 drop len=225 (no room)
+03-22 12:14:39.242: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:39.242: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:39.545: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:39.595: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:42.613: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:14:44.155: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:44.156: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:44.761: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:44.762: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:47.517: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:14:47.518: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:14:47.568: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:14:47.568: [u2] MACRAW RX socket 0 drop len=62 (no room)
+03-22 12:14:49.078: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:49.128: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:49.688: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:49.688: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:54.294: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:54.294: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:54.597: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:54.648: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:59.204: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:59.255: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:59.512: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:59.512: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:14:59.816: [u2] MACRAW RX socket 0 drop len=60 (no room)
+03-22 12:15:04.120: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:04.121: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:04.726: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:04.726: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:09.033: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:09.033: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:09.638: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:09.639: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:14.245: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:14.246: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:14.548: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:15:14.598: [u2] MACRAW RX socket 0 drop len=63 (no room)
+03-22 12:25:41.214: [u2] init
+03-22 12:25:41.216: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-22 12:25:41.265: [u2] ip65 debug: U2_IP65_CHECKPOINT=5 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-22 12:25:41.265: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-22 12:25:41.266: Firmware build: unknown  (0 Unix s)
+03-22 12:25:41.266: CPU Clock Speed =150MHz
+03-22 12:25:41.266: clk_peri =150MHz
+03-22 12:25:41.266: SPI Speed = 75MHz
+03-22 12:25:41.266: WIFI Supported = Yes
+03-22 12:25:41.266: Total heap = 3896
+03-22 12:25:41.266: Free heap  = 2784
+03-22 12:25:43.031: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-22 12:25:43.233: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-22 12:25:43.233: [u2m] 20233 reset
+
+
+03-22 12:25:43.284: #     #                          #######
+03-22 12:25:43.284: ##   ##  ######   ####     ##    #        #         ##     ####   #    #
+03-22 12:25:43.284: # # # #  #       #    #   #  #   #        #        #  #   #       #    #
+03-22 12:25:43.284: #  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+03-22 12:25:43.284: #     #  #       #  ###  ######  #        #       ######       #  #    #
+03-22 12:25:43.284: #     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+03-22 12:25:43.285: #     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+03-22 12:25:43.285: Main Menu
+03-22 12:25:43.285: =========
+
+03-22 12:25:43.285: 1) Device Information
+03-22 12:25:43.285: 2) Upload ProDOS Image file to MegaFlash
+03-22 12:25:43.334: 3) Download ProDOS Image file from MegaFlash
+03-22 12:25:43.334: 4) Erase Flash Content
+
+03-22 12:25:43.334: Please Select:[u2] init
+03-22 12:30:20.296: [u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=256 flush<=128/call
+03-22 12:30:20.297: [u2] ip65 debug: U2_IP65_CHECKPOINT=5 (0=off; 1..5=bisect; cmake -DU2_IP65_CHECKPOINT=n)
+
+03-22 12:30:20.347: Megaflash DEBUG Firmware Version 32 (V1.2.0-eo)
+03-22 12:30:20.347: Firmware build: unknown  (0 Unix s)
+03-22 12:30:20.347: CPU Clock Speed =150MHz
+03-22 12:30:20.347: clk_peri =150MHz
+03-22 12:30:20.347: SPI Speed = 75MHz
+03-22 12:30:20.347: WIFI Supported = Yes
+03-22 12:30:20.348: Total heap = 3896
+03-22 12:30:20.348: Free heap  = 2784
+03-22 12:30:20.348: [u2m] 14934 reset
+03-22 12:30:20.348: GetNetworkTime()
+03-22 12:30:20.348: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 12:30:20.669: Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+03-22 12:30:20.876: cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+03-22 12:30:20.952: API: 12.2
+03-22 12:30:20.952: Data: RaspberryPi.PicoW
+03-22 12:30:20.952: Compiler: 1.29.4
+03-22 12:30:20.952: ClmImport: 1.47.1
+03-22 12:30:21.003: Customization: v5 22/06/24
+03-22 12:30:21.003: Creation: 2022-06-24 06:55:08
+
+03-22 12:30:21.084: SSID=OIS-new
+
+03-22 12:30:21.084: Connecting to Wifi Attempt:#1
+03-22 12:30:21.135: connect status: 1
+03-22 12:30:25.190: connect status: 2
+03-22 12:30:26.403: connect status: 3
+03-22 12:30:26.403: link_status=3
+03-22 12:30:26.403: WIFI connected
+03-22 12:30:26.403: IP address: 192.168.0.238
+03-22 12:30:26.453: Gateway: 192.168.0.1
+03-22 12:30:26.453: Netmask: 255.255.255.0
+03-22 12:30:26.453: DNS Server: 192.168.0.1
+03-22 12:30:26.453: CreateUdpPcb() pcb = 0x20010a4c
+03-22 12:30:26.454: NTP: EvtStart()
+03-22 12:30:26.454: DNSLooup(): waiting for callback
+03-22 12:30:26.503: NTP: EvtDNSResult dnserr=0
+03-22 12:30:26.503: EvtDNSResult(): IP Addr = 23.111.186.186
+03-22 12:30:26.504: Sending NTP Request Attempt: #1
+03-22 12:30:26.554: NTP: EvtUDPReceived len=48 port=123
+03-22 12:30:26.554: NTP: Valid response: mode=0x04 stratum=2
+03-22 12:30:26.554: NTP: unix epoch = 1774197026
+03-22 12:30:26.554: NETPUMP: end op=1 label=NTP taskid=0
+03-22 12:30:26.604: GetNTP err=11 (11=NETERR_NONE)
+03-22 12:30:26.655: GetNetworkTime()
+03-22 12:30:26.655: NETPUMP: begin op=1 label=NTP taskid=0
+03-22 12:30:26.705: CreateUdpPcb() pcb = 0x20010a4c
+03-22 12:30:26.755: NTP: EvtStart()
+03-22 12:30:26.755: DNSLooup(): waiting for callback
+03-22 12:30:26.755: NTP: EvtDNSResult dnserr=0
+03-22 12:30:26.756: EvtDNSResult(): IP Addr = 198.23.133.146
+03-22 12:30:26.806: Sending NTP Request Attempt: #1
+03-22 12:30:26.856: NTP: EvtUDPReceived len=48 port=123
+03-22 12:30:26.856: NTP: Valid response: mode=0x04 stratum=3
+03-22 12:30:26.856: NTP: unix epoch = 1774197026
+03-22 12:30:26.857: NETPUMP: end op=1 label=NTP taskid=0
+03-22 12:30:26.857: GetNTP err=11 (11=NETERR_NONE)
+03-22 12:33:16.155: NETPUMP: RequestAbortAll()
+
+---------- 2026-03-22 12:47:31 -0400: Disconnected ----------
+

@@ -1009,7 +1009,7 @@ uint32_t tsReadJEDECID(const uint deviceNum) {
   disable_spi0();
   MUTEXUNLOCK();
 
-  return (rxbuffer[1]<<16)|(rxbuffer[2]<<8)|rxbuffer[3];
+  return (((uint32_t)rxbuffer[1]<<16)|((uint32_t)rxbuffer[2]<<8)|rxbuffer[3]) & 0xFFFFFFu;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -1117,9 +1117,14 @@ void InitSpi(){
 // vendor-specific (see SetFlashDriveStrength).
 //
 static uint32_t ChipIDToCapacity(const uint32_t id) {
-  const uint32_t type_cap = id & 0xffffu;
+  const uint32_t jedec24 = id & 0xFFFFFFu;
+  const uint32_t type_cap = jedec24 & 0xffffu;
+
+  // Alliance Memory 512 Mbit (e.g. AS25F3512MQ): JEDEC 20h 40h 20h -> 0x204020 (Thomas upstream)
+  if (jedec24 == 0x204020u) return 64;
+
   if (type_cap == 0x4021 || type_cap == 0x7021) return 128;  // 1 Gbit class
-  if (type_cap == 0x4020 || type_cap == 0x7020) return 64;   // 512 Mbit class
+  if (type_cap == 0x4020 || type_cap == 0x7020) return 64;   // 512 Mbit class (Winbond + same type/cap)
   if (type_cap == 0x7022) return 256;                        // 2 Gbit (DTR) class
   return 0;
 }

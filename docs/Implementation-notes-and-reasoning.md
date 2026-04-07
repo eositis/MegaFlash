@@ -956,7 +956,7 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **Why:** Drop-in SPI NOR parts from other vendors (e.g. Alliance) can use the same memory-type and capacity bytes as W25Q*JV but a different JEP106 manufacturer ID, and were incorrectly rejected at boot.
 
-**What we did:** `ChipIDToCapacity()` in `pico/flash.c` now compares **`id & 0xFFFF`** (memory type + capacity code) to the same supported pairs as before (`0x4020`/`0x7020` → 64 MB, `0x4021`/`0x7021` → 128 MB, `0x7022` → 256 MB).
+**What we did:** `ChipIDToCapacity()` in `pico/flash.c` now compares **`id & 0xFFFF`** (memory type + capacity code) to the same supported pairs as before (`0x4020`/`0x7020` → 64 MB, `0x4021`/`0x7021` → 128 MB, `0x7022` → 256 MB). **`tsReadJEDECID()`** returns **`id & 0xFFFFFF`** so only the 24-bit RDID is used. An explicit **`jedec24 == 0x204020`** branch documents **Alliance Memory** 512 Mbit (same class as W25Q512JV); that ID also matches the **`type_cap`** path.
 
 **What we did not do:** SFDP-based detection for unrelated ID layouts; guarding `SetFlashDriveStrength()` when SR3 layout differs — operators should verify Alliance/other datasheets match Winbond-style commands and status registers, or extend firmware if not.
 

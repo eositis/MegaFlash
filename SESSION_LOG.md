@@ -6,6 +6,8 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-04-07
 
+- **Alliance JEDEC `0x204020`:** **`pico/flash.c`** — **`tsReadJEDECID()`** masks to **24-bit** RDID and uses **`uint32_t`** shifts; **`ChipIDToCapacity()`** masks **`jedec24`**, explicit **`0x204020`** (Alliance 512 Mbit, Thomas), keeps **`type_cap`** Winbond-class matching. **`./pico/build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §16.
+
 - **FLASHVALID disk image:** Rebuilt using **`../a2speed`**-style **`make disk`** flow: **`-pro140`**, **`SYS_SRC=cpanel/prodos19.dsk`** for **PRODOS**/**BASIC.SYSTEM** (no padded 800K **`romdisk.po`**). Added **`tools/flash-validate/Makefile`**. Updated **`README.md`** + **`docs/Implementation-notes-and-reasoning.md`** §17/§18.
 - **FLASHVALID.po:** Default build output is **`tools/flash-validate/FLASHVALID.po`** (same **`.po`** convention as **`../a2speed/a2speed.po`**, not **`.dsk`**). Rebuilt; AppleCommander **`-i`** confirms **143360** bytes, ProDOS, **280** blocks.
 

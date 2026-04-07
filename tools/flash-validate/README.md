@@ -93,21 +93,30 @@ If all units pass, it reformats all writable units again and starts the next cyc
 - `FLASHSOAK.BAS` - source for the overnight test.
 - On disk image, `FLASHSOAK` (tokenized) and `FLASHSOAK.SRC` (text) are both included.
 
-## Bootable disk (`FLASHVALID.dsk`)
+## Bootable disk (`FLASHVALID.po`)
 
-Requires **Java** and [AppleCommander](https://applecommander.github.io/) (CLI jar). Default jar path: **`$HOME/Library/Application Support/AppleCommander/AppleCommander-ac-13.0.jar`** — override with **`AC_JAR`**.
+Requires **Java** and [AppleCommander](https://applecommander.github.io/) (CLI jar). The build follows the same pattern as **`../a2speed/Makefile`** `disk` target: create a **ProDOS 140K** image with **`-pro140`**, then add files with **`-p`**, **`-bas`**, **`-ptx`**.
 
-From the repo root (or run the script from any cwd; it resolves paths relative to the script):
+- Default jar: **`$HOME/Library/Application Support/AppleCommander/AppleCommander-ac.jar`** (same default name as a2speed). Override with **`AC_JAR`**.
+- On Apple Silicon, the script prefers **`/opt/homebrew/opt/openjdk/bin/java`** when present (avoids Intel **`java`** “Bad CPU type” issues), same as a2speed.
+
+From the repo root:
 
 ```bash
 ./tools/flash-validate/build-flashval-disk.sh
 ```
 
-Writes **`tools/flash-validate/FLASHVALID.dsk`**. **`OUT=`** and **`ROMDISK=`** override output path and romdisk image.
+Or:
+
+```bash
+cd tools/flash-validate && make disk
+```
+
+Writes **`tools/flash-validate/FLASHVALID.po`** (**143360 bytes**, same **`.po`** convention as **`../a2speed`**’s **`a2speed.po`**; ProDOS raw block order). **`OUT=`** overrides the output path. **`SYS_SRC=`** overrides the source image for **PRODOS** / **BASIC.SYSTEM** (default **`cpanel/prodos19.dsk`**).
 
 Contents:
 
-- **PRODOS** / **BASIC.SYSTEM** — copied raw from **`pico/romdisk.po`** (the same image embedded in firmware).
+- **PRODOS** / **BASIC.SYSTEM** — copied raw from **`cpanel/prodos19.dsk`** (valid 140K ProDOS 1.9 image shipped with the Control Panel build inputs).
 - **FLASHVAL** — tokenized Applesoft from **`FLASHVAL.DSK.BAS`** (screen-only test suite; run under BASIC.SYSTEM).
 - **FLASHSOAK** — tokenized Applesoft overnight stress validator.
 - **FLASHVAL.SRC** — text copy of **`FLASHVAL.BAS`** (full program including ProDOS baseline/compare); use for reference or manual entry; AppleCommander **`-bas`** on the full file is still unreliable.

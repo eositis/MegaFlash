@@ -4,10 +4,17 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-07
+
+- **FLASHVALID disk image:** Rebuilt using **`../a2speed`**-style **`make disk`** flow: **`-pro140`**, **`SYS_SRC=cpanel/prodos19.dsk`** for **PRODOS**/**BASIC.SYSTEM** (no padded 800K **`romdisk.po`**). Added **`tools/flash-validate/Makefile`**. Updated **`README.md`** + **`docs/Implementation-notes-and-reasoning.md`** §17/§18.
+- **FLASHVALID.po:** Default build output is **`tools/flash-validate/FLASHVALID.po`** (same **`.po`** convention as **`../a2speed/a2speed.po`**, not **`.dsk`**). Rebuilt; AppleCommander **`-i`** confirms **143360** bytes, ProDOS, **280** blocks.
+
+---
+
 ## 2026-04-06
 
 - **Overnight soak validator:** Added **`tools/flash-validate/FLASHSOAK.BAS`** to stress writable MegaFlash units (incl. RAM disk), with cycle loop: format, file create/append/delete/fill, whole-volume checksum, TFTP upload/download (`validationX.po` on `192.168.0.10`), checksum compare, CSV logging to `SOAK.CSV`, and auto-repeat on pass.
-- **Disk build integration:** Updated **`tools/flash-validate/build-flashval-disk.sh`** + docs so `FLASHVALID.dsk` now includes tokenized **`FLASHSOAK`** and text **`FLASHSOAK.SRC`**; rebuilt and verified directory contents with AppleCommander.
+- **Disk build integration:** Updated **`tools/flash-validate/build-flashval-disk.sh`** + docs so **`FLASHVALID.po`** includes tokenized **`FLASHSOAK`** and text **`FLASHSOAK.SRC`**; rebuilt and verified directory contents with AppleCommander.
 - **Reasoning/docs:** Extended **`docs/Implementation-notes-and-reasoning.md`** with §18 and summary-row update to capture why soak coverage was added and the exact command/data-buffer contract used for `CMD_TFTPRUN`/`CMD_TFTPSTATUS`.
 
 ---

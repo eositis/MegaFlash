@@ -20,3 +20,4 @@
 /kicad/**/*.bak
 
 **/*:Zone.Identifier
+.DS_Store

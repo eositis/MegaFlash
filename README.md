@@ -45,4 +45,13 @@ There are 3 software projects. There is not enough space in Apple ROM to store t
 `pico` Raspberry Pi Pico firmware\
 `common` Common header files used by all 3 projects
 
+## Sponsorship
+
+MegaFlash development for commercial sale has been partly sponsored by PCBway. Preparing products for commercial release is expensive, often requiring board respins to resolve manufacturing and logistics issues. PCBway production and delivery are fast and efficient, helping compress the go-to market timeline. Many thanks!
+
+<a href="https://www.pcbway.com">
+  <p align="center">
+  <img src="https://github.com/user-attachments/assets/6f23f2f4-bc93-4875-856d-8cdfab6f670b" alt="Alt Text" width="200">
+</a>
+
 

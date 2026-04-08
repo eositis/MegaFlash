@@ -47,9 +47,11 @@ There are 3 software projects. There is not enough space in Apple ROM to store t
 
 ## Sponsorship
 
-MegaFlash development for commercial sale has been partially sponsored by PCBway. Preparing products for commercial release is expensive, often requiring board respins to resolve manufacturing and logistics issues. PCBway production and delivery are fast and efficient, helping compress the go-to market timeline. Many thanks!
+MegaFlash development for commercial sale has been partly sponsored by PCBway. Preparing products for commercial release is expensive, often requiring board respins to resolve manufacturing and logistics issues. PCBway production and delivery are fast and efficient, helping compress the go-to market timeline. Many thanks!
 
-<p align="center">
-  <img src="[https://example.com](https://pcbwayfile.s3-us-west-2.amazonaws.com/project/21/05/05/0141152434522.jpg
-)" alt="PCBway logo">
-</p>
+<a href="https://www.pcbway.com">
+  <p align="center">
+  <img src="https://github.com/user-attachments/assets/6f23f2f4-bc93-4875-856d-8cdfab6f670b" alt="Alt Text" width="200">
+</a>
+
+

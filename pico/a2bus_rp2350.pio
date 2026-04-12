@@ -125,23 +125,18 @@ read_cycle:
   ;6502 is reading from us
   ;  
 read_cycle:    
-  ;For Megaflash, it is preferred to pull the output value from
-  ;rxfifo as late as possible to give CPU more time to process
-  ;the previous request. So, delay is added to each instruction.
-  ;But it causes problem when a 6502 read cycle also trigger 
-  ;a change of register values such as Slinky emulation and reading
-  ;of parameter/data buffers. The CPU should not update the value 
-  ;until PIO has pulled the output value of current cycle.
-  ;So, a flag IRQ 0 indicates the PIO is delaying the pull of output
-  ;value. CPU should not update the register values until the flag
-  ;is cleared.
+  ; IRQ 0 + delays: CPU must not overwrite rxf_putget until after mov osr,rxfifo[y]
+  ; (see busloop.c). Original [7]…[6] gave the CPU margin but pushed the first OUT
+  ; late in the slot cycle — 6502 may have already sampled the data bus (ip65 RTR XOR
+  ; fails on-bus while a later C dump looks correct). Tighter pre-FIFO delays present
+  ; the byte earlier; IRQ 0 still covers the CPU/FIFO ordering contract.
 
-  irq set 0      [7]            ;To indicate we are delaying the pull of output value
-  mov osr, pins  [7]            ;Read Apple Bus
-  out x,2        [7]            ;x=A1:A0
-  out y,2        [7]            ;y=A3:A2
-  nop            [7]            ;Additional delay
-  nop            [6]            ;Additional delay
+  irq set 0      [3]            ;To indicate we are delaying the pull of output value
+  mov osr, pins  [3]            ;Read Apple Bus
+  out x,2        [3]            ;x=A1:A0
+  out y,2        [3]            ;y=A3:A2
+  nop            [2]            ;Brief settle (address decode)
+  nop            [1]
 
   ;Read output value to osr  
   mov osr,rxfifo[y]    
@@ -151,7 +146,7 @@ byte_select:                    ;Max loop 4 times
   out pins, 8                   ;Send lowest byte out
   jmp x--,byte_select
 
-  ;Timing: Max 60 cycles or 400ns from nDEVSEL is activted
+  ;Timing: target ~same order as before byte_select; nDEVSEL window is finite
   mov pindirs,~null  side 0     ;Switch pindirs to output	
 
 cycle_end:

@@ -187,6 +187,13 @@ extern "C" void NetworkPump_LegacyDnsCallback(const char *hostname, const ip_add
 void NetworkPump::Init() {
   if (cyw43Inited) return;
 
+  /* Same as CUDPTask::InitCyw43: misc InitPicoLed() may have inited CYW43. */
+  if (cyw43_is_initialized(&cyw43_state)) {
+    cyw43_arch_enable_sta_mode();
+    cyw43Inited = true;
+    return;
+  }
+
   if (!cyw43_arch_init_with_country(CYW43_COUNTRY_WORLDWIDE)) {
     cyw43_arch_enable_sta_mode();
     cyw43Inited = true;

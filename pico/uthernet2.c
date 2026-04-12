@@ -6,10 +6,19 @@
 #include "uthernet2_net.h"
 #include "u2_monitor.h"
 #include "w5100_regs.h"
+#include "pico.h"
 #include <stdio.h>
 #include <string.h>
 
 #define READFLAG  (1u << 4)
+
+/* RP2350: U2 runs on core1 inside BusLoop (RAM). These helpers are on every $C0C4–$C0C7 cycle;
+ * keep them in SRAM to avoid XIP wait states between IRQ0 clear and UpdateMegaFlashRegisters. */
+#ifndef PICO_RP2040
+#define U2_BUS_RAM(fn) __time_critical_func(fn)
+#else
+#define U2_BUS_RAM(fn) fn
+#endif
 
 #ifndef U2_MON_LOG_BUS
 #define U2_MON_LOG_BUS 0
@@ -129,7 +138,7 @@ static void u2_reset(void) {
   }
 }
 
-static void set_tx_sizes(uint16_t address, uint8_t value) {
+static void U2_BUS_RAM(set_tx_sizes)(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
   uint16_t base = W5100_TX_BASE;
   const uint16_t end = W5100_RX_BASE;
@@ -144,7 +153,7 @@ static void set_tx_sizes(uint16_t address, uint8_t value) {
   }
 }
 
-static void set_rx_sizes(uint16_t address, uint8_t value) {
+static void U2_BUS_RAM(set_rx_sizes)(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
   uint16_t base = W5100_RX_BASE;
   const uint16_t end = W5100_MEM_SIZE;
@@ -222,7 +231,7 @@ static uint8_t read_socket_register(uint16_t address) {
   }
 }
 
-static uint8_t read_value_at(uint16_t address) {
+static uint8_t U2_BUS_RAM(read_value_at)(uint16_t address) {
   if (address == W5100_MR)
     return u2_mode_register;
   if (address >= W5100_GAR0 && address <= W5100_UPORT1)
@@ -234,11 +243,11 @@ static uint8_t read_value_at(uint16_t address) {
   return u2_memory[address & W5100_MEM_MAX];
 }
 
-uint8_t U2_PeekDataPort(void) {
+uint8_t U2_BUS_RAM(U2_PeekDataPort)(void) {
   return read_value_at(u2_data_address);
 }
 
-static void auto_increment(void) {
+static void U2_BUS_RAM(auto_increment)(void) {
   if (u2_mode_register & W5100_MR_AI) {
     u2_data_address++;
     if (u2_data_address == W5100_RX_BASE || u2_data_address == W5100_MEM_SIZE)
@@ -246,7 +255,7 @@ static void auto_increment(void) {
   }
 }
 
-static uint8_t read_value(void) {
+static uint8_t U2_BUS_RAM(read_value)(void) {
   uint16_t rd_addr = u2_data_address;
 #if UTHERNET2_DEBUG
   /* Bisect ip65 init: move U2_IP65_CHECKPOINT between builds (CMake). */
@@ -268,7 +277,7 @@ static uint8_t read_value(void) {
   return v;
 }
 
-static void write_common_register(uint16_t address, uint8_t value) {
+static void U2_BUS_RAM(write_common_register)(uint16_t address, uint8_t value) {
   if (address == W5100_MR) {
     if (value & W5100_MR_RST)
       u2_reset();
@@ -293,19 +302,34 @@ static void write_common_register(uint16_t address, uint8_t value) {
     set_rx_sizes(address, value);
   else if (address == W5100_TMSR)
     set_tx_sizes(address, value);
+  else if (address >= W5100_GAR0 && address <= W5100_UPORT1)
+    /* RTR/RCR/PTIMER, gaps $0013–$0016, etc.: must persist like real W5100 (was no-op). */
+    u2_memory[address] = value;
 }
 
-/* Push received data into socket i's RX buffer. UDP: write 4B IP + 2B port + 2B len (big-endian) then payload. TCP: payload only. */
-static void u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int is_udp, uint32_t src_ip, uint16_t src_port) {
-  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS || !data) return;
+/* Push received data into socket i's RX buffer.
+ * UDP: write 4B IP + 2B port + 2B len (big-endian) then payload atomically.
+ * TCP: payload only, allowing partial enqueue for backpressure.
+ * Returns accepted payload bytes. */
+static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int is_udp, uint32_t src_ip, uint16_t src_port) {
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS || !data) return 0;
   u2_socket_t *s = &u2_sockets[socket_i];
   uint16_t size = s->receive_size;
-  if (size == 0) return;
+  if (size == 0) return 0;
   uint16_t mask = size - 1;
   uint16_t base = s->receive_base;
+  uint16_t used = get_rx_rsr(socket_i);
+  uint16_t free_bytes = size - used;
+  uint16_t accept_len = len;
   uint16_t total = len;
-  if (is_udp) total += 8;  /* 4 + 2 + 2 */
-  if (get_rx_rsr(socket_i) + total > size) return;  /* no room, drop */
+  if (is_udp) {
+    total += 8;  /* 4 + 2 + 2 */
+    if (free_bytes < total) return 0;  /* UDP datagram is atomic */
+  } else {
+    if (free_bytes == 0) return 0;
+    if (accept_len > free_bytes) accept_len = free_bytes;
+    total = accept_len;
+  }
   if (is_udp) {
     u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(src_ip >> 24);
     s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
@@ -324,10 +348,11 @@ static void u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int is_u
     u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)len;
     s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
   }
-  for (uint16_t k = 0; k < len; k++) {
+  for (uint16_t k = 0; k < accept_len; k++) {
     u2_memory[base + (s->sn_rx_wr & mask)] = data[k];
     s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
   }
+  return accept_len;
 }
 
 /* Advance RX_RD to sn_rx_wr: discard unread RX (host never consumed it). */
@@ -381,7 +406,7 @@ static void send_data(int i) {
   uint16_t rd = read_net16(r + W5100_SN_TX_RD0) & mask;
   uint16_t wr = read_net16(r + W5100_SN_TX_WR0) & mask;
   int data_len = (int)wr - (int)rd;
-  if (data_len <= 0) data_len += buf_size;
+  if (data_len < 0) data_len += buf_size;
   if (data_len == 0) return;
   uint16_t base = s->transmit_base;
   uint8_t status = U2_Net_GetStatus(i);
@@ -401,13 +426,21 @@ static void send_data(int i) {
     U2_MonNetUdpSend(i, dip, dport, (uint16_t)n);
     U2_Net_SendUdp(i, buf, (uint16_t)n, dip, dport);
   } else if (status == W5100_SN_SR_ESTABLISHED) {
-    uint8_t buf[2048];
-    int n = data_len;
-    if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
-    for (int j = 0; j < n; j++)
-      buf[j] = u2_memory[base + ((rd + j) & mask)];
-    U2_MonNetTcpSend(i, (uint16_t)n);
-    U2_Net_SendTcp(i, buf, (uint16_t)n);
+    /* Shared-access clients (e.g. wget65) can queue >2 KiB before SEND.
+     * Send in chunks so one SEND command drains the full TX window. */
+    uint8_t buf[1024];
+    int remaining = data_len;
+    int pos = 0;
+    U2_MonNetTcpSend(i, (uint16_t)data_len);
+    while (remaining > 0) {
+      int n = remaining;
+      if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
+      for (int j = 0; j < n; j++)
+        buf[j] = u2_memory[base + ((rd + pos + j) & mask)];
+      U2_Net_SendTcp(i, buf, (uint16_t)n);
+      pos += n;
+      remaining -= n;
+    }
   } else if (status == W5100_SN_SR_SOCK_MACRAW) {
     uint8_t buf[1518];
     int n = data_len;
@@ -475,8 +508,10 @@ static void write_socket_register(uint16_t address, uint8_t value) {
                    | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
       uint16_t dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
                      | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
+      uint16_t lport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
+                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
       {
-        int cok = (U2_Net_ConnectTcpEx(i, dip, dport) == 0);
+        int cok = (U2_Net_ConnectTcpEx(i, dip, dport, lport) == 0);
         U2_MonSockConnect(i, dip, dport, cok);
         if (!cok)
           u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
@@ -506,12 +541,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       break;
     case W5100_SN_CR_RECV: {
       U2_MonSockSendRecv(i, 0);
-      /* ip65: advance RX_RD to sn_rx_wr so RSR becomes 0 until next frame */
-      u2_socket_t *s = &u2_sockets[i];
-      uint16_t size = s->receive_size;
-      uint16_t wr = (size > 0) ? (s->sn_rx_wr & (size - 1)) : 0;
-      u2_memory[(address & 0xFF00) + W5100_SN_RX_RD0] = (uint8_t)(wr >> 8);
-      u2_memory[(address & 0xFF00) + W5100_SN_RX_RD1] = (uint8_t)(wr & 0xFF);
+      /* W5100 semantics: host updates RX_RD to consumed length before RECV.
+       * Do not force RX_RD->WR here; that drops unread tail data and breaks
+       * shared-access partial reads (notably wget65). */
       U2_Net_RecvConfirm(i);
       break;
     }
@@ -523,7 +555,7 @@ static void write_socket_register(uint16_t address, uint8_t value) {
   }
 }
 
-static void write_value_at(uint16_t address, uint8_t value) {
+static void U2_BUS_RAM(write_value_at)(uint16_t address, uint8_t value) {
   if (address >= W5100_MR && address <= W5100_UPORT1) {
     write_common_register(address, value);
     return;
@@ -536,9 +568,16 @@ static void write_value_at(uint16_t address, uint8_t value) {
     u2_memory[address] = value;
 }
 
-static void write_value(uint8_t value) {
+static void U2_BUS_RAM(write_value)(uint8_t value) {
   write_value_at(u2_data_address, value);
   auto_increment();
+}
+
+void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
+  if (!mac)
+    return;
+  for (int i = 0; i < 6; i++)
+    u2_memory[W5100_SHAR0 + i] = mac[i];
 }
 
 void U2_Init(void) {
@@ -558,7 +597,7 @@ void U2_Poll(void) {
   /* U2_MonPollFlush: call from core 0 only — see u2_monitor.h (stdio + cyw43 async_context). */
 }
 
-void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out) {
+void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
   uint32_t loc = busdata & U2_C0X_MASK;
   uint8_t data = (uint8_t)((busdata >> 5) & 0xFF);
   int is_read = (busdata & READFLAG) != 0;

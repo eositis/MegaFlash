@@ -74,7 +74,7 @@ Keys emitted:
 
 ## Overnight soak tool (`FLASHSOAK`)
 
-`FLASHSOAK.BAS` is a destructive, long-running validator intended to run overnight and emit parseable CSV rows.
+`FLASHSOAK.BAS` is a destructive, long-running validator intended to run overnight and emit parseable CSV rows. On screen, **line 21** shows the current phase (cycle, unit, format, file I/O, checksum block progress every 256 blocks, TFTP wait ticks every 50 polls, pass/fail), so you can follow progress without a serial console.
 
 Per cycle, for each writable MegaFlash volume (including RAM disk when enabled), it:
 
@@ -84,7 +84,7 @@ Per cycle, for each writable MegaFlash volume (including RAM disk when enabled),
 - Uploads image to TFTP server `192.168.0.10` as `validationX.po` (X = unit number).
 - Reformats unit, downloads `validationX.po` back into place.
 - Recomputes checksum and verifies it matches pre-upload value.
-- Logs each step to a CSV log file (`cycle,unit,event,result,v1,v2`).
+- Logs each step to a **ProDOS text** (SEQ) file — default **`SOAK.TXT`** — with **comma-separated** lines (`ts,cycle,unit,event,result,v1,v2`). Use a **`.TXT`** name so ProDOS/BASIC treat it as a normal ASCII text file; the content is still CSV-style for import into spreadsheets. **`ts`** is **8 characters** from ProDOS **`TIME$`** (host clock). The log file is created or opened at the **start of cycle 1** (after the **PROGRESS** banner), not during the initial prompts — so you can tell whether a hang is in **ProDOS `OPEN`** (line 21 shows **`OPENING …`**) or in the soak steps. Type **`NONE`** (uppercase or lowercase) at the log prompt to **disable the log file** entirely (destructive test still runs). **Note:** Applesoft only distinguishes the **first two characters** of variable names, so **`LGSKIP`** and **`LGINIT`** would alias each other; the program uses **`Q1`**/**`Q2`** for skip and log-init flags. **`OPEN`** / **`WRITE`** use the same string pattern as **`FLASHVAL.BAS`** (no extra space before the filename). If the **default volume** is wrong, use a full path (e.g. **`/FLASHVALID/SOAK.TXT`** or **`/RAM/SOAK.TXT`**). If **`OPEN`** appears to **hang** (status line stuck on **`OPENING …`**), the MLI is usually waiting on the wrong volume or a slow path — try **`/RAM/SOAK.TXT`**, set **`PREFIX`** to the volume you are writing to, or use **`NONE`** to run without a log. The log file is **never deleted**: each program run appends a **`RUN_START`** row first, then all events for that session. If the file does not exist yet, the first **`OPEN`** creates it and writes the header row.
 
 If all units pass, it reformats all writable units again and starts the next cycle.
 
@@ -117,9 +117,20 @@ Writes **`tools/flash-validate/FLASHVALID.po`** (**143360 bytes**, same **`.po`*
 Contents:
 
 - **PRODOS** / **BASIC.SYSTEM** — copied raw from **`cpanel/prodos19.dsk`** (valid 140K ProDOS 1.9 image shipped with the Control Panel build inputs).
+- **TFTPUTIL** — tokenized Applesoft from **`TFTPUTIL.BAS`**: standalone TFTP **upload** / **download** of a disk image to/from a MegaFlash unit (same **`CMD_TFTPRUN`** / **`CMD_TFTPSTATUS`** path as the Control Panel’s TFTP feature; **Pico W** + WiFi required). **`TFTPUTIL.SRC`** is the text source.
+- **TFTPUTIL.DOC** — on-disk text documentation from **`TFTPUTIL.TXT`** (startup behavior, host config, prompts, and error notes).
 - **FLASHVAL** — tokenized Applesoft from **`FLASHVAL.DSK.BAS`** (screen-only test suite; run under BASIC.SYSTEM).
 - **FLASHSOAK** — tokenized Applesoft overnight stress validator.
 - **FLASHVAL.SRC** — text copy of **`FLASHVAL.BAS`** (full program including ProDOS baseline/compare); use for reference or manual entry; AppleCommander **`-bas`** on the full file is still unreliable.
 - **FLASHSOAK.SRC** — text copy of `FLASHSOAK.BAS`.
+- **WGET65V** (optional) — when **`tools/wget65-verbose/wget65v.bin`** is built and **`build-flashval-disk.sh`** can find `cl65` and **`apple2enh/util/loader.system`**, the image also includes the **`WGET65V`** binary, **`WGET65V.SYSTEM`** loader, **`WGET65V`** Applesoft launcher, **`WGET65V.SRC`**, and **`WGET65V.DOC`**. If the binary is missing, **`WGET65V.DOC`** alone is added with build instructions. See **`tools/wget65-verbose/README.md`**.
 
 **Note:** **`PR`** is not a safe variable name in Applesoft (it abbreviates **PRINT**). This tree uses **`PX`** and **`D1`** for the parameter and data ports at **`CR+1`** and **`CR+2`**.
+
+## WGET65V (verbose wget / ip65 fork)
+
+**`tools/wget65-verbose/`** is a fork of upstream **`wget65`** with **screen** logging for each Uthernet II / W5100 handshake step and **register dumps** (MR, RTR XOR, RMSR, PTIMER). Build **`wget65v.bin`** with cc65 and a stock **`ip65`** checkout, then rebuild **`FLASHVALID.po`** so the disk includes the binary and launcher. Details: **`tools/wget65-verbose/README.md`**.
+
+## TFTP utility (`TFTPUTIL`)
+
+Run **`TFTPUTIL`** from BASIC.SYSTEM. It starts in **80-column mode**, auto-detects MegaFlash slot (prefers slot 4, otherwise scans 1-7), then prompts for **TFTP host FQDN or IP** (default loaded/saved via `TFTPUTIL.CFG`). Before unit selection, it lists available volumes as **unit number + volume name** and prompts for a valid unit in range. Then choose **upload vs download** and enter **remote filename** (e.g. **`image.po`**). **Upload** sends the contents of the selected volume to the server; **download** writes the server file into that volume. Behaviour matches the firmware’s TFTP transfer (same as **`FLASHSOAK`**’s TFTP steps). Large transfers can take several minutes; status ticks appear on **line 21**.

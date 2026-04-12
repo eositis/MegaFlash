@@ -12,6 +12,11 @@ SYS_SRC="${SYS_SRC:-$REPO_ROOT/cpanel/prodos19.dsk}"
 DSK_BAS="$SCRIPT_DIR/FLASHVAL.DSK.BAS"
 FULL_BAS="$SCRIPT_DIR/FLASHVAL.BAS"
 SOAK_BAS="$SCRIPT_DIR/FLASHSOAK.BAS"
+TFTP_BAS="$SCRIPT_DIR/TFTPUTIL.BAS"
+TFTP_DOC="$SCRIPT_DIR/TFTPUTIL.TXT"
+WGET65V_BAS="$SCRIPT_DIR/WGET65V.BAS"
+WGET65V_DOC="$SCRIPT_DIR/WGET65V.TXT"
+WGET65V_BIN="${WGET65V_BIN:-$SCRIPT_DIR/../wget65-verbose/wget65v.bin}"
 VOL_NAME="${VOL_NAME:-FLASHVALID}"
 
 # Java: same preference as a2speed/Makefile (arm64 Homebrew OpenJDK avoids "Bad CPU type" on Apple Silicon).
@@ -63,7 +68,31 @@ echo "Creating ProDOS 140K image $OUT (volume /$VOL_NAME/)..."
 "${java_cmd[@]}" -p "$OUT" BASIC.SYSTEM SYS < "$WRK/BASIC.SYSTEM.bin"
 "${java_cmd[@]}" -bas "$OUT" FLASHVAL < "$DSK_BAS"
 "${java_cmd[@]}" -bas "$OUT" FLASHSOAK < "$SOAK_BAS"
+"${java_cmd[@]}" -bas "$OUT" TFTPUTIL < "$TFTP_BAS"
 "${java_cmd[@]}" -ptx "$OUT" FLASHVAL.SRC < "$FULL_BAS"
 "${java_cmd[@]}" -ptx "$OUT" FLASHSOAK.SRC < "$SOAK_BAS"
+"${java_cmd[@]}" -ptx "$OUT" TFTPUTIL.SRC < "$TFTP_BAS"
+if [[ -f "$TFTP_DOC" ]]; then
+  "${java_cmd[@]}" -ptx "$OUT" TFTPUTIL.DOC < "$TFTP_DOC"
+fi
+
+# Optional: verbose wget fork (tools/wget65-verbose) — build with `make` there + cc65 ip65 checkout
+CC65_HOME="${CC65_HOME:-}"
+if command -v cl65 >/dev/null 2>&1; then
+  CC65_HOME="${CC65_HOME:-$(cl65 --print-target-path 2>/dev/null || true)}"
+fi
+if [[ -f "$WGET65V_BIN" && -n "$CC65_HOME" && -f "$CC65_HOME/apple2enh/util/loader.system" ]]; then
+  echo "Adding WGET65V (verbose wget) binary + loader..."
+  "${java_cmd[@]}" -as "$OUT" WGET65V < "$WGET65V_BIN"
+  "${java_cmd[@]}" -p "$OUT" WGET65V.SYSTEM sys < "$CC65_HOME/apple2enh/util/loader.system"
+  "${java_cmd[@]}" -bas "$OUT" WGET65V < "$WGET65V_BAS"
+  "${java_cmd[@]}" -ptx "$OUT" WGET65V.SRC < "$WGET65V_BAS"
+  if [[ -f "$WGET65V_DOC" ]]; then
+    "${java_cmd[@]}" -ptx "$OUT" WGET65V.DOC < "$WGET65V_DOC"
+  fi
+elif [[ -f "$WGET65V_DOC" ]]; then
+  echo "Note: WGET65V.DOC only (build tools/wget65-verbose/wget65v.bin to add WGET65V binary + launcher)."
+  "${java_cmd[@]}" -ptx "$OUT" WGET65V.DOC < "$WGET65V_DOC"
+fi
 
 echo "Wrote $OUT"

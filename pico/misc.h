@@ -18,6 +18,14 @@ uint32_t EndTimer();
 
 bool IsAppleConnected();
 bool CheckPicoW();
+
+#if defined(NDEBUG)
+/** Release: Apple II bus emulation only when Apple is present and USB device is not connected to a host. */
+extern volatile bool g_release_bus_emulation_enabled;
+void ReleaseInitBusUsbGate(bool apple_at_boot);
+void ReleaseUpdateBusUsbGate(void);
+#endif
+
 void InitPicoLed();
 void TurnOnPicoLed();
 void TurnOffPicoLed();

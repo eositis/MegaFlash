@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
-#include "pico/time.h"
 #include "hardware/pio.h"
 #include "a2bus.h"
 #include "defines.h"
@@ -96,16 +95,8 @@ void __no_inline_not_in_flash_func(BusLoop)() {
   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
   const uint READFLAG = (1<<4); //Read flag is at bit 4
   uint u2_poll_counter = 0;
-  static bool c0c4_led_pending = false;
-  static absolute_time_t c0c4_led_off_at;
 
   while(true) {
-    /* Turn off C0C4 diagnostic LED after 1 s (non-blocking) */
-    if (c0c4_led_pending && time_reached(c0c4_led_off_at)) {
-      TurnOffActLed();
-      c0c4_led_pending = false;
-    }
-
     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
     uint32_t busdata = GetAppleBusBlocking();
     uint32_t addr = busdata & 0b1111;     //Lower nibble of Apple Address
@@ -119,12 +110,6 @@ void __no_inline_not_in_flash_func(BusLoop)() {
        * i.e. chunk 1 (registers.i32[1]). RP2350: UpdateMegaFlashRegisters(1, ...) feeds SM1
        * so the next read presents this byte on the data bus — see docs §2 / §1d.
        */
-      /* Diagnostic: light activity LED for 1 s on any $C0C4 access */
-      if (addr == U2_C0X_OFFSET) {
-        TurnOnActLed();
-        c0c4_led_off_at = make_timeout_time_ms(1000);
-        c0c4_led_pending = true;
-      }
       uint8_t u2_read_byte;
       U2_HandleBusAccess(busdata, &u2_read_byte);
       if (busdata & READFLAG) {
@@ -144,11 +129,11 @@ void __no_inline_not_in_flash_func(BusLoop)() {
 #ifndef PICO_RP2040
       /* RP2350 a2bus SM delays rxfifo pull behind IRQ 0; do not update chunk FIFOs until
        * the SM has pulled (same rule as bottom of loop). U2 used `continue` and skipped this,
-       * which can corrupt $C0C4–$C0C7 read data and break ip65 W5100 RTR probe → "Device not found". */
-      if (pio_sm_is_rx_fifo_empty(pio0, SM_LISTENER)) {
-        while (pio_interrupt_get(pio0, 0)) {
-          tight_loop_contents();
-        }
+       * which can corrupt $C0C4–$C0C7 read data and break ip65 W5100 RTR probe → "Device not found".
+       * Wait for IRQ 0 unconditionally here: gating on rx fifo empty can skip the wait while
+       * chunk-1 ($C0C4–$C0C7) data is still stale (see docs §1d / §1f). */
+      while (pio_interrupt_get(pio0, 0)) {
+        tight_loop_contents();
       }
 #endif
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */

@@ -4,18 +4,77 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-10
+
+- **U2 hot path RAM:** **`pico/uthernet2.c`**, **`pico/busloop.c`**; **`./build-both.sh`** OK.
+
+- **DHCP/MACRAW STA MAC:** **`pico/uthernet2.c`**, **`uthernet2_net.cpp`**, **`uthernet2.h`** — §1j.
+
+- **Drop C0C4 LED:** **`pico/busloop.c`**; docs §9.
+
+- **§1i:** Clarified same PIO read path for **`$C0C0–$C0C3`** and **`$C0C4–$C0C7`** (no special U2 Φ2); U2-specific issues are **pipeline**/handler. **`docs/Implementation-notes-and-reasoning.md`**.
+
+- **AppleWin vs MegaFlash U2:** Documented in **`docs/Implementation-notes-and-reasoning.md`** §**1i** and **`docs/Uthernet-II-emulation-on-MegaFlash.md`** (timing: **`IO_C0`** / **`MemReadFloatingBus`**; decode: **`&0x03`** mirrors vs **`$C0C4–$C0C7`** + PIO chunks).
+
+- **`pico/build-both.sh`:** Built **`pico_release/megaflash.uf2`** and **`pico2_release/megaflash.uf2`** (Arm GNU Toolchain 15.2 under **`/Applications/ArmGNUToolchain`**).
+
+- **`pico/a2bus_rp2350.pio` + `pico/a2bus.h`:** Tighter **read_cycle** delays before **`mov osr,rxfifo[y]`** so bus data is presented earlier; **`__dsb`** after **`rxf_putget`** store. Documented §1d.
+
+- **`tools/wget65-verbose/wget65.c`:** On **`ip65_init`** failure, print **`ip65_error`** + note re post-failure dump vs **`w5100.s`** probe (§1h paradox); fixed **slot 4**; **`videomode(VIDEOMODE_80COL)`**; rebuilt **`wget65v.bin`** / **`FLASHVALID.po`**.
+- **`tools/wget65-verbose/` + flash disk:** Shallow **`ip65/`** clone at repo root (gitignored) for cc65; **`WGET65V_BIN`** default in **`build-flashval-disk.sh`** fixed to **`../wget65-verbose/wget65v.bin`**. Built **`wget65v.bin`**, regenerated **`FLASHVALID.po`** with **WGET65V** + **WGET65V.SYSTEM** + launcher + **WGET65V.DOC**. See **`docs/Implementation-notes-and-reasoning.md`** §1h.
+
 ## 2026-04-07
+
+- **FLASHVALID.po:** Dropped **`CPANEL`** **`BIN`**; added standalone **`TFTPUTIL`** (**`TFTPUTIL.BAS`** → tokenized + **`TFTPUTIL.SRC`**) for TFTP upload/download only. **`build-flashval-disk.sh`**, **`README.md`**, §17.
+
+- **FLASHSOAK on-screen progress:** **`GOSUB 8600`** status line **VTAB 21** for major steps (cycle/unit, format, files, checksum block **/256**, TFTP poll **/50**, failures, cycle end, reformat). **`tools/flash-validate/FLASHSOAK.BAS`**, **`README.md`**.
+
+- **FLASHSOAK log file name:** Default log **`SOAK.TXT`** (ProDOS **TEXT** **SEQ**); comma-separated lines unchanged; **`.CSV`** avoided for **`OPEN`**,**`T`** reliability. **`tools/flash-validate/FLASHSOAK.BAS`**, **`README.md`**, §18.
+
+- **FLASHSOAK append-only log + timestamps:** No **`DELETE`** of the log file; each run appends **`RUN_START`** after **`CMD_GETTIMESTR`** (**`QC=25`**) timestamp column **`TS$`**. CSV columns **`ts,cycle,unit,event,result,v1,v2`**; new file **`OPEN`** **`T,W`** writes header then row. **`tools/flash-validate/FLASHSOAK.BAS`**.
+
+- **FLASHSOAK PATH NOT FOUND at 9010:** **`DELETE`** on init failed when **`SOAK.CSV`** did not exist yet. **`ONERR GOTO`** around **`DELETE`**, then **`ONERR GOTO 0`** before **`OPEN`** (same pattern as **`FLASHVAL`** file I/O). **`tools/flash-validate/FLASHSOAK.BAS`**.
+
+- **FLASHSOAK syntax error at 9020:** Applesoft tokenizes **`OPEN`**, **`WRITE`**, **`CLOSE`**, **`DELETE`**, **`PREFIX`** in **`PRINT D$;"OPEN "...`**-style lines; **`FLASHVAL.BAS`** already used **`"O"+"PEN"`** / **`"WR"+"ITE"`** etc. **`FLASHSOAK.BAS`** applied the same pattern (incl. **`LG$`** log path) so ProDOS commands are built from string concatenation. **`tools/flash-validate/FLASHSOAK.BAS`**.
+
+- **WiFi / Test WiFi broken after CYW43 LED init:** **`misc.c` `InitPicoLed()`** calls **`cyw43_arch_init()`**; **`CUDPTask::InitCyw43()`** / **`NetworkPump::Init()`** then called **`cyw43_arch_init_with_country()`**, which re-entered **`cyw43_arch_init()`** → second **`cyw43_driver_init()`** failed and **`cyw43_arch_deinit()`** tore down the stack (pico-sdk **`cyw43_arch_poll.c`**). **Fix:** if **`cyw43_is_initialized(&cyw43_state)`**, only **`cyw43_arch_enable_sta_mode()`** + LED; skip re-init. **`pico/udptask.cpp`**, **`pico/network_pump.cpp`**. **`./build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §7k.
+
+- **Release: USB vs Apple II bus mutual exclusion:** **`NDEBUG`** only — **`g_release_bus_emulation_enabled`** = Apple connected **and** USB not connected to host; **`ReleaseUpdateBusUsbGate()`** in **`misc.c`**; **`GetAppleBusBlocking()`** in **`a2bus.h`** spins without FIFO when bus off; **`main.c`** **`stdio_usb_init()`** before **`core0Loop()`**; USB terminal only when **`!IsAppleConnected()`**. Debug builds unchanged. **`./build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §7j.
+
+- **Pico W WiFi / Test WiFi hang:** **`pico/main.c`** — when **`IsAppleConnected()`** is false at boot, **`core0Loop()`** was skipped so **`multicore_fifo`** (**`IPCCMD_WIFITEST`**, TFTP) and **`NetworkPump_PollOnce()`** never ran; Control Panel Test WiFi waited forever and CYW43 stayed idle. Added **`PicoW_ServiceCore0IpcAndNetwork()`** (shared with **`core0Loop`**); USB-terminal path polls FIFO + lwIP non-blocking each loop and during 1 s idle (**1 ms** sleeps). **`./build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §7i.
+
+- **Build:** **`firmware`**: **`make clean && make`** → **`iic.bin`** + **`iicplus.bin`**. **`pico`**: **`./build-both.sh`** → **`pico_release/megaflash.uf2`**, **`pico2_release/megaflash.uf2`**.
 
 - **Alliance JEDEC `0x204020`:** **`pico/flash.c`** — **`tsReadJEDECID()`** masks to **24-bit** RDID and uses **`uint32_t`** shifts; **`ChipIDToCapacity()`** masks **`jedec24`**, explicit **`0x204020`** (Alliance 512 Mbit, Thomas), keeps **`type_cap`** Winbond-class matching. **`./pico/build-both.sh`** OK. **`docs/Implementation-notes-and-reasoning.md`** §16.
 
 - **FLASHVALID disk image:** Rebuilt using **`../a2speed`**-style **`make disk`** flow: **`-pro140`**, **`SYS_SRC=cpanel/prodos19.dsk`** for **PRODOS**/**BASIC.SYSTEM** (no padded 800K **`romdisk.po`**). Added **`tools/flash-validate/Makefile`**. Updated **`README.md`** + **`docs/Implementation-notes-and-reasoning.md`** §17/§18.
 - **FLASHVALID.po:** Default build output is **`tools/flash-validate/FLASHVALID.po`** (same **`.po`** convention as **`../a2speed/a2speed.po`**, not **`.dsk`**). Rebuilt; AppleCommander **`-i`** confirms **143360** bytes, ProDOS, **280** blocks.
 
+## 2026-04-03
+
+- **FLASHSOAK unit count + status line + log notes:** **`UC`** was wrongly **`BC`** from **`CMD_GETUNITSTATUS`** with **`U=0`**; now **`GOSUB 1450`** **`CMD_GETDEVSTATUS`** (**`QC=17`**) and cap **`UC`≤16**. **`GOSUB 8600`** uses **`LEFT$(M$+B$,40)`** to clear line 21. **`README.md`** / §18: log stall workarounds.
+
+- **FLASHSOAK NONE still reached OPENING / LGSKIP useless:** Applesoft variable names are significant to **two characters**; **`LGSKIP`** and **`LGINIT`** both alias **`LG`**, so **`NONE`** could not reliably skip **`GOSUB 9000`**, and **`LGINIT=1`** made **`LGSKIP`** look set. Replaced with **`Q1`** (skip) and **`Q2`** (log opened); accept **`none`** lowercase. **`tools/flash-validate/FLASHSOAK.BAS`**, **`README.md`**, §18.
+
+- **FLASHSOAK still hung before LOG STARTED:** Log **`OPEN`** moved to **start of cycle 1** (after **PROGRESS** line); **`OPENING …`** on **VTAB 21** before MLI; **`NONE`** disables log file; **`OPEN`/`WRITE`** match **`FLASHVAL.BAS`**; **`TIME$`** truncate before pad. **`tools/flash-validate/FLASHSOAK.BAS`**, **`README.md`**, §18.
+
+- **FLASHSOAK hang after SERVER / no SOAK.TXT:** Startup **`CMD $03`** and log timestamps via **`CMD $19`** ran (or blocked) before **`OPEN`**; a stuck busy wait prevented **`GOSUB 9000`**. **Fix:** **`GOSUB 9000`** immediately after printing **`SERVER`**; **`ts`** column from ProDOS **`TIME$`** (8 chars), not **`CMD_GETTIMESTR`**. **`tools/flash-validate/FLASHSOAK.BAS`**, **`README.md`**, §18.
+
 ---
+
+## 2026-04-08
+
+- **Uthernet/Telnet65 walkthrough (no code change):** Performed a logical end-to-end review of Telnet65 over Uthernet emulation (ip65 init, MACRAW DHCP, TCP connect/send/recv) and documented risks in `docs/Implementation-notes-and-reasoning.md` §10f. Key findings: TX empty-send wrap condition, chained `pbuf` assumptions in UDP/TCP RX, intentionally lossy RECV behavior, and possible nested lwIP lock in `U2_Net_OpenUdp`.
+- **Uthernet/Telnet65 fixes implemented:** Applied the proposed fixes: `pico/uthernet2.c` `send_data()` now wraps only on negative `wr-rd` (prevents empty TX from sending full-buffer stale data); `pico/uthernet2_net.cpp` now flattens UDP/TCP pbuf chains via `pbuf_copy_partial` before `push_rx_cb`; removed outer `cyw43_arch_lwip_begin/end` in `U2_Net_OpenUdp` because `NetworkPump::CreateUdpPcb` already locks. Verification: `./pico/build-both.sh` succeeded for `pico_release` and `pico2_release`; `ReadLints` clean on edited files.
+- **Retest (logical Telnet65 flow):** Re-checked init/DHCP/TCP flow against updated code paths (`send_data`, UDP/TCP RX callback flattening, busloop U2 poll cadence/chunk update). Result: previously identified high-risk issues are resolved in code; no new blockers found in walkthrough. Residual note: RECV still intentionally advances `RX_RD` to `sn_rx_wr` (ip65 compatibility, potentially lossy for partial-read clients).
+- **ip65 tools walkthrough (`date65`/`tweet65`/`hfs65`/`wget65`):** Reviewed sibling `ip65/apps` usage patterns vs current Uthernet emulation and documented in `docs/Implementation-notes-and-reasoning.md` §10g. Main findings: RECV semantics (`RX_RD -> sn_rx_wr`) likely break W5100 shared-access partial commits (`wget65`), TCP RX can drop on full emulated RX ring while still calling `tcp_recved()` (risking silent data loss under bulk traffic), and SEND path currently stages max 2048 bytes per command.
+- **`wget65`-priority U2 fixes:** Updated `pico/uthernet2.c` so SN_CR=RECV no longer forces `RX_RD` to `sn_rx_wr` (preserves unread tail bytes for shared-access partial commits), and TCP SEND now drains full queued TX data in 1 KiB chunks per SEND command (removes prior 2 KiB cap). Build verification: `./pico/build-both.sh` successful for both release targets; lints clean. Documented in `docs/Implementation-notes-and-reasoning.md` §10h.
+- **`wget65` focused retest (logical):** Revalidated shared-access flow against current code (`w5100_data_request`/`w5100_data_commit` expectations vs U2 `SN_CR_RECV` and SEND). Confirmed the two priority fixes are present and aligned with partial-commit semantics. Residual risk remains: TCP RX path still calls `tcp_recved()` even if emulated RX push drops due to full ring (possible silent loss under sustained large transfers).
+- **TCP RX backpressure fix (`wget65`/bulk TCP):** Implemented accepted-byte accounting in U2 RX callback path: `u2_push_rx_fn` now returns accepted payload bytes; `u2_push_rx` allows partial TCP enqueue based on RX free space (UDP remains atomic), and `u2_tcp_recv` calls `tcp_recved()` only for accepted bytes. Built both release targets via `./pico/build-both.sh`; `ReadLints` clean.
 
 ## 2026-04-06
 
-- **Overnight soak validator:** Added **`tools/flash-validate/FLASHSOAK.BAS`** to stress writable MegaFlash units (incl. RAM disk), with cycle loop: format, file create/append/delete/fill, whole-volume checksum, TFTP upload/download (`validationX.po` on `192.168.0.10`), checksum compare, CSV logging to `SOAK.CSV`, and auto-repeat on pass.
+- **Overnight soak validator:** Added **`tools/flash-validate/FLASHSOAK.BAS`** to stress writable MegaFlash units (incl. RAM disk), with cycle loop: format, file create/append/delete/fill, whole-volume checksum, TFTP upload/download (`validationX.po` on `192.168.0.10`), checksum compare, comma-separated log to **`SOAK.TXT`**, and auto-repeat on pass.
 - **Disk build integration:** Updated **`tools/flash-validate/build-flashval-disk.sh`** + docs so **`FLASHVALID.po`** includes tokenized **`FLASHSOAK`** and text **`FLASHSOAK.SRC`**; rebuilt and verified directory contents with AppleCommander.
 - **Reasoning/docs:** Extended **`docs/Implementation-notes-and-reasoning.md`** with §18 and summary-row update to capture why soak coverage was added and the exact command/data-buffer contract used for `CMD_TFTPRUN`/`CMD_TFTPSTATUS`.
 

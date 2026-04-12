@@ -1,0 +1,27 @@
+WGET65V — verbose wget (MegaFlash fork)
+========================================
+
+Source: tools/wget65-verbose/ (fork of cc65/ip65 apps/wget65)
+
+Build the binary on a host with cc65 and an upstream ip65 tree:
+
+  git clone https://github.com/cc65/ip65.git ip65
+  (place as MegaFlash/ip65 or set IP65_ROOT)
+
+  cd tools/wget65-verbose && make
+
+If tools/wget65-verbose/wget65v.bin exists when you run
+tools/flash-validate/build-flashval-disk.sh (default WGET65V_BIN path:
+../wget65-verbose/wget65v.bin relative to flash-validate), the script adds:
+
+  WGET65V         — cc65 binary
+  WGET65V.SYSTEM  — cc65 loader (from cl65 --print-target-path)
+  WGET65V         — Applesoft launcher (tokenized BASIC)
+
+Run WGET65V from BASIC.SYSTEM under ProDOS. The program prints each
+Handshake step (ip65_init, w5100_init, dhcp, w5100_config) and dumps
+W5100 registers: MR, RTR0/RTR1 with ip65 XOR fingerprint, RMSR, PTIMER.
+
+Requires Uthernet II (W5100) at the slot ip65 expects (see ethernet.slot
+or default). MegaFlash policy: stock ip65 drivers; only this forked app
+adds logging.

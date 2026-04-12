@@ -140,10 +140,13 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE OC_RP2350=1)
 endif()
 
 # U2 / ip65 debug (Debug builds only): default low noise — use checkpoints to bisect init.
-# Example: cmake -B pico2_debug -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug -DU2_IP65_CHECKPOINT=3
+# Convenience: ./build-debug-both.sh  (sets CMAKE_BUILD_TYPE=Debug; optional env U2_IP65_CHECKPOINT, U2_IP65_TRACE_DATA, U2_MON_LOG_BUS)
+# Manual: cmake -B pico2_debug -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Debug -DU2_IP65_CHECKPOINT=3
 set(U2_IP65_CHECKPOINT "1" CACHE STRING "ip65 bisect: 0=off, 1=MODE(0x03), 2=RTR0, 3=RTR1, 4=RMSR, 5=MACRAW OPEN ok (default 1)")
 set(U2_MON_LOG_BUS "0" CACHE STRING "1=verbose [u2m] per bus cycle at C0C4-C0C7 (floods UART)")
 set(U2_IP65_TRACE_DATA "0" CACHE STRING "1=verbose 48 DATA reads after MODE=0x03 ([u2])")
+set(U2_ETH_HEADER_TRACE "0" CACHE STRING "1=UART [u2eth] hex dump first 64B of STA TX/RX Ethernet frames (bring-up; not pcap/tcpdump)")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_ETH_HEADER_TRACE=${U2_ETH_HEADER_TRACE})
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     UTHERNET2_DEBUG=1

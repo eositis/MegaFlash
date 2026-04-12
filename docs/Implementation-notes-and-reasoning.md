@@ -8,10 +8,10 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 - **Version series:** **V1.1.24-eo** is the last **1.1.x** maintenance release. Ongoing work targets **1.2.x** starting from **V1.2.0-eo** (`0x0020` in `pico/defines.h`), focused on **Uthernet II emulation**, **com port**, and **imagewriter emulation**.
 - **ip65 / Uthernet II:** U2 emulation was adapted so the ip65 stack (no changes to ip65) works: RECV command advances RX_RD to sn_rx_wr; socket CR is cleared to 0 after each command; default RMSR/TMSR = 0x06; MACRAW RX is fed by wrapping netif->input when socket 0 is opened in MACRAW. U2 debug logging uses prefix `[u2]` and is gated by UTHERNET2_DEBUG (Debug build only), not NDEBUG. See `docs/ip65-Uthernet-II-integration.md`.
-- **Uthernet II**: Confirmed U2 at $C0C4–$C0C7 only; no GPIO slot select. Fixed read-back of Mode Register (chunk 1 vs chunk 0). Added C0C4 diagnostic LED (1 s on any $C0C4 access).
+- **Uthernet II**: Confirmed U2 at $C0C4–$C0C7 only; no GPIO slot select. Fixed read-back of Mode Register (chunk 1 vs chunk 0). (Earlier: C0C4 diagnostic LED — **removed** in 1.2.x; see §9.)
 - **GPIO pulls**: A2/A3 pulldowns disabled (bus-driven). nDEVSEL pull-up first disabled at user request, then re-enabled when C0C4 was not seen; with pull-up enabled, C0C4 still not recognized.
 - **Build**: PICO_SDK_PATH added to cmakeall.sh; version bump + “-eo” + date on each build; version-bump script fixed (grep uniqueness, strip newlines); release UF2s copied to `_releases/<version>/`.
-- **C0C4 not seen**: Logic analyzer shows A0–A4 (and presumably address) at the Pico, but firmware never sees the access (no LED, no response). Conclusion: PIO only pushes a cycle when **nDEVSEL (GPIO 20) goes low**; if it does not go low for that access, the CPU never gets the cycle. Tried inverting nDEVSEL sense (trigger on pin HIGH = DEVSEL active-high); **reverted** at user request. nDEVSEL sense remains active-low.
+- **C0C4 not seen**: Logic analyzer shows A0–A4 (and presumably address) at the Pico, but firmware never sees the access (no response). Conclusion: PIO only pushes a cycle when **nDEVSEL (GPIO 20) goes low**; if it does not go low for that access, the CPU never gets the cycle. Tried inverting nDEVSEL sense (trigger on pin HIGH = DEVSEL active-high); **reverted** at user request. nDEVSEL sense remains active-low.
 - **TFTP/UDP performance**: TFTP was slow and had high error rate. Root cause: 50 ms HEARTBEAT_PERIOD in udptask added up to 50 ms latency per UDP packet, and blocking flash sector erase (~220–250 ms every 16 blocks) stalled the event loop. No documented reason for 50 ms. HEARTBEAT_PERIOD reduced to 10 ms to improve TFTP (and NTP/Test WiFi) responsiveness (see §13).
 
 ---
@@ -58,9 +58,17 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **Why:** On **RP2350**, `a2bus` sets **IRQ 0** while delaying the `rxfifo` pull (`a2bus_rp2350.pio`). The bottom of `BusLoop()` waits for IRQ 0 to clear before `UpdateMegaFlashRegisters`, so the SM finishes reading the **current** cycle’s FIFO value before the CPU overwrites it. The **Uthernet II** branch called `UpdateMegaFlashRegisters(1, …)` and then **`continue`**, **skipping** that wait. That can corrupt **$C0C4–$C0C7** read-back and make the ip65 **W5100 RTR XOR** probe at `$0017/$0018` fail (same user-visible message as a missing card).
 
-**What we did:** Before `UpdateMegaFlashRegisters(1, …)` inside the U2 branch, added the same `pio_sm_is_rx_fifo_empty` + `pio_interrupt_get` wait as the main loop (guarded with `#ifndef PICO_RP2040`).
+**What we did:** Before `UpdateMegaFlashRegisters(1, …)` inside the U2 branch, added the same `pio_interrupt_get` wait as the main loop (guarded with `#ifndef PICO_RP2040`). Initially this mirrored the main loop’s `pio_sm_is_rx_fifo_empty` guard; that guard was **removed on the U2 path only** so IRQ 0 always clears before updating chunk 1 — skipping the wait when the RX FIFO was non-empty could still leave **$C0C4–$C0C7** stale and break the ip65 RTR XOR (wget65 / telnet65 “device not found” with slot 4 correct).
 
-**References:** `pico/busloop.c`, `pico/a2bus_rp2350.pio` (`irq set 0` / `mov osr,rxfifo[y]` / `irq clear 0`).
+**Also:** `write_common_register()` in `uthernet2.c` now stores **RTR / RCR / PTIMER** and other **$0001–$002F** gaps that were previously no-ops on write (real W5100 retains those bytes).
+
+**RP2350 store visibility:** `UpdateMegaFlashRegisters()` (`pico/a2bus.h`) uses **`pio0->rxf_putget[SM_A2BUS][chunk] = value`**. Added **`__dmb()`** after that store so the **PIO** sees the new chunk word before the next **`mov osr, rxfifo[y]`**. Symptom without it: **UART** `[u2] DATA read` shows correct **$0017/$0018** bytes (emulator path) but **only two** trace lines and **wget** “no device found” — **6502** `eor` XOR still fails because the **bus** latched a **stale** FIFO byte (same class of issue as §1f).
+
+**PIO timing (pull earlier):** `a2bus` originally used **long** side-delays (`[7]`…`[6]`) before **`mov osr, rxfifo[y]`** so the CPU had time after the previous cycle — but that also **delayed** the first **`out pins`** into the slot **read** window. If the **6502** samples the data bus before the PIO drives the correct byte, **`w5100.s`** sees **garbage** while a **later** C snapshot matches emulation. **Tighter** pre-FIFO delays (`[3]`…`[1]`) aim to present the byte **earlier**; **IRQ 0** still blocks **`UpdateMegaFlashRegisters`** until the SM has pulled the **current** cycle’s FIFO value. **`__dsb`** after **`__dmb`** on **`rxf_putget`** write strengthens store completion before the SM can pull.
+
+**U2 hot path in SRAM (RP2350):** Between IRQ 0 clear and **`UpdateMegaFlashRegisters(1,…)`**, only **CPU cycles** remain. **`U2_HandleBusAccess`**, **`U2_PeekDataPort`**, **`read_value` / `read_value_at`**, **`write_*`**, **`auto_increment`**, **`write_common_register`**, **`set_rx_sizes` / `set_tx_sizes`** are placed in **`.time_critical.*`** (**`__time_critical_func`**) so they execute from **RAM**, not **XIP flash** — fewer wait states on every **`$C0C4–$C0C7`** access. **`read_socket_register`** (socket block) stays in flash; ip65 **RTR** path uses **common** memory via **`read_value_at`** only.
+
+**References:** `pico/busloop.c`, `pico/a2bus_rp2350.pio` (`irq set 0` / `mov osr,rxfifo[y]` / `irq clear 0`), `pico/a2bus.h`, `pico/uthernet2.c` (`write_common_register`).
 
 ---
 
@@ -78,7 +86,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **UART symptom:** Only one `[u2] mode=0x03…` line then “Device not found” is **normal** for `U2_DEBUGF` volume — the RTR probe uses **ADDRHI/ADDRLO + DATA** reads, which did not log. **Debug** builds also print **`RTR data read addr=0x0017 -> …`** / **`0x0018`** (first 8 such reads per boot) so captures show whether the 6502 reached the probe and got **0x07** / **0xD0**. If those lines never appear, bus cycles are not completing to the DATA port; if values are wrong, XOR fails and `eth_init` returns carry.
 
-**Reconciling UART with the screen:** In stock **`ip65/drivers/w5100.s`**, the **only** **`sec` / `rts`** in **`init`** is the **RTR XOR** failure; after OPEN, **`init` ends with `clc` / `rts`**. **`ip65_init`** only branches to the device-failure path on **`eth_init` carry**; if **`eth_init` clears carry**, **`ip65_init` always ends with `clc` / `rts`** (it unconditionally **`clc`** after `timer_init` / `arp_init` / `ip_init`). So a capture that shows **correct RTR** (`0x0017`/`0x0018`) for the **same** telnet65 attempt **contradicts** a stock **`“Device not found”`** from **`ip65_init`** unless the Apple disk is **not** stock ip65, there is **carry corruption** (extraordinary), or the on-screen line is being **misattributed** to the same UART window.
+**Reconciling UART with the screen:** In stock **`ip65/drivers/w5100.s`**, the **only** **`sec` / `rts`** in **`init`** is the **RTR XOR** failure; after OPEN, **`init` ends with `clc` / `rts`**. **`ip65_init`** only branches to the device-failure path on **`eth_init` carry**; if **`eth_init` clears carry**, **`ip65_init` always ends with `clc` / `rts`** (it unconditionally **`clc`** after `timer_init` / `arp_init` / `ip_init`). So a capture that shows **correct RTR** (`0x0017`/`0x0018`) for the **same** telnet65 attempt **contradicts** a stock **`“Device not found”`** from **`ip65_init`** unless the Apple disk is **not** stock ip65, there is **carry corruption** (extraordinary), or the on-screen line is being **misattributed** to the same UART window. **MegaFlash policy:** do **not** patch ip65 for Uthernet II — fix behaviour in **`pico/`** emulation only so stock ip65 remains the reference.
 
 **UART deep trace (Debug):** On **`MR=0x03`**, firmware arms **48** DATA-read trace events. **`printf` must not run inside `U2_HandleBusAccess`** (same for socket **CR** handling): blocking UART stalls the bus loop so the Apple can see wrong or incomplete cycles; only **`[u2m]`**-style **queue + `U2_MonPollFlush`** from **`U2_Poll`** is safe. **`[u2]`** mode and DATA lines use **`U2_MonQueueModeLine` / `U2_MonDataReadTrace`**; **`busloop.c`** polls **`U2_Poll`** every **32** Uthernet accesses (was 500) so the ring drains. Monitor ring/flush sizes were increased (**256** / **128**).
 
@@ -124,6 +132,64 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ---
 
+## 1h. WGET65V — forked `wget65` with on-screen W5100 handshake trace (`tools/`)
+
+**What:** A local fork at **`tools/wget65-verbose/`** (upstream **`ip65/apps/wget65.c`**, **`w5100.c`**, **`w5100_http.c`**, **`linenoise`**, plus **`wget65_verbose_regs.c`**) logs each Ethernet bring-up step to the **Apple II screen**: **`ip65_init`** (stock **`w5100.s`** RTR XOR inside), **`w5100_init`**, **`dhcp_init`** (if not DNS-offload), **`w5100_config`**. After each step it prints MR, RTR0/RTR1 with the same **XOR chain** as **`w5100.s`** (`$D7 ^ RTR0 ^ RTR1` should be `$00`), RMSR, and PTIMER (DNS offload hint).
+
+**Why:** Complements UART **`[u2]`** traces on the Pico: operators can capture **what the 6502 sees** on the bus after **`ip65_init`** without a serial cable.
+
+**What we did:** Switched **`#include "../inc/ip65.h"`** to **`<ip65.h>`** with **`-I$(IP65_ROOT)/inc`** so the fork builds standalone next to an unmodified **`ip65`** checkout. **`wget65.c`** enables **`videomode(VIDEOMODE_80COL)`** on **`__APPLE2__`** (same pattern as **`hfs65.c`**) so verbose lines fit on screen. **`eth_init`** is fixed to **slot 4** (**`$C0C4`**) via **`WGET65V_ETHER_SLOT`**; **`ethernet.slot`** is not read (stock **`wget65`** still uses it). **`build-flashval-disk.sh`** adds **`WGET65V`**, **`WGET65V.SYSTEM`**, launcher **`WGET65V`**, and **`WGET65V.DOC`** when **`tools/wget65-verbose/wget65v.bin`** exists (default **`WGET65V_BIN`** = **`../wget65-verbose/wget65v.bin`** from **`flash-validate/`**) and **`cl65 --print-target-path`** yields **`apple2enh/util/loader.system`**; otherwise only **`WGET65V.DOC`** is added. **`wget65v.bin`** is **gitignored**. Top-level **`ip65/`** clone (build dependency) is **gitignored**.
+
+**What we didn’t do:** No edits to upstream **`ip65`** in-repo (policy §1c).
+
+**References:** `tools/wget65-verbose/README.md`, `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`.
+
+**WGET65V screenshot paradox:** `ip65_init` fails (**`ip65_error` = `$85`** = device failure) while the **post-failure** register dump shows **MR=`$03`**, **RTR XOR chain = `$00`**, **RMSR=`$06`** — i.e. values that **would** satisfy **`w5100.s`** if read **then**. That is **consistent** with §1c §1d: the **probe** inside **`eth_init`** may see **stale or wrong** bytes on the **6502** bus while **`read_value()`** / a **later** C snapshot matches emulation. **WGET65V** prints **`ip65_error`** and an on-screen note after Step A fails so the dump is not misread as “chip OK but ip65 wrong.”
+
+---
+
+## 1i. AppleWin Uthernet II vs MegaFlash (timing and handshake)
+
+**What:** Use **AppleWin** as a **behavioural** reference for W5100/Uthernet II (registers, RTR defaults, port layout), not as a **bus-timing** simulator.
+
+**Why (AppleWin handshake):** In **`Uthernet2::IO_C0`** (`AppleWin` `source/Uthernet2.cpp`), the card is invoked when the emulated CPU performs the slot I/O cycle. The return value is computed **in the same emulated step** — no separate listener FIFO, no PIO prefetch, no IRQ 0 ordering window.
+
+- **Reads:** `BYTE res = write ? 0 : MemReadFloatingBus(nCycles);` then **`switch (loc)`** overwrites **`res`** with **MR / address high / address low / data** (`readValue()`, etc.). **`MemReadFloatingBus`** (`source/Memory.cpp`) supplies the Apple IIe **floating-bus** pattern for realism; the **final** byte the 6502 “sees” for a successful decode is still the emulated W5100 value, not an analog of Pico setup/hold.
+- **Port index:** `loc = address & U2_C0X_MASK` (**`0x03`**) — only **A0/A1** of the slot I/O address select which of the four ports (mode, addr hi, addr lo, data) is used. That matches **`U2_HandleBusAccess`**, which uses **`busdata & U2_C0X_MASK`** (`pico/w5100_regs.h`).
+
+**What differs on MegaFlash (hardware):**
+
+1. **Same PIO read path for storage and U2:** On RP2350, **one** `a2bus` state machine serves **all** slot nibbles; **`y` = A3:A2** only picks **which 32‑bit `rxf_putget` word** is shifted out. The **`wait` / side-delay / `out pins, 8`** sequence that positions data vs **PHI0** / **nDEVSEL** does **not** branch on “U2 vs MegaFlash.” So if **$C0C0–$C0C3** reads are reliably correct on the bench, there is **no separate “U2 Φ2”** that ought to differ from **storage Φ2** — any **electrical** setup/hold problem would likely hurt **both** chunks (or the whole card), not only **$C0C4–$C0C7**.
+
+2. **Where U2 *does* differ — software pipeline, not a second bus schedule:** Before **`UpdateMegaFlashRegisters(1, …)`**, the U2 branch runs **`U2_HandleBusAccess`**, **`U2_PeekDataPort`**, IRQ 0 wait, etc. (§1d, §1f). That is **extra CPU work and ordering** between “this bus cycle was sampled” and “chunk 1 written for the **next** SM pull.” AppleWin has **none** of that. Symptoms like **RTR XOR fails** while internal state looks right point here or at **stale prefetched `r[7]`**, not at “U2 needs a different oscilloscope alignment than ProDOS block reads” **unless** storage reads are also flaky on the same hardware.
+
+3. **Address range:** **`busloop.c`** enters U2 only for **`addr` 4–7** (`$C0C4–$C0C7`). On real Uthernet II, the W5100 front-end often decodes **only A0/A1**, so **`$C0C8`** (nibble **8**) is the **same logical port** as **`$C0C4`** (mode) — see AppleWin issue/PR discussion around **`IO_C0`** and **`0x03`**. MegaFlash **reserves** `$C0C8–$C0CF` for future **ACIA** (§1b), so those nibbles are **not** U2 mirrors here; behaviour can **diverge** from AppleWin if any code touches mirrored slot addresses.
+4. **PIO chunk = A3:A2:** SM1 selects **`rxf_putget[y]`** with **`y` from A3:A2**. Nibbles **8–B** and **C–F** map to **chunks 2–3**, not chunk 1. Full AppleWin-style mirroring would require **routing** more nibbles through **`U2_HandleBusAccess`** **and** either **replicating** chunk‑1 words into chunks **2–3** on each U2 update or **changing** the PIO address→chunk mapping — not a one-line change.
+
+**Takeaway:** AppleWin confirms **what** the W5100 stack expects to read/write; it does **not** model **when** the data bus is valid on real metal. **Φ2 / scope work** is for **validating the card’s analog timing** if reads are suspect **across** addresses — not because U2 is on a **different** physical read schedule than **$C0C0–$C0C3**. Prefer debugging U2-specific issues on the **pipeline** (chunk 1, IRQ 0, **`U2_PeekDataPort`**, handler cost). For decode parity, decide product policy on **`$C0C8+`** mirroring vs ACIA reservation.
+
+**References:** [AppleWin `Uthernet2.cpp`](https://github.com/AppleWin/AppleWin/blob/master/source/Uthernet2.cpp) (`IO_C0`, `Reset` / RTR defaults), [AppleWin `Memory.cpp`](https://github.com/AppleWin/AppleWin/blob/master/source/Memory.cpp) (`MemReadFloatingBus`); `pico/busloop.c`, `pico/uthernet2.c`, `pico/a2bus_rp2350.pio`, §1b §1d §1f.
+
+---
+
+## 1j. ip65 DHCP over MACRAW — align station MAC with CYW43 (wget65 / telnet65 “stuck obtaining IP”)
+
+**What:** After **`eth_init`** succeeds, **`dhcp_init()`** (ip65) sends **DHCP DISCOVER/REQUEST** as **raw Ethernet** via **W5100 MACRAW** (socket 0 OPEN). MegaFlash **`U2_Net_SendMacraw`** passes the frame to **`netif->linkoutput`** (`cyw43_send_ethernet`) after aligning **MAC** fields with the **CYW43 STA** (below).
+
+**Why:** **`u2_reset()`** defaulted **SHAR** to the same **WIZnet OUI** as stock **`w5100.s`** (`00:08:DC:…`). **Ethernet source MAC** in frames from the II therefore **did not** match the **CYW43 STA** **`netif->hwaddr`**. Many APs only accept **802.11** frames whose **Ethernet SA** is the **associated STA MAC**. Separately, **BOOTP/DHCP** carries a **client hardware address** (**`chaddr`**, bytes **28–33** of the BOOTP message inside the **UDP** payload). Servers often **unicast** **OFFER/ACK** using **`chaddr`**; if that field still held the **WIZnet** MAC while we only fixed **Ethernet SA**, the **UDP** payload could be **inconsistent** and **checksum-invalid** after **`chaddr`** changes — leading to **DHCP timeout** even when **DISCOVER** left the **WiFi** side.
+
+**What we did:** On **`U2_Net_OpenMacraw(0)`**, copy **`netif_default->hwaddr`** into **`u2_memory[W5100_SHAR0..5]`** via **`U2_SetStationMacFromBytes()`** so ip65 reads **SHAR** consistent with the **radio**. On **every** **`U2_Net_SendMacraw`**: (1) for **IPv4** **UDP** **sport 68** / **dport 67**, **BOOTREQUEST** (**op** **=** **1**), patch **`chaddr`** to **`netif->hwaddr`**, **zero** the **UDP** checksum field, recompute with **`lwip`** **`inet_chksum_pseudo`** over the **UDP** datagram (same **IPv4** **src/dst** as in the frame); (2) overwrite **Ethernet** **SA** (bytes **6–11**) with **`netif->hwaddr`**; (3) call **`U2_SetStationMacFromBytes`** again so emulated **SHAR** stays aligned if **`OPEN`** ran before **`netif`** was ready.
+
+**What we didn’t do:** No edits to upstream **ip65**.
+
+**STA netif vs `netif_default` / `netif_list` (DHCP + TCP/80):** In **`cyw43_lwip`**, **`netif_set_default(n)`** runs for **each** interface; the **last** one initialized wins. If **AP** (**`w1`**) is up, **`netif_default`** can point at **AP**, while **station** traffic must use **`cyw43_state.netif[CYW43_ITF_STA]`** (**`w0`**). **`cyw43_netif_output`** derives **`itf`** from **`netif->name[1] - '0'`**, so sending via the wrong **`struct netif`** transmits on the **wrong** CYW43 interface. **`U2_Net_SendMacraw`**, **SHAR** alignment, and the **MACRAW** **`input`** hook must use the **STA** netif **explicitly**, not **`netif_default`** or **`netif_list`** (head may not be STA). **TCP CONNECT:** **`tcp_bind`** to **Sn_PORT** before **`tcp_connect`** so the emulated client matches **W5100** local-port semantics.
+
+**Packet tracing (not tcpdump):** There is **no** pcap/tcpdump on the Pico itself without capturing to flash/USB. **Off-device:** mirror the AP port or use a hub/tap and **`tcpdump`/`wireshark`** on a PC. **SDK (unused by default):** **`CYW43_NETUTILS`** + **`cyw43_state.trace_flags`** (**`CYW43_TRACE_ETH_TX`/`RX`**) in **`cyw43_lwip.c`** — requires rebuilding **`cyw43-driver`** with **`CYW43_NETUTILS`**. **MegaFlash UART:** **`U2_ETH_HEADER_TRACE=1`** (**CMake** cache or **`U2_ETH_HEADER_TRACE=1 ./build-debug-both.sh`**) wraps **STA** **`input`**/**`linkoutput`** and prints **`[u2eth]`** **TX**/**RX** plus **first 64 bytes** hex per frame (**Ethernet + start of IPv4/TCP/UDP**); **`U2_Net_Poll`** installs the chain once **CYW43** is initialized (**before** **MACRAW** **OPEN** is the normal order).
+
+**References:** `pico/uthernet2.c` (`U2_SetStationMacFromBytes`, `U2_Net_ConnectTcpEx` + **Sn_PORT**), `pico/uthernet2_net.cpp` (`u2_cyw43_sta_netif`, `U2_Net_OpenMacraw` / `SendMacraw` / `Close`, `u2_macraw_patch_dhcp_bootp_chaddr`), `pico/uthernet2.h`, `lwip` `inet_chksum_pseudo`, `cyw43_lwip.c` (`netif_set_default`, `cyw43_netif_output`).
+
+---
+
 ## 2. Uthernet II read-back returning 0 (Mode Register test)
 
 **Symptom:** After writing $80 then $03 to $C0C4 (Mode Register), a read from $C0C4 returned $00 instead of $03, as if the Uthernet II had not received the write.
@@ -148,7 +214,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ## 2b. C0C4 access seen at Pico pins but firmware does not respond (no LED, no read-back)
 
-**Symptom:** Logic analyzer shows the C0C4 access (e.g. address/data) at the Pico, but the firmware never sees it: the C0C4 diagnostic LED does not turn on, and Uthernet II does not respond.
+**Symptom:** Logic analyzer shows the C0C4 access (e.g. address/data) at the Pico, but the firmware never sees it: Uthernet II does not respond (no U2 handler activity).
 
 **Root cause:** The bus loop only receives a cycle when the **PIO** captures it and pushes to the FIFO that the CPU reads. On **RP2040**, all four state machines (SM0–SM3) run the same program; when nDEVSEL goes low they all do `in pins` + `push noblock`, so each SM’s TX FIFO gets the bus data. The CPU calls `GetAppleBusBlocking()` which reads **only SM0’s** FIFO (`SM_LISTENER` = 0). So the CPU sees every cycle that the PIO captures. On **RP2350**, a dedicated listener SM pushes every captured cycle to its FIFO, which the CPU reads. In both cases, the PIO only leaves its wait loop and runs `in pins` + `push` when **nDEVSEL (GPIO 20) goes low**. So:
 
@@ -447,6 +513,47 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ---
 
+## 7i. Pico W: WiFi LED off + Control Panel Test WiFi hang when not in `core0Loop()`
+
+**Symptom:** CYW43 WiFi LED never comes on; **Test WiFi** from the Control Panel appears to hang (until timeout).
+
+**Root cause:** On Pico W, **`core0Loop()`** (NTP, **`NetworkPump_PollOnce()`**, **`multicore_fifo`** handling for **`IPCCMD_WIFITEST`** and **`IPCCMD_TFTP`**) runs only when **`IsAppleConnected()`** is true at boot, or after a later 2 s poll detects the Apple. If **`appleConnected`** is false, the firmware takes the **USB / `UserTerminal()`** path instead. That path **never** popped the FIFO or polled lwIP/CYW43, so **`DoTestWifi()`** on core 1 pushed an IPC message and spun on **`testResult.testCompleted`** while core 0 never ran **`TestWifi()`**. Same starvation for TFTP IPC. A plain **`sleep_ms(1000)`** when USB was not connected also left the stack idle for up to one second between polls.
+
+**What we did:** Factor **`PicoW_ServiceCore0IpcAndNetwork(fifo_timeout_us)`** (same order as before: optional FIFO wait, then **`NetworkPump_PollOnce()`**, **`U2_MonPollFlush()`**, then dispatch). **`core0Loop()`** inner loop calls it with **50 ms** FIFO timeout. The Pico W USB-terminal **`while (true)`** calls it with **0** each iteration (non-blocking) and replaces the 1 s idle sleep with **1 ms** sleeps so **`cyw43_arch_poll`** runs continuously during idle.
+
+**What we didn’t do:** **`UserTerminal()`** can still block core 0 for a long time; Test WiFi from the Apple while an interactive USB session is active may still stall until the terminal returns. Unusual vs Apple-only + no USB.
+
+**References:** `pico/main.c` (`PicoW_ServiceCore0IpcAndNetwork`, `core0Loop`, Pico W branch), `pico/cmdhandler.c` (`DoTestWifi`, `multicore_fifo_push_timeout_us`).
+
+---
+
+## 7j. Release: USB connected ↔ Apple II bus inactive (Debug build exempt)
+
+**Requirement:** In **Release** (`NDEBUG`), when a **USB host** is connected, the Pico must **not** emulate/respond on the Apple II bus; when the **Apple II bus** is in use (Apple connected), **USB serial terminal** must be **disabled**. **Debug** builds (no `NDEBUG`) keep the previous behaviour: UART + USB + bus can all be exercised for development.
+
+**What we did:**
+- **`g_release_bus_emulation_enabled`** = `IsAppleConnected() && !stdio_usb_connected()` (Release only). **`ReleaseInitBusUsbGate(apple_at_boot)`** before **`multicore_launch_core1`**; **`ReleaseUpdateBusUsbGate()`** from core 0 (main loop and **`core0Loop`** inner wait) — refreshes on USB edge or every 250 ms for PHI0 reconnect.
+- **`a2bus.h`**: **`GetAppleBusBlocking()`** in Release polls **`pio_sm_get_rx_fifo_level`** when emulation is enabled so the gate can take effect without waiting for a bus cycle; when emulation is off, spins on **`g_release_bus_emulation_enabled`** without reading the FIFO.
+- **`main.c`**: **`stdio_usb_init()`** / **`InitPicoLed()`** run **before** **`core0Loop()`** on Pico W so **`stdio_usb_connected()`** is meaningful in the network loop. **`UserTerminal()`** only if **`stdio_usb_connected() && !IsAppleConnected()`** (Release).
+
+**Trade-offs:** If **both** USB and Apple are connected, both gate conditions force **bus off** and **terminal off** until one is unplugged. Hot-unplug detection can lag up to **250 ms** for Apple-only changes. Release **idle** with bus enabled uses a **busy** wait on empty FIFO (slightly higher CPU than **`pio_sm_get_blocking`**) so USB can preempt without a slot access.
+
+**References:** `pico/misc.c`, `pico/misc.h`, `pico/a2bus.h`, `pico/main.c`.
+
+---
+
+## 7k. WiFi dead / Test WiFi timeout: double `cyw43_arch_init` after `InitPicoLed`
+
+**Symptom:** CYW43 WiFi LED never comes on; Control Panel Test WiFi runs until **timeout**; NTP/TFTP similarly broken.
+
+**Root cause:** **`InitPicoLed()`** (`misc.c`) calls **`cyw43_arch_init()`** so the Pico W LED can use **`cyw43_arch_gpio_put`**. Later, **`CUDPTask::InitCyw43()`** and **`NetworkPump::Init()`** called **`cyw43_arch_init_with_country()`**, which (in pico-sdk) sets country and calls **`cyw43_arch_init()`** again. **`cyw43_arch_init()`** always invokes **`cyw43_driver_init()`**; a second init is not idempotent. On failure the SDK **deinitializes** (`cyw43_arch_deinit()` in `cyw43_arch_poll.c`), leaving the stack torn down after the first successful init.
+
+**What we did:** Before calling **`cyw43_arch_init_with_country()`**, if **`cyw43_is_initialized(&cyw43_state)`** (already inited by `InitPicoLed`), only call **`cyw43_arch_enable_sta_mode()`** and turn on the WL LED — **no** second init.
+
+**References:** `pico/udptask.cpp` (`InitCyw43`), `pico/network_pump.cpp` (`NetworkPump::Init`), `pico/misc.c` (`InitPicoLed`), pico-sdk `src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c`, `cyw43_arch_poll.c` (`cyw43_arch_init` / `cyw43_driver_init`).
+
+---
+
 ## 8. GPIO pull state (A0–A3, nDEVSEL, data bus)
 
 | Signal    | GPIO | Pull-up | Pull-down | Notes |
@@ -462,15 +569,11 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ---
 
-## 9. C0C4 diagnostic LED
+## 9. C0C4 diagnostic LED (removed)
 
-**Purpose:** Confirm whether the firmware ever “sees” a $C0C4 access (U2 Mode Register).
+**Historical:** For a time, `busloop.c` turned on the activity LED (ACT_LED_PIN) for 1 s on any **`$C0C4`** access to confirm the firmware saw U2 Mode Register traffic. **Removed** to keep the core1 bus loop lean (no `pico/time` / GPIO on the U2 path).
 
-**Implementation:** In `busloop.c`, when `addr == U2_C0X_OFFSET` (4) inside the U2 block, turn on the activity LED (ACT_LED_PIN) and set a 1 s timeout. At the top of the loop, if the timeout has passed, turn the LED off. Uses `pico/time.h` (`make_timeout_time_ms`, `time_reached`) so the bus loop is never blocked.
-
-**Interpretation:** If the LED never turns on when you access C0C4, the bus loop never receives a cycle with addr 4 — i.e. the PIO never pushed that cycle (e.g. nDEVSEL did not go low). If the LED turns on, the CPU is seeing C0C4 and the remaining issue is response/read-back (e.g. chunk, timing).
-
-**References:** `pico/busloop.c`, `pico/defines.h` (ACT_LED_PIN).
+**Debugging:** Use UART **`[u2]`** / **`[u2m]`** (Debug), logic analyzer on **nDEVSEL** + address, or §2b — **not** the LED.
 
 ---
 
@@ -526,11 +629,116 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 ---
 
+## 10f. Telnet65 logical walkthrough and follow-up fixes
+
+**What:** Perform a code walkthrough of Uthernet II emulation and logically test a Telnet65 flow (ip65 init/DHCP via MACRAW, then TCP connect/send/recv) to identify likely regressions before changing firmware.
+
+**Why (findings):**
+
+1. **TX path empty-buffer bug risk:** `send_data()` treats `TX_WR == TX_RD` as full buffer because it uses `if (data_len <= 0) data_len += buf_size;` (should only wrap on negative). That can cause a SEND on empty TX to transmit stale full-buffer data.
+2. **pbuf chain handling risk (UDP/TCP RX):** U2 RX paths use `p->payload` with `p->tot_len` directly, but lwIP pbufs can be chained. For chained pbufs, this can read past first-segment payload or copy invalid data.
+3. **RECV semantics are intentionally lossy:** SN_CR=RECV forces `RX_RD = sn_rx_wr` (discard unread). This was added for ip65 progress, but it can drop unread bytes if host software does partial reads or if multiple frames queue up between polls.
+4. **Potential nested lwIP lock in UDP open:** `U2_Net_OpenUdp()` wraps `CreateUdpPcb()` with `cyw43_arch_lwip_begin/end`, while `CreateUdpPcb()` already takes the same lock. This is a re-entrancy/lock-order hazard depending on SDK lock behavior.
+
+**What we did:**
+
+- Fixed TX empty-send wrap in `send_data()` by wrapping only when `wr-rd` is negative (not zero), so `TX_WR == TX_RD` stays empty.
+- Flattened UDP/TCP lwIP pbufs with `pbuf_copy_partial()` before calling `push_rx_cb`, so chained pbufs are handled safely.
+- Removed the outer `cyw43_arch_lwip_begin/end` in `U2_Net_OpenUdp()`; `CreateUdpPcb()` already owns that lock.
+- Rebuilt both release targets with `./pico/build-both.sh` (RP2040 + RP2350) successfully.
+
+**Takeaway:** Telnet65-critical send/receive paths now better match lwIP and W5100 expectations, reducing risk of stale TX sends and malformed RX data under chained-pbuf traffic.
+
+**References:** `pico/uthernet2.c` (`send_data`, `SN_CR_RECV`, `u2_push_rx`), `pico/uthernet2_net.cpp` (`OnUdpRecvPbuf`, `u2_tcp_recv`, `U2_Net_OpenUdp`), `pico/network_pump.cpp` (`CreateUdpPcb`).
+
+---
+
+## 10g. Other ip65 tools walkthrough (`date65`, `tweet65`, `hfs65`, `wget65`)
+
+**What:** Review the remaining ip65 Apple II tools for compatibility with current Uthernet II emulation, using each tool's socket behavior.
+
+**Scope mapped from ip65 apps:**
+
+- `date65`: `ip65_init` + DHCP + DNS + SNTP (primarily UDP paths in ip65 stack).
+- `tweet65`: `ip65_init` + DHCP + HTTP-trigger path (TCP via ip65 tcp library).
+- `hfs65`: `ip65_init` + DHCP + HTTP server (`httpd_start`, TCP listen/accept/send).
+- `wget65`: custom W5100 shared-access client (`apps/w5100.c`, `apps/w5100_http.c`) using socket 1 with partial `receive_commit()` / `send_commit()` patterns.
+
+**Why (findings):**
+
+1. **High: RECV command is too aggressive for shared-access clients (notably `wget65`)**  
+   In emulation, SN_CR=RECV forces `RX_RD = sn_rx_wr` (discard all unread RX).  
+   ip65 `apps/w5100.c` expects W5100 semantics where host-updated RX_RD is honored and only committed bytes are consumed. `wget65` often commits partial chunks (`w5100_receive_commit(rcv)`), so unread tail bytes can be dropped.
+
+2. **High: TCP RX overflow can silently drop data while still ACKing lwIP input**  
+   `u2_push_rx()` drops frame when W5100 RX ring is full, but `u2_tcp_recv()` still calls `tcp_recved()` unconditionally after push attempt. This can acknowledge bytes to peer even when not delivered to emulated W5100 memory.  
+   Risk is highest for bulk-transfer tools (`wget65`, `hfs65` large responses), lower for interactive `telnet65`.
+
+3. **Medium: SEND path caps one command to 2048 bytes**  
+   `send_data()` copies into local fixed 2048-byte buffer for TCP/UDP sends.  
+   With ip65 shared-access (`w5100.c`) and socket memory layouts that allow >2KB queued data per SEND, payload may be truncated per SEND command.
+
+4. **Low: date65 path remains comparatively robust**  
+   `date65` relies mostly on DHCP/DNS/SNTP (UDP + MACRAW init path), which align with current known-good telnet init path and are less exposed to partial RECV semantics.
+
+**Takeaway:**  
+`date65` is likely to behave best; `tweet65`/`hfs65` are moderate risk under heavier TCP payloads; `wget65` is highest risk because it depends on precise W5100 shared-access RECV/TX pointer semantics that current emulation partially shortcuts.
+
+**References:** `ip65/apps/Makefile`, `ip65/apps/date65.c`, `ip65/apps/tweet65.c`, `ip65/apps/hfs65.c`, `ip65/apps/wget65.c`, `ip65/apps/w5100.c`, `pico/uthernet2.c`, `pico/uthernet2_net.cpp`.
+
+---
+
+## 10h. `wget65`-priority follow-up fixes
+
+**What:** Apply targeted firmware changes for `wget65` shared-access compatibility after the app walkthrough.
+
+**Why / root cause:**
+
+- `wget65` commits partial RX chunks through `w5100_receive_commit(rcv)` and expects unread bytes to remain in the socket ring. Forcing `RX_RD -> sn_rx_wr` on every RECV loses unread tail data.
+- `wget65` can queue larger TCP payload slices than 2 KiB before a SEND command. A single-shot 2048-byte staging buffer truncates one SEND command.
+
+**What we did:**
+
+- In `pico/uthernet2.c`, SN_CR=RECV no longer rewrites RX_RD to `sn_rx_wr`; RECV now acknowledges without discarding unread data, matching W5100 host-managed RX_RD semantics.
+- In `pico/uthernet2.c`, TCP SEND path now drains the full queued TX range in chunks (1 KiB loop) instead of truncating to a single 2 KiB buffer.
+- Verified by rebuilding both firmware targets with `./pico/build-both.sh` (RP2040 + RP2350), success.
+
+**Takeaway:** These two changes directly target `wget65`'s shared-access behavior and should substantially reduce body truncation/drop risk compared with the previous telnet-oriented RECV shortcut.
+
+**References:** `pico/uthernet2.c` (`send_data`, `W5100_SN_CR_RECV`), `ip65/apps/w5100.c` (`w5100_receive_commit`, `w5100_send_commit`).
+
+---
+
+## 10i. TCP RX backpressure fix (ack only accepted bytes)
+
+**What:** Fix the remaining `wget65` reliability risk where TCP input could be acknowledged to lwIP even when not accepted by emulated W5100 RX.
+
+**Why:**  
+Previously `u2_tcp_recv()` called `tcp_recved(tpcb, p->tot_len)` unconditionally after attempting RX push. If emulated RX ring was full, data could be dropped while still ACKed to peer.
+
+**What we did:**
+
+- Changed U2 RX callback contract (`u2_push_rx_fn`) to return **accepted payload bytes**.
+- Updated `u2_push_rx()` in `uthernet2.c`:
+  - UDP remains atomic (all-or-drop datagram).
+  - TCP now allows partial enqueue up to current free RX space and returns accepted length.
+- Updated `u2_tcp_recv()` in `uthernet2_net.cpp` to call `tcp_recved()` only for bytes actually accepted into emulated RX.
+- Rebuilt both release targets with `./pico/build-both.sh`; no lint errors in edited files.
+
+**Takeaway:**  
+TCP flow control now reflects emulated RX capacity, preventing “acknowledged-but-lost” bytes under sustained receive pressure (`wget65`/`hfs65` bulk transfers).
+
+**References:** `pico/uthernet2_net.h`, `pico/uthernet2.c`, `pico/uthernet2_net.cpp`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
 | U2 address range | `defines.h`, `busloop.c` | C0x4–C0x7 only; no GPIO slot select |
+| ip65 DHCP / MACRAW MAC | §1j, `uthernet2_net.cpp` | **STA netif** (`CYW43_ITF_STA`) for TX/RX hook/SA; **SHAR** + Ethernet **SA** + DHCP **`chaddr`** + **UDP** csum; **`tcp_bind`**(**Sn_PORT**) before **CONNECT** |
+| AppleWin vs Pico U2 | §1i, AppleWin `Uthernet2.cpp` `IO_C0` / `MemReadFloatingBus` | AppleWin: **synchronous** slot I/O in one emulated step. Pico: **FIFO + PIO prefetch + IRQ0** (§1d §1f). AppleWin port = **`addr & 0x03`** on full slot page; MegaFlash U2 path only **`addr` 4–7**; **`$C0C8+`** not mirrored (ACIA reservation, §1b) — PIO **chunk = A3:A2** |
 | ip65 W5100 probe + SHAR | `uthernet2.c` §`u2_reset`, §1c | RTR $07/$D0 + RMSR/TMSR $06 for `w5100.s` probe; default SHAR = `00:08:DC:A2:A2:A2` (matches `w5100.s`) so RMSR=$06 short path does not leave `cfg_mac` all-zero |
 | Two DATA reads both $07 | §1f, `uthernet2.c` `auto_increment` | Pointer only advances when **MR** has **AI** ($02); **$03** = IND+AI; **$00** after reset or **$01** → no increment, second read still RTR0 |
 | First `$C0C7` wrong then RTR OK | §1f, `busloop.c`, `U2_PeekDataPort` | RP2350 PIO prefetches next read’s byte; **`r[7]`** must hold **`U2_PeekDataPort()`** after each U2 cycle so first DATA read after addr setup isn’t stale |
@@ -555,8 +763,11 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
 | Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
+| Pico W USB path + IPC | `main.c` §7i | When **`!appleConnected`** at boot, **`core0Loop()`** is skipped; **`PicoW_ServiceCore0IpcAndNetwork(0)`** must still run so Test WiFi / TFTP FIFO + **`NetworkPump_PollOnce`** are serviced |
+| Release USB vs Apple bus | `main.c`, `misc.c`, `a2bus.h` §7j | **`NDEBUG`**: bus emulation only when Apple **and** no USB host; USB terminal only when USB **and** no Apple; Debug builds exempt |
+| CYW43 init + LED | `misc.c`, `udptask.cpp`, `network_pump.cpp` §7k | **`InitPicoLed`** calls **`cyw43_arch_init()`**; **`InitCyw43()`** / **`NetworkPump::Init()`** must not call **`cyw43_arch_init_*`** again — use **`cyw43_is_initialized`** and only **`cyw43_arch_enable_sta_mode()`** |
 | Release testing | §7b, §7c | Test Release build (NTP/TFTP/WiFi) before shipping; use pre-release checklist (§7c) to avoid Debug-only validation |
-| C0C4 diagnostic | `busloop.c` | LED on 1 s on any $C0C4 access; non-blocking |
+| C0C4 diagnostic LED | §9 | **Removed**; was 1 s LED on `$C0C4` — use UART / LA / §2b |
 | nDEVSEL sense | Both PIO files | Active-low (trigger on low); inverted sense was tried and reverted |
 | TFTP/UDP performance | `udptask.h`, `udptask.cpp` | HEARTBEAT_PERIOD 50→10 ms; 50 ms added latency per packet; blocking flash erase also stalls loop (see §13) |
 | TFTP OOM panic at start | §13d, `misc.c`, `network_pump.cpp`, `ramdisk.c` | Panic is **pico_malloc** (`new` for ~2.5 KiB); **CP “RAM disk off”** does not free **`ramdisk_data[]`**; **`DebugPrintHeapState("NETPUMP: TFTP pre-new")`** before TFTP `new` |
@@ -565,19 +776,24 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 | TFTP upload block count UI | `tftptxtask.cpp`, `tftprxtask.cpp` | Set `tftp_state.tsize` (TX) / WiFi status (RX) in `EvtStart()`; pump path does not call `Run()` (§7h) |
 | CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
 | Flash JEDEC at boot | `flash.c` `ChipIDToCapacity` | §16: capacity from type+capacity bytes only; manufacturer byte ignored |
-| Flash validate (Applesoft) | `tools/flash-validate/` | §17-18: `FLASHVAL.BAS` baseline + `FLASHSOAK.BAS` overnight CSV/TFTP loop; `build-flashval-disk.sh` → `FLASHVALID.po` |
+| Flash validate (Applesoft + C soak) | `tools/flash-validate/` | §17-18 + §19 + §20 + §21 + §22: `FLASHVAL.BAS` baseline + `FLASHSOAK.BAS` overnight CSV/TFTP + `TFTPUTIL.BAS` (80-col startup, auto slot detect preferring 4, host FQDN/IP prompt + `TFTPUTIL.CFG` default persistence, volume list by unit number + name before selection); `TFTPUTIL.TXT` shipped to disk as `TFTPUTIL.DOC`; `FLASHSOAK/flashsoak.c` + `Makefile` (cc65 → `flashsoak.bin`); `build-flashval-disk.sh` → `FLASHVALID.po` |
+| WGET65V on-screen ip65 trace | `tools/wget65-verbose/`, §1h | Fork of `wget65` + register dumps; **`eth_init`** fixed **slot 4** (`$C0C4`); optional **`WGET65V`** on **`FLASHVALID.po`** when **`wget65v.bin`** built locally |
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
 | lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
 | Uthernet II lwIP | `uthernet2_net.{h,cpp}` | Pump: `AddSession`, `CreateUdpPcb`, `PollOnce`; TCP: `U2TcpArg` + `u2_tcp_*` callbacks (§14.10b) |
+| Telnet65 walkthrough + fixes | §10f, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp` | Implemented: TX wrap fix (`<0`), UDP/TCP chained pbuf flattening (`pbuf_copy_partial`), removed duplicate lwIP lock in `U2_Net_OpenUdp`; RECV unread-drop behavior remains intentional for ip65 compatibility |
+| Other ip65 tools walkthrough | §10g, `ip65/apps/*`, `ip65/apps/w5100.c`, `uthernet2*.{c,cpp}` | Risks: RECV discards unread bytes (shared-access mismatch), TCP RX overflow can drop+ACK, SEND chunk currently capped at 2048; `wget65` highest risk |
+| `wget65` priority fixes | §10h, `uthernet2.c`, `ip65/apps/w5100.c` | SN_CR=RECV no longer forces `RX_RD->WR`; TCP SEND drains entire queued TX data in chunks (not single 2 KiB cap) |
+| TCP RX backpressure | §10i, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | U2 RX callback returns accepted bytes; TCP `tcp_recved()` now acknowledges only accepted payload (UDP unchanged/all-or-drop) |
 | Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |
 
 ---
 
 ## 12. Open / unresolved: C0C4 not seen by firmware
 
-**Observed:** With a logic analyzer, A0–A4 (and thus the address) are confirmed at the Pico when C0C4 is accessed. With nDEVSEL pull-up enabled, the Pico still does not recognize the access (no LED, no U2 response).
+**Observed:** With a logic analyzer, A0–A4 (and thus the address) are confirmed at the Pico when C0C4 is accessed. With nDEVSEL pull-up enabled, the Pico still does not recognize the access (no U2 response).
 
 **Implication:** The PIO only runs `in pins` + `push` when **nDEVSEL (GPIO 20) goes low**. So either:
 
@@ -970,11 +1186,11 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **Why:** Validates end-to-end behaviour (Apple ↔ bus interface ↔ firmware ↔ SPI flash) without requiring the Control Panel binary; useful when swapping flash vendors or firmware builds.
 
-**What we did:** Added `tools/flash-validate/FLASHVAL.BAS` and `README.md` (file format `FLASHVAL1`, slot base formula, volatile fields). **`build-flashval-disk.sh`** builds a standard **143360-byte ProDOS 140K** **`FLASHVALID.po`** using the same mechanism as **`../a2speed/Makefile`** (`-pro140`, then **`-p` / `-bas` / `-ptx`**). **PRODOS** and **BASIC.SYSTEM** are copied with **`-g`** from **`cpanel/prodos19.dsk`** (known-good image in-tree), not from padding **`pico/romdisk.po`** to 800K (that produced non-standard images some tools reject). **`Makefile`** in **`tools/flash-validate/`** mirrors **`make disk`** entry points (Homebrew **`java`**, default **`AppleCommander-ac.jar`**). **`-bas`** adds tokenized **FLASHVAL** from **`FLASHVAL.DSK.BAS`** (screen-only suite), **`-ptx`** adds **`FLASHVAL.SRC`**. Port variables must not be named **`PR`**: Applesoft treats **`PR`** as **`PRINT`**, and AppleCommander’s bastools fails with **`Expecting: [PR, #]`**; use **`PX`** (param port) and **`D1`** (data port) instead.
+**What we did:** Added `tools/flash-validate/FLASHVAL.BAS` and `README.md` (file format `FLASHVAL1`, slot base formula, volatile fields). **`build-flashval-disk.sh`** builds a standard **143360-byte ProDOS 140K** **`FLASHVALID.po`** using the same mechanism as **`../a2speed/Makefile`** (`-pro140`, then **`-p` / `-bas` / `-ptx`**). **PRODOS** and **BASIC.SYSTEM** are copied with **`-g`** from **`cpanel/prodos19.dsk`** (known-good image in-tree), not from padding **`pico/romdisk.po`** to 800K (that produced non-standard images some tools reject). **`TFTPUTIL`** (**`TFTPUTIL.BAS`**) is a standalone Applesoft TFTP upload/download tool ( **`CMD_TFTPRUN`** / **`CMD_TFTPSTATUS`**, same parameter layout as **`FLASHSOAK`**) so the validation disk offers TFTP without shipping the Control Panel **`BIN`**. **`Makefile`** in **`tools/flash-validate/`** mirrors **`make disk`** entry points (Homebrew **`java`**, default **`AppleCommander-ac.jar`**). **`-bas`** adds tokenized **FLASHVAL** from **`FLASHVAL.DSK.BAS`** (screen-only suite), **`-ptx`** adds **`FLASHVAL.SRC`**. Port variables must not be named **`PR`**: Applesoft treats **`PR`** as **`PRINT`**, and AppleCommander’s bastools fails with **`Expecting: [PR, #]`**; use **`PX`** (param port) and **`D1`** (data port) instead.
 
 **What we didn’t do:** Destructive tests (`CMD_FORMATDISK`, `CMD_ERASEDISK`, `CMD_WRITEBLOCK`); those need explicit write-enable key handling and should stay a separate tool. Full **`FLASHVAL.BAS`** is not reliably **`-bas`**-tokenized (file I/O and tokenizer quirks); disk boot program is **`FLASHVAL.DSK.BAS`**.
 
-**References:** `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `tools/flash-validate/Makefile`, `tools/flash-validate/FLASHVAL.BAS`, `tools/flash-validate/FLASHVAL.DSK.BAS`, `cpanel/prodos19.dsk`, `common/defines.h`, `pico/cmdhandler.c`.
+**References:** `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `tools/flash-validate/Makefile`, `tools/flash-validate/FLASHVAL.BAS`, `tools/flash-validate/FLASHVAL.DSK.BAS`, `tools/flash-validate/TFTPUTIL.BAS`, `cpanel/prodos19.dsk`, `common/defines.h`, `pico/cmdhandler.c`.
 
 ---
 
@@ -984,10 +1200,76 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **Why:** `FLASHVAL` validates command-path integrity and selected reads, but not sustained write/format/file/TFTP churn. The soak tool targets long-duration reliability and data-integrity regressions across flash + RAM media and network image round trips.
 
-**What we did:** Implemented command wrappers in Applesoft for `CMD_GETUNITSTATUS` (`0x12`), `CMD_FORMATDISK` (`0x1D`), `CMD_READBLOCK` (`0x15`), `CMD_TFTPRUN` (`0x50`), and `CMD_TFTPSTATUS` (`0x51`) with firmware-compatible parameter ordering (including write-enable key `0x71` and null-terminated hostname/filename in data buffer). Added CSV event logging (`cycle,unit,event,result,v1,v2`) and repeat-when-pass loop semantics. The disk build adds tokenized **`FLASHSOAK`** and **`FLASHSOAK.SRC`** to the same **140K** **`FLASHVALID.po`** as §17 (see **`build-flashval-disk.sh`** / **`Makefile`**).
+**What we did:** Implemented command wrappers in Applesoft for `CMD_GETDEVSTATUS` (`0x11`) **unit count**, `CMD_GETUNITSTATUS` (`0x12`) **block count**, `CMD_FORMATDISK` (`0x1D`), `CMD_READBLOCK` (`0x15`), `CMD_TFTPRUN` (`0x50`), and `CMD_TFTPSTATUS` (`0x51`) with firmware-compatible parameter ordering (including write-enable key `0x71` and null-terminated hostname/filename in data buffer). **Bug fix:** an early **`GOSUB 1500`** with **`U=0`** treated **`BC`** (block count / error garbage) as **unit count**, so **`FOR U = 1 TO UC`** could run to invalid units (e.g. **illegal quantity** on **`POKE`** / **`MID$`**). **Cycle start** now uses **`CMD_GETDEVSTATUS`** (`QC=17`) into **`UC`**, capped (**`16`**). Event logging uses a **ProDOS text (SEQ) file** — default **`SOAK.TXT`** — with **comma-separated** lines (columns **`ts`**, `cycle`, …); **`.CSV`** was avoided as the default extension because some ProDOS/BASIC paths handle **`.TXT`** more reliably with **`OPEN`** **`,T`**. **Append-only** (no **`DELETE`**): **`ts`** from ProDOS **`TIME$`** (8 chars). **`GOSUB 9000`** (**`RUN_START`**) runs at the **start of cycle 1** (not right after the server prompt), so **`OPEN`** happens only after the **PROGRESS** line; line **21** prints **`OPENING …`** immediately before ProDOS **`OPEN`**; **`Q1`/`NONE`** skips all log file I/O (**Applesoft** names significant to **two characters**, so **`LGSKIP`**/**`LGINIT`** both alias **`LG`** — use **`Q1`**/**`Q2`**). **`OPEN`**/**`WRITE`** match **`FLASHVAL.BAS`** (filename concatenated directly after **`OPEN`**/**`WRITE`**). **`OPEN`** **`T,A`** falls back to **`T,W`** + header if the file is missing. The disk build adds tokenized **`FLASHSOAK`** and **`FLASHSOAK.SRC`** to the same **140K** **`FLASHVALID.po`** as §17 (see **`build-flashval-disk.sh`** / **`Makefile`**). **Applesoft:** ProDOS **`PRINT D$`** lines must not spell **`OPEN`/`WRITE`/`CLOSE`/`DELETE`/`PREFIX`** as single literals (syntax error); use the **`"O"+"PEN"`** style as **`FLASHVAL.BAS`** (§17).
 
-**What we didn’t do:** This pass does not include an external host-side parser/aggregator for CSV statistics; the output is intentionally plain CSV for downstream tooling. We also did not attempt to make this non-destructive.
+**What we didn’t do:** This pass does not include an external host-side parser/aggregator; the output is intentionally plain comma-separated text for downstream tooling. We also did not attempt to make this non-destructive.
 
-**References:** `tools/flash-validate/FLASHSOAK.BAS`, `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `pico/cmdhandler.c` (`DoFormatDisk`, `DoReadBlock`, `DoTFTPRun`, `DoTFTPStatus`), `common/defines.h`.
+**On-screen progress:** `FLASHSOAK` updates **VTAB 21** (40 columns) via **`GOSUB 8600`** after major steps; **`LEFT$(M$+B$,40)`** pads with spaces so shorter messages do not leave stale text (important when **`NONE`** disables the log and **`OPENING`** never runs).
+
+**References:** `tools/flash-validate/FLASHSOAK.BAS`, `tools/flash-validate/README.md`, `tools/flash-validate/build-flashval-disk.sh`, `pico/cmdhandler.c` (`DoGetDeviceStatus`, `DoGetUnitStatus`, `DoFormatDisk`, `DoReadBlock`, `DoTFTPRun`, `DoTFTPStatus`), `common/defines.h`.
+
+---
+
+## 19. FLASHSOAK C port (`tools/flash-validate/FLASHSOAK/`)
+
+**What:** A cc65 **apple2enh** implementation of the same soak sequence as **`FLASHSOAK.BAS`**: interactive slot / log path / TFTP host; **`CMD_GETDEVSTATUS`** / **`CMD_GETUNITSTATUS`**; format, ProDOS file workload, whole-volume 16-bit checksum, TFTP up/down, second checksum compare, cycle **`CYCLE_END`** then per-unit **reformat**.
+
+**Why:** C is easier to extend than Applesoft for long-running loops (checksum over every block) and keeps the same register semantics as the BASIC **`49280+16*SL`** base instead of hard-coding **`$C0C0`** (see `cc65/megaflash.c`).
+
+**What we did:** **`flashsoak.c`** uses slot-relative **`$C080 + slot×16`** pointers; **`mf_read_block`** matches BASIC **`MS`/`RE`** handling; **`mf_format_disk`** reads **`RE`/`ME`** like **`PEEK`** after **`CMD_FORMATDISK`**; **`checksum_volume`** propagates read errors via **`rd_err`**; **`REFORMAT`** logs **`RE`/`ME`** (not a bogus **`mf_issue_cmd(0)`**); **`status_line21`** avoids a ternary mixing **`const char*`** with **`""`** (cc65 **incompatible pointer types** on that line — use **`if (!msg) m = ""`**); **`file_workload`** returns failure if **`FILL.TXT`** cannot be created. **`Makefile`** builds **`flashsoak.bin`** with **`cl65 -t apple2enh -C ../../../cpanel/apple2enh-bin.cfg`** (same load address as cpanel **`$0A00`**).
+
+**What we didn’t do:** **`build-flashval-disk.sh`** is not yet updated to **`BIN`**-import **`flashsoak.bin`** (optional follow-up); paths like **`/VAL1/A.TXT`** assume ProDOS volume names match **`PREFIX`** / mount points like the BASIC disk.
+
+**References:** `tools/flash-validate/FLASHSOAK/flashsoak.c`, `tools/flash-validate/FLASHSOAK/Makefile`, `cpanel/apple2enh-bin.cfg`.
+
+---
+
+## 20. `TFTPUTIL.BAS` startup/UX updates (80 columns, auto-slot, host default)
+
+**What:** Updated the standalone Applesoft TFTP helper (`tools/flash-validate/TFTPUTIL.BAS`) so it starts in 80-column mode, auto-detects MegaFlash slot placement (prefer slot 4), and prompts for the TFTP host as **FQDN or IP** with a persisted default.
+
+**Why:** The prior flow required manual slot entry every run and an ambiguous host prompt. This slowed repeated testing and made operator mistakes more likely when the card was moved from slot 4 or when host naming was unclear.
+
+**What we did:** Added `PR#3` at startup for 80-column display, replaced manual slot input with a probe routine that first checks slot 4 then scans slots 1-7, and reports whether it found MegaFlash in slot 4 or elsewhere. The host prompt now explicitly says `TFTP HOST FQDN OR IP` and shows the current default in-line. Added lightweight config load/save routines using `TFTPUTIL.CFG` (single-line text hostname/IP) so the chosen host becomes next-run default.
+
+**What we didn’t do:** We did not add strict hostname/IP validation in Applesoft (keeping compatibility and code size simple), and we did not change TFTP command semantics (`CMD_TFTPRUN`/`CMD_TFTPSTATUS`) or transfer timeout behavior.
+
+**Takeaway:** The utility now aligns with recurring operator workflow: direct launch in 80-column mode, no slot question, slot-4 preference with fallback discovery, and clearer/persistent TFTP host input.
+
+**References:** `tools/flash-validate/TFTPUTIL.BAS`, `tools/flash-validate/README.md`, `pico/cmdhandler.c`, `common/defines.h`.
+
+---
+
+## 21. Flash validation disk: include `TFTPUTIL` docs as on-disk text
+
+**What:** Added a dedicated text document for the Applesoft TFTP helper and included it in the generated `FLASHVALID.po`.
+
+**Why:** `TFTPUTIL` behavior has grown (80-column startup, slot auto-detect, persisted host default), so users need an on-disk quick reference without opening repo files on a host machine.
+
+**What we did:** Added `tools/flash-validate/TFTPUTIL.TXT` and updated `tools/flash-validate/build-flashval-disk.sh` to import it as `TFTPUTIL.DOC` using AppleCommander `-ptx`. Updated `tools/flash-validate/README.md` disk contents list to document the new file.
+
+**What we didn’t do:** No tokenized BASIC changes in this step; this is documentation packaging only.
+
+**Takeaway:** Every new `FLASHVALID.po` now carries `TFTPUTIL` usage notes directly on disk as `TFTPUTIL.DOC` (when `TFTPUTIL.TXT` exists).
+
+**References:** `tools/flash-validate/TFTPUTIL.TXT`, `tools/flash-validate/build-flashval-disk.sh`, `tools/flash-validate/README.md`.
+
+---
+
+## 22. `TFTPUTIL.BAS`: list available volumes before unit selection
+
+**What:** Enhanced `TFTPUTIL.BAS` to show a unit picker list (`unit - volume name`) before the user selects the local MegaFlash unit for TFTP upload/download.
+
+**Why:** Numeric-only unit entry is error-prone when multiple volumes are present. Showing names at selection time improves usability and reduces accidental writes to the wrong unit.
+
+**What we did:** Added `CMD_GETDEVSTATUS` (`0x11`) query to get unit count (`UC`) and print `AVAILABLE VOLUMES:` list for units `1..UC` (capped at 16). For each unit, issued `CMD_GETVOLINFO` (`0x14`) and parsed the ProDOS-style name-length nibble from byte 0 (`len = b0 & 0x0F`) to extract/display the volume name; fallback is `(UNKNOWN)` when parsing fails or command returns error. Unit input now enforces `1..UC`.
+
+**What we didn’t do:** No deep validation of volume metadata beyond printable-name extraction; non-standard names/metadata remain shown as `(UNKNOWN)`.
+
+**Takeaway:** Unit selection now presents human-readable volume names, making transfers safer and faster in multi-volume setups.
+
+**Later revert:** A menu option to run ProDOS `CATALOG` on the selected volume from the upload/download prompt was added then removed: TFTP has no remote directory listing, and the local-only catalog was not worth the extra menu complexity.
+
+**References:** `tools/flash-validate/TFTPUTIL.BAS`, `tools/flash-validate/TFTPUTIL.TXT`, `common/defines.h`, `pico/cmdhandler.c`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

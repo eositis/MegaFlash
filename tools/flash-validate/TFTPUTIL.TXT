@@ -1,0 +1,38 @@
+TFTPUTIL - MEGAFLASH TFTP IMAGE TRANSFER
+========================================
+
+PURPOSE
+- Upload a MegaFlash unit image to a TFTP host.
+- Download an image from a TFTP host into a MegaFlash unit.
+
+STARTUP BEHAVIOR
+- Starts in 80-column mode (PR#3).
+- Auto-detects MegaFlash slot:
+  - Checks slot 4 first.
+  - If not found, scans slots 1-7.
+  - Reports which slot is used.
+
+HOST DEFAULT (CONFIG FILE)
+- Default host is loaded from TFTPUTIL.CFG when present.
+- Prompt asks for "TFTP HOST FQDN OR IP".
+- Press RETURN to accept default.
+- Selected value is saved back to TFTPUTIL.CFG for next run.
+
+PROMPTS
+1) TFTP host (FQDN or IP)
+2) Available volumes are listed as:
+   unit-number - volume-name
+   Then select MegaFlash unit number (1..N)
+3) Choice:
+   - 1 = upload volume to server
+   - 2 = download from server to volume
+4) Remote filename (example: IMAGE.PO)
+
+NOTES
+- Uses MegaFlash CMD_TFTPRUN (0x50) and CMD_TFTPSTATUS (0x51).
+- Transfer progress/status updates are shown on line 21.
+- Requires Pico W firmware with WiFi configured and active.
+
+ERRORS
+- "MEGAFLASH NOT FOUND" means no compatible card responded in slots 1-7.
+- "FAILED. CODE N" reports command/transfer error status.

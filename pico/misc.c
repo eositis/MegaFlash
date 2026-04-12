@@ -1,4 +1,8 @@
 #include "pico/stdlib.h"
+#include "pico/time.h"
+#if defined(NDEBUG)
+#include "pico/stdio_usb.h"
+#endif
 #include "pico/cyw43_arch.h"
 #include "hardware/timer.h"
 #include "hardware/sync.h"
@@ -80,6 +84,34 @@ uint32_t EndTimer() {
 //
 // Output: true if Apple II is connected
 //
+#if defined(NDEBUG)
+volatile bool g_release_bus_emulation_enabled;
+static bool release_busgate_initialized;
+static bool release_busgate_last_usb;
+static absolute_time_t release_busgate_next;
+
+void ReleaseInitBusUsbGate(bool apple_at_boot) {
+  g_release_bus_emulation_enabled = apple_at_boot;
+  release_busgate_initialized = false;
+}
+
+void ReleaseUpdateBusUsbGate(void) {
+  bool usb_on = stdio_usb_connected();
+  if (!release_busgate_initialized) {
+    release_busgate_initialized = true;
+    release_busgate_last_usb = usb_on;
+    release_busgate_next = make_timeout_time_ms(250);
+    g_release_bus_emulation_enabled = IsAppleConnected() && !usb_on;
+    return;
+  }
+  if (usb_on != release_busgate_last_usb || time_reached(release_busgate_next)) {
+    release_busgate_last_usb = usb_on;
+    release_busgate_next = make_timeout_time_ms(250);
+    g_release_bus_emulation_enabled = IsAppleConnected() && !usb_on;
+  }
+}
+#endif
+
 bool IsAppleConnected() {
   bool phi0ClockFound = false;
   

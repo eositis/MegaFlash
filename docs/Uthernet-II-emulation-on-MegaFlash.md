@@ -8,7 +8,8 @@ This document describes the Uthernet II (W5100) emulation implemented in the Meg
 
 - **Purpose:** Emulate a Uthernet II Ethernet card in slot 4 so that W5100-based Apple II software (TCP/UDP) can use the Pico’s network (lwIP over CYW43 WiFi on Pico 2 W).
 - **Selector:** Address decode only: **C0x4–C0x7** ($C0C4–$C0C7) = Uthernet II; **C0x0–C0x3** ($C0C0–$C0C3) = MegaFlash. No GPIO pin is used for slot select.
-- **Design reference:** AppleWin’s Uthernet2 and W5100 logic; network backend is lwIP/CYW43, not PCap/Windows.
+- **Design reference:** AppleWin’s **`Uthernet2.cpp`** / **`W5100`** logic (register semantics, RTR defaults, `IO_C0`); network backend here is lwIP/CYW43, not PCap/Windows.
+- **Timing / handshake (vs AppleWin):** AppleWin runs **`Uthernet2::IO_C0`** in the **same** emulated CPU step as the 6502 access: reads start from **`MemReadFloatingBus(nCycles)`** then are replaced with the W5100 byte — there is **no** analog of the Pico **listener → CPU → `rxf_putget` → PIO `out pins`** pipeline. AppleWin also uses **`address & 0x03`** for the four C0x **ports** across the **whole** slot I/O page (mirrors at `$C0C8+` on real hardware that ignores A2/A3 to the W5100). MegaFlash keeps U2 on **`$C0C4–$C0C7`** only and reserves **`$C0C8–$C0CF`** (§1b in **`docs/Implementation-notes-and-reasoning.md`**); the RP2350 PIO picks **FIFO chunk from A3:A2**, so mirroring would need extra firmware/PIO work. See **`docs/Implementation-notes-and-reasoning.md`** §**1i**.
 
 ---
 
@@ -83,7 +84,7 @@ IPRAW is **not** implemented. AppleWin-only features (e.g. Virtual DNS) are **no
 ### 5.2 Socket Commands (SN_CR)
 
 - **OPEN:** From SN_MR (protocol) and SN_PORT: open UDP with `U2_Net_OpenUdp(i, port)` or TCP with `U2_Net_OpenTcp(i)`.
-- **CONNECT:** From SN_DIPR, SN_DPORT: `U2_Net_ConnectTcpEx(i, dest_ip_net, dest_port)`.
+- **CONNECT:** From SN_DIPR, SN_DPORT, SN_PORT: `tcp_bind` to local port then `tcp_connect` — `U2_Net_ConnectTcpEx(i, dest_ip_net, dest_port, local_port)`.
 - **LISTEN:** From SN_PORT: `U2_Net_ListenTcp(i, port)`.
 - **CLOSE / DISCON:** `U2_Net_Close(i)`.
 - **SEND:** Read payload from W5100 TX buffer (between TX_RD and TX_WR), send via `U2_Net_SendUdp` or `U2_Net_SendTcp`; then advance TX_RD to TX_WR.

@@ -81,6 +81,27 @@ void __no_inline_not_in_flash_func(core1Main)() {
 volatile bool updateNTPNow = false;
 
 //
+// Core 0: lwIP/CYW43 poll + IPC from core 1 (Test WiFi, TFTP).
+// Must run whenever Pico W is used: both inside core0Loop and on the
+// USB-terminal path when appleConnected was false at boot (otherwise
+// IPC is never popped and Test WiFi hangs; WiFi LED/stack stay idle).
+//
+static void PicoW_ServiceCore0IpcAndNetwork(uint64_t fifo_timeout_us) {
+  uint32_t param;
+  bool msgReceived = multicore_fifo_pop_timeout_us(fifo_timeout_us, &param);
+  NetworkPump_PollOnce();
+  U2_MonPollFlush();
+  if (msgReceived) {
+    struct IpcMsg *msg = (struct IpcMsg *)param;
+    if (msg->command == IPCCMD_WIFITEST) {
+      TestWifi((TestResult_t *)msg->data);
+    } else if (msg->command == IPCCMD_TFTP) {
+      ExecuteTFTP(msg->data /* taskid */);
+    }
+  }
+}
+
+//
 //Use Core 0 to run background task such as TFTP or NTP Time sync
 //
 void __no_inline_not_in_flash_func(core0Loop)() {
@@ -99,19 +120,11 @@ void __no_inline_not_in_flash_func(core0Loop)() {
 
         //wait until nextUpdateTime or msg from other core
         do {
-          uint32_t param;
-          bool msgReceived = multicore_fifo_pop_timeout_us(50*1000,&param);
-          NetworkPump_PollOnce();
-          U2_MonPollFlush();
-          if (msgReceived) {
-            struct IpcMsg* msg=(struct IpcMsg*)param;
-            if (msg->command == IPCCMD_WIFITEST) {
-              TestWifi((TestResult_t*)msg->data);
-            } else if (msg->command == IPCCMD_TFTP) {
-              ExecuteTFTP(msg->data /*taskid*/);
-            }
-          }
-        }while (!time_reached(nextUpdateTime) && !updateNTPNow);
+#if defined(NDEBUG)
+          ReleaseUpdateBusUsbGate();
+#endif
+          PicoW_ServiceCore0IpcAndNetwork(50 * 1000);
+        } while (!time_reached(nextUpdateTime) && !updateNTPNow);
       
     } while(1);
   } else {
@@ -168,6 +181,10 @@ int main() {
   if (appleConnected) {
     EnableAppleResetInterrupt();
   }
+
+#if defined(NDEBUG)
+  ReleaseInitBusUsbGate(appleConnected);
+#endif
   
   //
   // Core1: Apple Bus Loop
@@ -207,6 +224,13 @@ int main() {
   // is false at boot due to timing).
   //
   if (CheckPicoW()) {
+    /* USB before core0Loop so Release stdio_usb_connected() / gate are valid in core0Loop. */
+    stdio_usb_init();
+    InitPicoLed();
+#if defined(NDEBUG)
+    ReleaseUpdateBusUsbGate();
+#endif
+
     // If no Apple II is detected, keep USB stdio responsive by running the
     // interactive terminal instead of the network loop. This restores the
     // previous "USB console works when powered from USB" behaviour.
@@ -216,13 +240,13 @@ int main() {
       core0Loop();  // NTP, TFTP, WiFi test
     }
 
-    stdio_usb_init();
-    InitPicoLed();
-
     absolute_time_t nextAppleCheck = make_timeout_time_ms(2000);
     while (true) {
-      /* Drain U2 [u2]/[u2m] queue on core 0 when not in core0Loop (bus still uses core 1). */
-      U2_MonPollFlush();
+#if defined(NDEBUG)
+      ReleaseUpdateBusUsbGate();
+#endif
+      /* lwIP + IPC (Test WiFi / TFTP) when not in core0Loop; non-blocking FIFO. */
+      PicoW_ServiceCore0IpcAndNetwork(0);
       // If Apple becomes connected later, enable reset interrupt and start
       // the network loop. Note: this only triggers between terminal sessions.
       if (time_reached(nextAppleCheck)) {
@@ -233,22 +257,51 @@ int main() {
         }
       }
 
+#if defined(NDEBUG)
+      if (stdio_usb_connected() && !IsAppleConnected()) {
+        UserTerminal();
+      } else
+#else
       if (stdio_usb_connected()) {
         UserTerminal();
-      } else {
-        sleep_ms(1000);
+      } else
+#endif
+      {
+        /* Poll network stack while idle; a plain sleep_ms(1000) starved cyw43. */
+        absolute_time_t sleep_until = make_timeout_time_ms(1000);
+        while (!time_reached(sleep_until)) {
+          PicoW_ServiceCore0IpcAndNetwork(0);
+          sleep_ms(1);
+        }
       }
     }
   } else {
     stdio_usb_init();
     InitPicoLed();
+#if defined(NDEBUG)
+    ReleaseUpdateBusUsbGate();
+#endif
 
     while(1) {
+#if defined(NDEBUG)
+      ReleaseUpdateBusUsbGate();
+#endif
+#if defined(NDEBUG)
+      if (stdio_usb_connected() && !IsAppleConnected()) {
+        UserTerminal();
+      } else if (!stdio_usb_connected()) {
+        sleep_ms(1000);
+      } else {
+        /* USB cable connected but Apple II bus mode: do not run USB terminal. */
+        sleep_ms(10);
+      }
+#else
       if (stdio_usb_connected()) {
         UserTerminal();
       } else {
         sleep_ms(1000);
       }
+#endif
     }
   }
 

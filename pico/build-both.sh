@@ -5,6 +5,7 @@
 #
 # Run from repo:  ./build-both.sh
 # Optional:       JOBS=8 ./build-both.sh
+# Optional:       U2_ETH_HEADER_TRACE=1 ./build-both.sh   # UART [u2eth] first 64B hex per STA TX/RX frame
 #
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,6 +14,7 @@ cd "$SCRIPT_DIR"
 source "$SCRIPT_DIR/build-env.sh"
 
 JOBS="${JOBS:-8}"
+U2_ETH_HEADER_TRACE="${U2_ETH_HEADER_TRACE:-0}"
 
 # --- ARM toolchain (same logic as cmakeall.sh) ---
 TOOLCHAIN_BIN=""
@@ -80,6 +82,7 @@ if [ ! -d "$SDK_PATH" ]; then
 fi
 
 echo "Using CMake: $CMAKE_BIN"
+echo "U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE (1=UART [u2eth] STA frame hex dump)"
 
 # Embed configure-time build id (new values each run → identifiable builds without bumping FIRMWAREVER).
 FIRMWARE_BUILD_TIMESTAMP="${FIRMWARE_BUILD_TIMESTAMP:-$(date +%s)}"
@@ -91,12 +94,14 @@ echo "Configuring pico_release (Pico W)..."
 "$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
   $CMAKE_ARM_TOOLCHAIN
 
 echo "Configuring pico2_release (Pico 2 W)..."
 "$CMAKE_BIN" -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
   $CMAKE_ARM_TOOLCHAIN
 
 echo "Building pico_release (-j$JOBS)..."

@@ -16,6 +16,10 @@
 #define U2_DEBUGF(...) do {} while (0)
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Call once at startup before the bus loop. */
 void U2_Init(void);
 
@@ -31,5 +35,12 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
 
 /** Byte the W5100 would return on the next read of the DATA port ($C0C7) at current ptr/MR (no increment). */
 uint8_t U2_PeekDataPort(void);
+
+/** Copy SHAR (0x0009–0x000E) from `mac` — used so ip65 DHCP/MACRAW uses the same SA as CYW43 STA. */
+void U2_SetStationMacFromBytes(const uint8_t mac[6]);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _UTHERNET2_H */

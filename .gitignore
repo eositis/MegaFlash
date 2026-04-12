@@ -17,6 +17,11 @@
 /pico/pico2_release
 /pico/picotool
 
+/ip65
+
+/tools/wget65-verbose/wget65v.bin
+/tools/wget65-verbose/*.map
+
 /kicad/**/*.bak
 
 **/*:Zone.Identifier

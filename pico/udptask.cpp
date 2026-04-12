@@ -107,9 +107,22 @@ void CUDPTask::InitCyw43() {
     return;
   }
   TRACE_PRINTF("InitCyw43()\n");
+  /* InitPicoLed() already called cyw43_arch_init() for the WL LED. A second
+   * cyw43_arch_init_with_country() runs cyw43_driver_init again; on failure
+   * the SDK calls cyw43_arch_deinit() and tears down the working stack. */
+  if (cyw43_is_initialized(&cyw43_state)) {
+    hasInitedCyw43 = true;
+    s_cyw43Inited = true;
+    cyw43_arch_enable_sta_mode();
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+    return;
+  }
+  int err = cyw43_arch_init_with_country(WIFI_COUNTRY);
+  if (err) {
+    throw CUDPTask::ERR_WIFINOTCONNECTED;
+  }
   hasInitedCyw43 = true;
   s_cyw43Inited = true;
-  cyw43_arch_init_with_country(WIFI_COUNTRY);
   cyw43_arch_enable_sta_mode();
   cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN,1); //Turn on LED
 }

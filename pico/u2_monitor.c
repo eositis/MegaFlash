@@ -34,6 +34,7 @@ enum {
   U2M_NET_TCPRX,
   U2M_NET_MACRX,
   U2M_NET_MACTX,
+  U2M_NET_MACTX_PTRS,
   U2M_MODE_LINE,
   U2M_DATA_READ_TRACE,
   U2M_CHECKPOINT,
@@ -133,6 +134,11 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
     break;
   case U2M_NET_MACTX:
     printf("[u2m] %lu net sock%d MACRAW tx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
+    break;
+  case U2M_NET_MACTX_PTRS:
+    printf("[u2m] %lu net sock%d MACRAW ptrs len=%u rd=0x%04X wr=0x%04X rdm=0x%02X wrm=0x%02X\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
+           (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
     break;
   case U2M_MODE_LINE:
     printf("[u2] mode=0x%02X (AI=%d IND=%d)\n", (unsigned)e->a1, (e->a1 & 0x02) ? 1 : 0, (e->a1 & 0x01) ? 1 : 0);
@@ -305,6 +311,19 @@ void U2_MonNetMacrawTx(int sock, uint16_t len) {
   u2_mon_push(&ev);
 }
 
+void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr_full, uint16_t rd_masked,
+                           uint16_t wr_masked) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_NET_MACTX_PTRS,
+                     .a0 = (uint8_t)sock,
+                     .a1 = (uint8_t)(rd_masked & 0xFFu),
+                     .a2 = (uint8_t)(wr_masked & 0xFFu),
+                     .w0 = len,
+                     .w1 = rd_full,
+                     .w2 = wr_full};
+  u2_mon_push(&ev);
+}
+
 #else /* !U2_ACTIVITY_MONITOR */
 
 #include <stddef.h>
@@ -370,6 +389,15 @@ void U2_MonNetRxMacraw(int sock, uint16_t len) {
 void U2_MonNetMacrawTx(int sock, uint16_t len) {
   (void)sock;
   (void)len;
+}
+void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr_full, uint16_t rd_masked,
+                           uint16_t wr_masked) {
+  (void)sock;
+  (void)len;
+  (void)rd_full;
+  (void)wr_full;
+  (void)rd_masked;
+  (void)wr_masked;
 }
 
 void U2_MonQueueModeLine(uint8_t mr) { (void)mr; }

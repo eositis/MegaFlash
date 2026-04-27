@@ -190,6 +190,182 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ---
 
+## 1k. Debug crash with `[u2eth]`: core affinity for network poll
+
+**What:** Debug capture (`debug/uart_log.txt`) showed `*** PANIC *** async_context_poll context check failed (IRQ or wrong core)` near MACRAW SEND while `[u2eth]` trace was active.
+
+**Why (root cause):**
+
+- `busloop.c` calls `U2_Poll()` from the Apple bus path (core 1).
+- `U2_Poll()` called `U2_Net_Poll()`, and `U2_Net_Poll()` called `NetworkPump_PollOnce()`.
+- `NetworkPump_PollOnce()` touches CYW43/lwIP poll context, which must run on the owning core (core 0 in this firmware design).
+- Under traffic, this cross-core poll path trips the SDK async-context guard (`wrong core`).
+
+**What we did:**
+
+- In `pico/uthernet2_net.cpp`, `U2_Net_Poll()` now returns immediately unless `get_core_num() == 0`.
+- In `pico/main.c`, `PicoW_ServiceCore0IpcAndNetwork()` now calls `U2_Net_Poll()` (core-0 path), so the same function performs both optional `[u2eth]` hook install and network pump polling on the correct core.
+- Kept `U2_Poll()` callable from core 1, but it no longer drives network poll off-core.
+- Follow-up from a fresh `uart_log` capture: panic still reproduced on first MACRAW SEND because `U2_Net_SendMacraw()` itself called `cyw43_arch_lwip_begin/end` from bus/core 1. Fixed by deferring MACRAW TX to core 0:
+  - `U2_Net_SendMacraw()` now queues frame bytes when called off-core.
+  - `U2_Net_Poll()` (core 0) drains one pending MACRAW frame and performs `linkoutput` there.
+  - Result: CYW43/lwIP lock entry for MACRAW TX is core-0-only.
+
+**What we didn’t do:** No protocol-level changes to U2 MACRAW/TCP/UDP behavior; this is execution-context routing only.
+
+**Takeaway:** U2 bus logic can run on core 1, but CYW43/lwIP poll and transmit entrypoints must stay core-0-only. Keep any future U2 network calls that touch `cyw43_arch_lwip_*` behind core-0 dispatch.
+
+**References:** `pico/uthernet2.c` (`U2_Poll`), `pico/uthernet2_net.cpp` (`U2_Net_Poll`), `pico/main.c` (`PicoW_ServiceCore0IpcAndNetwork`), `debug/uart_log.txt`.
+
+---
+
+## 1l. DHCP timeout follow-up: MACRAW TX pointer wrap handling
+
+**What:** After fixing wrong-core panics (§1k), DHCP still timed out. `[u2eth] TX` showed good DHCP frames intermittently, but also suspicious large/zero-heavy frames and truncated-looking payload starts. A follow-up change attempted to alter TX pointer arithmetic in `send_data()`.
+
+**Why this change regressed behavior:**
+
+- The attempted fix computed `data_len` from **full 16-bit** `Sn_TX_RD/Sn_TX_WR`, while the rest of this emulator path (`get_tx_data_size`/`TX_FSR`) uses **masked ring-pointer** semantics.
+- That made SEND length computation inconsistent with free-space/reporting logic and changed how `Sn_TX_RD` low/high bytes were advanced after SEND.
+- In bench testing this caused Uthernet emulation to stop responding correctly for ip65 init flows (“device not found” class behavior), i.e. regression worse than the original DHCP symptom.
+
+**What we did:**
+
+- Reverted `send_data()` back to the prior masked-ring math:
+  - `rd = Sn_TX_RD & mask`, `wr = Sn_TX_WR & mask`
+  - `data_len = wr - rd; if (data_len < 0) data_len += buf_size`
+  - advance `Sn_TX_RD` using that ring-space value path
+- Rebuilt Debug firmware (`./pico/build-debug-both.sh`) and confirmed the build is clean.
+
+**What we didn’t do:** No changes to DHCP patching, RX hook chain, or MACRAW core-affinity queueing from §1j/§1k in this regression rollback.
+
+**Takeaway:** In this codebase, TX pointer handling must stay internally consistent across SEND and TX_FSR paths. Mixing full-pointer math in one path with masked-ring math in another is unsafe and can break basic ip65 detection/bring-up.
+
+**References:** `pico/uthernet2.c` (`send_data`), `debug/uart_log.txt` (`[u2eth]` malformed/large TX observations).
+
+---
+
+## 1m. MACRAW shifted/zero TX frames: `Sn_TX_RD` pointer collapse on SEND
+
+**What:** With `[u2tap]` enabled in `uthernet2_net.cpp`, malformed MACRAW TX packets (`len=257` shifted, `len=514` zero-heavy) were traced to already-corrupted payload at queue drain (`drain`) before any core-0 DHCP/SA patching.
+
+**Why (root cause):**
+
+- `send_data()` used masked ring pointers for copying payload (`rd = Sn_TX_RD & mask`, `wr = Sn_TX_WR & mask`) — correct for ring indexing.
+- But it also advanced `Sn_TX_RD` registers using the **masked** `wr`, not full host-visible `Sn_TX_WR`.
+- Over successive SENDs this collapses high-byte pointer progression, so later reads start at wrong offsets (or stale areas), producing shifted/zero MACRAW frames.
+
+**What we did:**
+
+- Kept masked pointers for ring read math only.
+- Preserved full register progression by writing `Sn_TX_RD := Sn_TX_WR(full)` (`wr_full` high/low bytes) after SEND in `pico/uthernet2.c`.
+- Rebuilt with low-noise trace profile and kept `[u2tap]` active for immediate validation.
+
+**What we didn’t do:** No protocol-path changes in `U2_Net_SendMacraw`; corruption occurs before that stage.
+
+**Takeaway:** For W5100 emulation, ring-address masking and register-pointer progression are separate concerns; masking must not leak into `Sn_TX_RD` register updates.
+
+**References:** `pico/uthernet2.c` (`send_data`), `pico/uthernet2_net.cpp` (`[u2tap]` stages), `debug/uart_log.txt` (`drain/core0-pre/core0-post` correlation).
+
+---
+
+## 1n. Root cause found: TX pointer register reads returned RX_RSR bytes
+
+**What:** Pointer traces showed host-side `Sn_TX_WR` progression `0x0124 -> 0x0225 -> 0x0427`, producing malformed `len=257/514` MACRAW sends (shifted headers, zero payload blocks).
+
+**Why (root cause):**
+
+- In `read_socket_register()` (`pico/uthernet2.c`), cases for `W5100_SN_TX_RD0/1` and `W5100_SN_TX_WR0/1` were incorrectly grouped with `W5100_SN_RX_RSR0`, returning `get_rx_rsr_byte(..., 8)` instead of actual register bytes.
+- Any host driver read of TX RD/WR thus received RX-queue-derived values, corrupting host pointer math and subsequent TX frame construction.
+
+**What we did:**
+
+- Fixed `read_socket_register()` so `W5100_SN_TX_RD0/1` and `W5100_SN_TX_WR0/1` return `u2_memory[address]` (actual emulated register contents).
+- Kept `W5100_SN_RX_RSR0/1` handling unchanged (`get_rx_rsr_byte`).
+- Rebuilt with trace profile to verify behavior after this correction.
+
+**What we didn’t do:** No further protocol changes in core-0 net path; this is a register-read correctness fix in the W5100 emulation layer.
+
+**Takeaway:** Correct register decode in socket-register reads is critical; mixing dynamic status register handlers with pointer register handlers can silently poison host-side pointer arithmetic.
+
+**References:** `pico/uthernet2.c` (`read_socket_register`, `send_data`), `debug/uart_log.txt` (`MACRAW ptrs` + `[u2tap]` sequences).
+
+---
+
+## 1o. DHCP offers visible but ip65 timeout: MACRAW RX length field compatibility
+
+**What:** After fixing TX pointer decode (§1n), logs showed stable outbound DHCP DISCOVER (`68->67`) and inbound OFFER/ACK traffic (`67->68`, `len=342`) reaching MACRAW RX (`net sock0 MACRAW rx len=342`), yet ip65 still timed out.
+
+**Why (likely compatibility mismatch):**
+
+- `u2_push_rx_macraw()` wrote the 2-byte MACRAW length field as raw frame length (`len`).
+- Common W5100 MACRAW drivers read that field as `wire_len` and then subtract 2 before consuming payload bytes.
+- If firmware writes `len` instead of `len+2`, the client reads `len-2` bytes (truncated frames), which can make DHCP parsing fail even when packets arrive.
+
+**What we did:**
+
+- Updated `u2_push_rx_macraw()` in `pico/uthernet2.c` to write `wire_len = len + 2` in the MACRAW length prefix while keeping payload bytes unchanged.
+- Rebuilt Debug trace firmware for validation.
+
+**What we didn’t do:** No changes to netif RX hook or socket RECV command flow in this step.
+
+**Takeaway:** In MACRAW mode, length-prefix wire contract matters as much as payload; off-by-2 in prefix can look like “DHCP timeout” despite correct network ingress.
+
+**References:** `pico/uthernet2.c` (`u2_push_rx_macraw`), `debug/uart_log.txt` (`[u2eth] RX 67->68`, `MACRAW rx len=342`).
+
+---
+
+## 1p. ADTPro `restart system-$01`: latest log shows no W5100 activity before crash
+
+**What:** After the DHCP/MACRAW fixes, ADTPro still reports `restart system-$01`. In the latest capture (`Firmware build: 2026-04-27 01:00:59 UTC`), the run window contains only ambient LAN RX noise and no U2 socket events.
+
+**Why (current best diagnosis):**
+
+- The log has no `sock0 OPEN`, `SEND`, `RECV`, or ip65 checkpoint events during the failing run.
+- This suggests ADTPro crashes before (or without) issuing the expected W5100 init/access sequence, so the current failure is not yet attributable to malformed MACRAW frames on the firmware side.
+- Prior TX-pointer and MACRAW length fixes remain valid for ip65 traffic, but they do not explain this specific crash signature.
+
+**What we did:**
+
+- Re-validated the latest `debug/uart_log.txt` tail against expected U2 markers and confirmed absence of W5100 command traffic at failure time.
+- Built a targeted bisect debug image with `U2_IP65_CHECKPOINT=1` (`U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_MON_LOG_BUS=0`) to test whether ADTPro reaches the first mode write (`MR=0x03`) at all.
+
+**What we didn’t do:** No new emulation behavior change was applied in this step; this is diagnostic narrowing only.
+
+**Takeaway:** Before changing packet-path logic again, confirm ADTPro reaches U2/W5100 init on the failing run; otherwise the crash likely occurs earlier in ADTPro startup/driver handoff.
+
+**References:** `debug/uart_log.txt`, `pico/build-debug-both.sh`, `pico/uthernet2.c` (ip65 checkpoints), `pico/u2_monitor.c`.
+
+---
+
+## 1q. Temporary ADTPro workaround: force `COMMSLOT` to slot 4 (skip auto-scan)
+
+**What:** To avoid early `adtproeth` crashes before any observed W5100 activity, we applied a temporary client-side workaround in the local ADTPro tree to force Uthernet slot 4 and bypass slot auto-discovery.
+
+**Why (rationale):**
+
+- Startup path in ADTPro Ethernet calls `PARMDFT` before network use; when `CONFIGYET==0`, `PARMDFT` invokes `FindSlot`.
+- `FindSlot` probes multiple slots via `ip65_init`, and this can fail/crash before reaching the intended MegaFlash Uthernet slot.
+- For MegaFlash, Uthernet is fixed at slot 4 (`$C0C4-$C0C7`), so scanning is unnecessary for current testing.
+
+**What we did:**
+
+- Edited local ADTPro file: `/Users/eositis/Documents/GitHub/adtpro/src/client/prodos/ethernet/ethconfig.asm`.
+- In `PARMDFT`, replaced `FindSlot` path with forced assignment `COMMSLOT=3` (zero-based slot 4) and `DEFAULT=3`.
+- Updated default table entries so restore/reset paths keep slot 4 (`COMMSLOT` and `DEFAULT` from 2 to 3).
+- Built client via Ant with explicit host paths: `JAVA_HOME=/opt/homebrew/opt/openjdk ant -DassemblerPath=/opt/homebrew/bin prodos-ethernet`.
+- Ant failed later in packaging due missing custom `appleDump` task in this environment, but compile/link succeeded and produced:
+  - `/Users/eositis/Documents/GitHub/adtpro/src/client/ADTPROETH.BIN`
+  - `/Users/eositis/Documents/GitHub/adtpro/src/client/adtproeth.map`
+
+**What we didn’t do:** We did not alter MegaFlash firmware behavior in this step; this is strictly a temporary ADTPro client workaround for isolation.
+
+**Takeaway:** For fixed-slot hardware targets, bypassing ADTPro slot scan can isolate startup crashes from network emulation issues and allow focused runtime validation.
+
+**References:** `adtpro/src/client/prodos/ethernet/ethconfig.asm` (local clone), `adtpro/build/build.xml` (`prodos-ethernet` target), generated `ADTPROETH.BIN`.
+
+---
+
 ## 2. Uthernet II read-back returning 0 (Mode Register test)
 
 **Symptom:** After writing $80 then $03 to $C0C4 (Mode Register), a read from $C0C4 returned $00 instead of $03, as if the Uthernet II had not received the write.
@@ -747,6 +923,7 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
 | UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from `build-both.sh`/`cmakeall.sh`; **`unknown` / `0`** if configured without timestamp) |
 | ip65 init bisect (Pico 2 W Debug) | `CMakeLists.txt` `U2_IP65_CHECKPOINT`, `uthernet2.c`, `u2_monitor.c` | Default **quiet**: one **`[u2] ck=n`** per run when **`U2_IP65_CHECKPOINT=n`** (1=MODE 0x03 … 5=MACRAW OPEN). Optional **`U2_IP65_TRACE_DATA`**, **`U2_MON_LOG_BUS`** (floods UART) |
+| ADTPro crash triage (`system-$01`) | §1p, `debug/uart_log.txt` | If no `sock0 OPEN/SEND/RECV` or checkpoint lines appear in failure window, treat as pre-W5100 crash/handoff issue first; use `U2_IP65_CHECKPOINT=1` build to confirm first mode write is reached |
 | Apple readback for U2 | `busloop.c` U2 branch, `a2bus.h` | **`registers.r[4..7]`** → **`i32[1]`** chunk **1** → **`UpdateMegaFlashRegisters(1,…)`**; RP2350 waits for IRQ0 before update (§1d) so SM1 presents the merged byte on the next cycle |
 | U2 read data path | `busloop.c`, `a2bus.h` | U2 read byte must update **chunk 1** (SM1), not chunk 0 |
 | RP2350 U2 vs PIO IRQ 0 | `busloop.c` §1d | U2 branch must wait for IRQ 0 clear before `UpdateMegaFlashRegisters(1,…)` (same as main loop); skipping caused bad C0C4–C0C7 reads |
@@ -782,11 +959,12 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
 | lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
-| Uthernet II lwIP | `uthernet2_net.{h,cpp}` | Pump: `AddSession`, `CreateUdpPcb`, `PollOnce`; TCP: `U2TcpArg` + `u2_tcp_*` callbacks (§14.10b) |
-| Telnet65 walkthrough + fixes | §10f, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp` | Implemented: TX wrap fix (`<0`), UDP/TCP chained pbuf flattening (`pbuf_copy_partial`), removed duplicate lwIP lock in `U2_Net_OpenUdp`; RECV unread-drop behavior remains intentional for ip65 compatibility |
+| Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | Pump/TX/RX remain in U2 net layer; `U2_Net_Poll` is **core-0-only** (guarded) and is called from `PicoW_ServiceCore0IpcAndNetwork`. MACRAW TX called from bus/core1 is queued and executed on core0 to avoid wrong-core `async_context` panic (§1k, §14.10b). A full-pointer TX arithmetic experiment in `send_data` regressed ip65 detection and was reverted; ring math remains masked/consistent with TX_FSR (`§1l`). |
+| Telnet65 walkthrough + fixes | §10f, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp` | Implemented: TX wrap fix (`<0`), UDP/TCP chained pbuf flattening (`pbuf_copy_partial`), removed duplicate lwIP lock in `U2_Net_OpenUdp`; later `wget65` follow-ups changed RECV to preserve unread bytes (§10h) |
 | Other ip65 tools walkthrough | §10g, `ip65/apps/*`, `ip65/apps/w5100.c`, `uthernet2*.{c,cpp}` | Risks: RECV discards unread bytes (shared-access mismatch), TCP RX overflow can drop+ACK, SEND chunk currently capped at 2048; `wget65` highest risk |
 | `wget65` priority fixes | §10h, `uthernet2.c`, `ip65/apps/w5100.c` | SN_CR=RECV no longer forces `RX_RD->WR`; TCP SEND drains entire queued TX data in chunks (not single 2 KiB cap) |
 | TCP RX backpressure | §10i, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | U2 RX callback returns accepted bytes; TCP `tcp_recved()` now acknowledges only accepted payload (UDP unchanged/all-or-drop) |
+| Open C0C4 unresolved item | §12 | Slot decode confirmed working; remaining investigation is nDEVSEL signal/timing visibility at Pico/PIO point vs timing/FIFO/CPU-drain behavior |
 | Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |
 
 ---
@@ -795,15 +973,16 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 
 **Observed:** With a logic analyzer, A0–A4 (and thus the address) are confirmed at the Pico when C0C4 is accessed. With nDEVSEL pull-up enabled, the Pico still does not recognize the access (no U2 response).
 
-**Implication:** The PIO only runs `in pins` + `push` when **nDEVSEL (GPIO 20) goes low**. So either:
+**Update:** Slot decode is confirmed working correctly for this path.
 
-1. **nDEVSEL never goes low** for this access (e.g. slot decode does not assert it for $C0C4, or only for $C0C0–$C0C3; or the monitor/test addresses a different slot; or the line is not wired/used on this connector), or  
+**Implication:** The PIO only runs `in pins` + `push` when **nDEVSEL (GPIO 20) goes low**. Remaining possibilities are:
+
+1. **nDEVSEL signaling/visibility issue on this path** (line not observed low at the PIO at the critical point, or electrical/timing behavior differs from expected), or
 2. **nDEVSEL goes low but something else** prevents the PIO from pushing or the CPU from reading (e.g. timing, FIFO, wrong SM on RP2040).
 
 **Next steps for debugging:**
 
-- **Probe nDEVSEL (GPIO 20)** during a C0C4 access. If it never goes low, the fix is hardware or slot/decode (ensure slot 4 and full $C0C0–$C0CF range assert nDEVSEL). If it does go low, the bug is elsewhere (timing, FIFO, or CPU not draining SM0 on RP2040).
-- **Confirm slot:** Ensure the test (monitor or program) is addressing **slot 4** (same as $C0C0–$C0C3 that work for MegaFlash).
+- **Probe nDEVSEL (GPIO 20)** during a C0C4 access at the Pico pins/PIO timing point. If it is not seen low at the right instant, treat as a signal/timing path issue; if it is seen low, focus on timing/FIFO/CPU-drain behavior.
 - **Hardware docs:** Check whether the IIc memory expansion connector exposes nDEVSEL and for which address range it is asserted (e.g. GAL or schematic).
 
 ---

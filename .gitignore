@@ -26,3 +26,5 @@
 
 **/*:Zone.Identifier
 .DS_Store
+pico/.DS_Store
+pico/_releases/.DS_Store

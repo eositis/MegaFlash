@@ -1,4 +1,4 @@
-# @VERSION@
+# V1.2.1-eo
 
 **1.2 series:** V1.1.24-eo was the final release in the 1.1.x line. Development from **V1.2.0-eo** onward uses the **1.2.x** series, focused on **Uthernet II emulation**, **com port**, and **imagewriter emulation**.
 

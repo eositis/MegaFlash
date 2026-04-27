@@ -216,9 +216,13 @@ static uint8_t read_socket_register(uint16_t address) {
   case W5100_SN_TX_FSR1:
     return get_tx_fsr_byte(i, 0);
   case W5100_SN_TX_RD0:
+    return u2_memory[address];
   case W5100_SN_TX_RD1:
+    return u2_memory[address];
   case W5100_SN_TX_WR0:
+    return u2_memory[address];
   case W5100_SN_TX_WR1:
+    return u2_memory[address];
   case W5100_SN_RX_RSR0:
     return get_rx_rsr_byte(i, 8);
   case W5100_SN_RX_RSR1:
@@ -386,9 +390,12 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
       return;
     }
   }
-  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(len >> 8);
+  /* W5100 MACRAW RX length field is reported as frame_len + 2 in many drivers,
+   * which then subtract 2 before reading frame bytes. */
+  uint16_t wire_len = (uint16_t)(len + 2u);
+  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(wire_len >> 8);
   s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)len;
+  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)wire_len;
   s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
   for (uint16_t k = 0; k < len; k++) {
     u2_memory[base + (s->sn_rx_wr & mask)] = data[k];
@@ -403,8 +410,10 @@ static void send_data(int i) {
   if (buf_size == 0) return;
   uint16_t mask = buf_size - 1;
   const uint8_t *r = &u2_memory[s->register_address];
-  uint16_t rd = read_net16(r + W5100_SN_TX_RD0) & mask;
-  uint16_t wr = read_net16(r + W5100_SN_TX_WR0) & mask;
+  uint16_t rd_full = read_net16(r + W5100_SN_TX_RD0);
+  uint16_t wr_full = read_net16(r + W5100_SN_TX_WR0);
+  uint16_t rd = rd_full & mask;
+  uint16_t wr = wr_full & mask;
   int data_len = (int)wr - (int)rd;
   if (data_len < 0) data_len += buf_size;
   if (data_len == 0) return;
@@ -445,14 +454,16 @@ static void send_data(int i) {
     uint8_t buf[1518];
     int n = data_len;
     if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
+    U2_MonNetMacrawTxPtrs(i, (uint16_t)n, rd_full, wr_full, rd, wr);
     for (int j = 0; j < n; j++)
       buf[j] = u2_memory[base + ((rd + j) & mask)];
     U2_MonNetMacrawTx(i, (uint16_t)n);
     U2_Net_SendMacraw(i, buf, (uint16_t)n);
   }
   /* Advance TX_RD to TX_WR */
-  u2_memory[s->register_address + W5100_SN_TX_RD0] = (uint8_t)(wr >> 8);
-  u2_memory[s->register_address + W5100_SN_TX_RD1] = (uint8_t)wr;
+  /* Keep full host-visible pointer progression; only ring indexing is masked. */
+  u2_memory[s->register_address + W5100_SN_TX_RD0] = (uint8_t)(wr_full >> 8);
+  u2_memory[s->register_address + W5100_SN_TX_RD1] = (uint8_t)wr_full;
 }
 
 static void write_socket_register(uint16_t address, uint8_t value) {

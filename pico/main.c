@@ -23,6 +23,7 @@
 #include "network.h"
 #include "tftpstate.h"
 #include "uthernet2.h"
+#include "uthernet2_net.h"
 #include "u2_monitor.h"
 
 static inline void InitActLed() {
@@ -89,7 +90,7 @@ volatile bool updateNTPNow = false;
 static void PicoW_ServiceCore0IpcAndNetwork(uint64_t fifo_timeout_us) {
   uint32_t param;
   bool msgReceived = multicore_fifo_pop_timeout_us(fifo_timeout_us, &param);
-  NetworkPump_PollOnce();
+  U2_Net_Poll();
   U2_MonPollFlush();
   if (msgReceived) {
     struct IpcMsg *msg = (struct IpcMsg *)param;

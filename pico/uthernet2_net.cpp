@@ -23,6 +23,8 @@
 #include "lwip/inet_chksum.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/prot/ip.h"
+#include "pico/multicore.h"
+#include "pico/sync.h"
 #include <cstring>
 #include <vector>
 #if U2_ETH_HEADER_TRACE
@@ -48,6 +50,11 @@ static u2_push_rx_fn push_rx_cb;
 static u2_push_rx_macraw_fn push_rx_macraw_cb;
 static netif_input_fn u2_saved_netif_input;
 static u2_net_socket_t sockets[U2_NET_MAX_SOCKETS];
+static critical_section_t u2_macraw_tx_cs;
+static bool u2_macraw_tx_pending;
+static int u2_macraw_tx_sock;
+static uint16_t u2_macraw_tx_len;
+static uint8_t u2_macraw_tx_buf[U2_MACRAW_MAX_FRAME];
 
 struct U2TcpArg {
   int sock_index;
@@ -71,6 +78,22 @@ static struct netif *u2_cyw43_sta_netif(void) { return &cyw43_state.netif[CYW43_
 static netif_input_fn u2_eth_trace_saved_input;
 static netif_linkoutput_fn u2_eth_trace_saved_linkoutput;
 static bool u2_eth_trace_installed;
+
+/* Extra TX tap for MACRAW triage: compare bytes at queue-drain vs pre/post patch. */
+static void u2_eth_trace_tap(const char *stage, const uint8_t *data, uint16_t len) {
+  if (!data || len == 0)
+    return;
+  /* Keep noise bounded: focus on DHCP-sized/nearby MACRAW sends. */
+  if (len < 200 && len != 257 && len != 292)
+    return;
+  size_t got = len < 64 ? len : 64;
+  printf("[u2tap] %s len=%u", stage, (unsigned)len);
+  for (size_t i = 0; i < got; i++)
+    printf(" %02x", data[i]);
+  if (len > got)
+    printf(" ...");
+  printf("\n");
+}
 
 static void u2_eth_trace_hex_line(const char *dir, const struct netif *nf, const uint8_t *data, size_t got, size_t tot) {
   printf("[u2eth] %s itf=%c%c tot_len=%zu", dir, nf->name[0], nf->name[1], tot);
@@ -115,8 +138,9 @@ static void u2_eth_trace_try_install(void) {
 
 /**
  * ip65 DHCP uses UDP/68→67 inside MACRAW. We overwrite Ethernet SA with netif->hwaddr, but the
- * BOOTP chaddr field (bytes 28–33 of the UDP payload) may still hold a stale WIZnet MAC; DHCP
- * servers often unicast replies using chaddr. Patch chaddr to STA MAC and recompute UDP checksum.
+ * BOOTP chaddr field (bytes 28–33 of the UDP payload) and DHCP client-id option (61) may still
+ * hold a stale MAC. Patch both to STA MAC. For IPv4 UDP, checksum 0 means "no checksum"; we use
+ * that here to avoid interoperability issues from on-device checksum rewrite mistakes.
  */
 static void u2_macraw_patch_dhcp_bootp_chaddr(uint8_t *eth, uint16_t len, const uint8_t mac[6]) {
   if (len < 14u + 20u + 8u + 29u)
@@ -158,21 +182,33 @@ static void u2_macraw_patch_dhcp_bootp_chaddr(uint8_t *eth, uint16_t len, const 
   if (chaddr_off + 6 > len)
     return;
   memcpy(eth + chaddr_off, mac, 6);
+  /* DHCP options start at BOOTP offset 240: fixed 236-byte header + 4-byte magic cookie. */
+  uint16_t opts = (uint16_t)(ulp + 240u);
+  uint16_t end = (uint16_t)(ulp + udp_len - 8u);
+  if (opts < end && opts + 4u <= end) {
+    /* Validate magic cookie 99,130,83,99 and patch option 61 (client-id, type 1 + MAC). */
+    if (eth[opts + 0] == 99 && eth[opts + 1] == 130 && eth[opts + 2] == 83 && eth[opts + 3] == 99) {
+      uint16_t p = (uint16_t)(opts + 4u);
+      while (p < end) {
+        uint8_t code = eth[p++];
+        if (code == 0) /* pad */
+          continue;
+        if (code == 255) /* end */
+          break;
+        if (p >= end)
+          break;
+        uint8_t olen = eth[p++];
+        if (p + olen > end)
+          break;
+        if (code == 61 && olen >= 7 && eth[p] == 1)
+          memcpy(eth + p + 1, mac, 6);
+        p = (uint16_t)(p + olen);
+      }
+    }
+  }
+  /* IPv4 UDP checksum 0 is valid (checksum disabled). */
   eth[udp_off + 6] = 0;
   eth[udp_off + 7] = 0;
-  ip4_addr_t src, dst;
-  IP4_ADDR(&src, eth[26], eth[27], eth[28], eth[29]);
-  IP4_ADDR(&dst, eth[30], eth[31], eth[32], eth[33]);
-  struct pbuf *pb = pbuf_alloc(PBUF_RAW, udp_len, PBUF_RAM);
-  if (!pb)
-    return;
-  memcpy(pb->payload, eth + udp_off, udp_len);
-  u16_t csum = inet_chksum_pseudo(pb, IP_PROTO_UDP, udp_len, &src, &dst);
-  pbuf_free(pb);
-  if (csum == 0)
-    csum = 0xffff;
-  eth[udp_off + 6] = (uint8_t)((csum >> 8) & 0xFF);
-  eth[udp_off + 7] = (uint8_t)(csum & 0xFF);
 }
 
 static void set_status(int i, uint8_t s) {
@@ -341,10 +377,41 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
 
 extern "C" {
 
+static void u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
+  struct netif *netif = u2_cyw43_sta_netif();
+  if (cyw43_is_initialized(&cyw43_state) && netif && netif->linkoutput && netif->hwaddr_len == 6) {
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
+    if (p) {
+      memcpy(p->payload, data, len);
+      uint8_t *eth = (uint8_t *)p->payload;
+#if U2_ETH_HEADER_TRACE
+      u2_eth_trace_tap("core0-pre", eth, len);
+#endif
+      /* Keep BOOTP payload bytes untouched for client-side DHCP validation compatibility. */
+      /* Ethernet header: bytes 0-5 DA, 6-11 SA. Force SA = STA MAC. */
+      if (len >= 12)
+        memcpy(eth + 6, netif->hwaddr, 6);
+#if U2_ETH_HEADER_TRACE
+      u2_eth_trace_tap("core0-post", eth, len);
+#endif
+      U2_SetStationMacFromBytes(netif->hwaddr);
+      netif->linkoutput(netif, p);
+      pbuf_free(p);
+      U2_MonNetMacrawTx(i, len);
+    }
+  }
+}
+
 void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
   push_rx_cb = push_rx;
   push_rx_macraw_cb = push_rx_macraw;
   memset(sockets, 0, sizeof(sockets));
+  critical_section_init(&u2_macraw_tx_cs);
+  critical_section_enter_blocking(&u2_macraw_tx_cs);
+  u2_macraw_tx_pending = false;
+  u2_macraw_tx_sock = 0;
+  u2_macraw_tx_len = 0;
+  critical_section_exit(&u2_macraw_tx_cs);
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++)
     sockets[i].status = W5100_SN_SR_CLOSED;
   GetNetworkPump().AddSession(&g_u2_session);
@@ -372,25 +439,21 @@ void U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_MACRAW || !data || len == 0 ||
       len > U2_MACRAW_MAX_FRAME)
     return;
-  cyw43_arch_lwip_begin();
-  struct netif *netif = u2_cyw43_sta_netif();
-  if (cyw43_is_initialized(&cyw43_state) && netif && netif->linkoutput && netif->hwaddr_len == 6) {
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
-    if (p) {
-      memcpy(p->payload, data, len);
-      uint8_t *eth = (uint8_t *)p->payload;
-      /* DHCP: align BOOTP chaddr + UDP checksum with STA MAC (see u2_macraw_patch_dhcp_bootp_chaddr). */
-      if (len >= 14 + 20 + 8 + 29)
-        u2_macraw_patch_dhcp_bootp_chaddr(eth, len, netif->hwaddr);
-      /* Ethernet header: bytes 0–5 DA, 6–11 SA. Force SA = STA MAC so frames are not dropped
-       * when ip65 built the header from a different SHAR than CYW43. */
-      if (len >= 12)
-        memcpy(eth + 6, netif->hwaddr, 6);
-      U2_SetStationMacFromBytes(netif->hwaddr);
-      netif->linkoutput(netif, p);
-      pbuf_free(p);
-    }
+  /* U2 bus path can invoke this on core 1; defer TX to U2_Net_Poll() on core 0. */
+  if (get_core_num() != 0) {
+    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    memcpy(u2_macraw_tx_buf, data, len);
+    u2_macraw_tx_len = len;
+    u2_macraw_tx_sock = i;
+    u2_macraw_tx_pending = true;
+    critical_section_exit(&u2_macraw_tx_cs);
+    return;
   }
+  cyw43_arch_lwip_begin();
+#if U2_ETH_HEADER_TRACE
+  u2_eth_trace_tap("direct", data, len);
+#endif
+  u2_send_macraw_core0(i, data, len);
   cyw43_arch_lwip_end();
 }
 
@@ -538,9 +601,33 @@ void U2_Net_RecvConfirm(int i) { (void)i; }
 uint8_t U2_Net_GetStatus(int i) { return get_status(i); }
 
 void U2_Net_Poll(void) {
+  /* cyw43/lwIP poll is core-0 only; U2_Poll() may run on core 1 from bus loop. */
+  if (get_core_num() != 0)
+    return;
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_try_install();
 #endif
+  if (u2_macraw_tx_pending) {
+    uint16_t len = 0;
+    int sock = 0;
+    uint8_t buf[U2_MACRAW_MAX_FRAME];
+    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    if (u2_macraw_tx_pending) {
+      len = u2_macraw_tx_len;
+      sock = u2_macraw_tx_sock;
+      memcpy(buf, u2_macraw_tx_buf, len);
+      u2_macraw_tx_pending = false;
+    }
+    critical_section_exit(&u2_macraw_tx_cs);
+    if (len > 0) {
+#if U2_ETH_HEADER_TRACE
+      u2_eth_trace_tap("drain", buf, len);
+#endif
+      cyw43_arch_lwip_begin();
+      u2_send_macraw_core0(sock, buf, len);
+      cyw43_arch_lwip_end();
+    }
+  }
   NetworkPump_PollOnce();
 }
 

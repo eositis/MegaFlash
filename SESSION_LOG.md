@@ -4,7 +4,61 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-04-26
+
+- **Release-notes sanity pass + correction:** Reviewed generated `pico/_releases/V1.2.1-eo/CHANGELOG.md` and found it was stale (older NetworkPump/TFTP-era text not matching current Uthernet-focused changes). Rewrote `V1.2.1-eo` changelog and synced `pico/CHANGELOG-NEXT.md` to accurately describe shipped Uthernet TX-pointer decode fix, MACRAW length-prefix fix, DHCP payload rewrite rollback, and core-affinity/diagnostic improvements.
+
+- **Pico 1.2-series release build:** Ran `./pico/cmakeall.sh` to perform versioned release build packaging; build completed as `V1.2.1-eo (0x0021)` with release outputs in `pico/_releases/V1.2.1-eo/` (`megaflash-pico.uf2`, `megaflash-pico2.uf2`, `CHANGELOG.md`).
+
+- **Packaged patched `ADTPROETH.BIN` into ProDOS images:** Rebuilt base ADTPro ProDOS disk images (`prodos-adtpro-image-prep`) and manually inserted `/Users/eositis/Documents/GitHub/adtpro/src/client/ADTPROETH.BIN` using AppleCommander into `adtpro/build/ADTPro-v.r.m/disks/ADTPRO-v.r.m.DSK` and `.PO` as `ADTPROETH.BIN` (BIN, load address 2048). Verified with `-ls` that both images now contain `ADTPROETH.BIN` (19,121 bytes).
+
+- **Forced ADTPro Ethernet slot 4 in local `adtpro` repo + built client binary:** Updated `/Users/eositis/Documents/GitHub/adtpro/src/client/prodos/ethernet/ethconfig.asm` to bypass `FindSlot` in `PARMDFT` and hard-set `COMMSLOT=3` (slot 4), with defaults aligned (`COMMSLOT`/`DEFAULT` changed from 2→3). Built with `JAVA_HOME=/opt/homebrew/opt/openjdk ant -DassemblerPath=/opt/homebrew/bin prodos-ethernet`; Ant later failed on missing custom `appleDump` task, but `src/client/ADTPROETH.BIN` and `src/client/adtproeth.map` were successfully generated.
+
+- **ADTPro pre-init crash follow-up (bus-access visibility build):** Since `debug/uart_log.txt` with `U2_IP65_CHECKPOINT=1` still showed no `ck=1` or socket events, built a stricter diagnostic image with bus logging enabled to verify whether ADTPro issues any `$C0C4-$C0C7` accesses before `system-$01`: `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=1 U2_MON_LOG_BUS=1 ./pico/build-debug-both.sh`.
+
+- **ADTPro `system-$01` log triage + checkpoint bisect build:** Reviewed refreshed `debug/uart_log.txt` from `Firmware build: 2026-04-27 01:00:59 UTC`; failure window shows ambient RX traffic but no U2 socket/checkpoint activity (`sock0 OPEN/SEND/RECV` absent), so crash likely occurs before W5100 init/handoff in that run. Built targeted debug image with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=1 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh` to confirm whether ADTPro reaches first mode write.
+
+- **ADTPro DHCP-compatibility experiment (disable BOOTP payload rewrite):** With latest debug showing repeated DHCP offers arriving (`67->68`) but client still failing, changed `pico/uthernet2_net.cpp` to stop rewriting BOOTP/DHCP payload fields (`chaddr`/option 61/checksum) and only rewrite Ethernet SA to STA MAC. Goal: avoid client-side DHCP validation mismatch in ADTPro/ip65 while preserving WiFi egress compatibility. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **MACRAW RX length-field compatibility fix:** With DHCP offers (`67->68`) visible in `[u2eth] RX` and `net sock0 MACRAW rx len=342` present but ip65 still timing out, updated `pico/uthernet2.c` `u2_push_rx_macraw()` to write length prefix as `len+2` (W5100 MACRAW wire convention used by many drivers) instead of raw `len`. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **DHCP MACRAW rewrite hardening:** Updated `pico/uthernet2_net.cpp` DHCP patch path to also rewrite DHCP option 61 (client-id MAC) in addition to BOOTP `chaddr`, and set IPv4 UDP checksum to zero (valid/no-checksum) after mutation to avoid checksum-recompute incompatibilities. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **U2 root-cause fix for malformed MACRAW TX:** In `pico/uthernet2.c` `read_socket_register()`, reads of `SN_TX_RD0/1` and `SN_TX_WR0/1` were incorrectly falling through the `RX_RSR0` handler and returning RX-RSR bytes. Fixed these cases to return `u2_memory[address]` (actual TX pointer registers). This explains `MACRAW ptrs len=257/514` and shifted payload starts in `[u2tap]`. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **Added MACRAW SEND pointer trace event:** Extended `pico/u2_monitor.{h,c}` with `U2_MonNetMacrawTxPtrs` and wired it in `pico/uthernet2.c` `send_data()` (MACRAW branch) to log `len`, `rd_full`, `wr_full`, and masked `rd/wr` per SEND without unsafe core1 printf. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **U2 MACRAW TX corruption fix (`Sn_TX_RD` full progression):** From `[u2tap]` logs, malformed `len=257/514` packets were already wrong at queue drain, so issue was pre-core0 patching. In `pico/uthernet2.c` `send_data()`, preserved full `Sn_TX_WR` (`wr_full`) for `Sn_TX_RD` register update after SEND while keeping masked pointers only for ring indexing/copy. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **U2 MACRAW TX tap instrumentation:** Added core-0-only `[u2tap]` traces in `pico/uthernet2_net.cpp` at `drain`, `core0-pre`, and `core0-post` stages (for DHCP-sized frames) to locate where shifted/malformed `tot_len=257` frames appear. Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean.
+
+- **Rebuilt known-good U2 debug profile:** Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh` to restore the earlier “ip65 recognizes Uthernet, but DHCP/data path still problematic” baseline; this avoids the later high-noise profile that changed runtime behavior during init checks.
+
+- **U2 regression triage + rollback (ip65 “device not found”):** Reviewed latest `send_data()` TX-pointer change in `pico/uthernet2.c` and identified root cause as inconsistent pointer semantics (full 16-bit SEND math vs masked-ring `get_tx_data_size`/TX_FSR path). Reverted `send_data()` to masked-ring logic, rebuilt with `./pico/build-debug-both.sh`, and updated implementation notes §1l to record the failed attempt and rationale.
+
+- **U2 DHCP timeout follow-up (MACRAW TX pointer fix):** Updated `pico/uthernet2.c` `send_data()` to keep full 16-bit `Sn_TX_RD/Sn_TX_WR` for queued-length math and mask only during ring indexing; this avoids wrap-related malformed/zero-heavy MACRAW frames seen in `[u2eth]` and is intended to restore clean DHCP request framing. Rebuilt with `./pico/build-debug-both.sh`; lints clean on edited code.
+
 ## 2026-04-10
+
+- **Post-fix `uart_log` analysis (no code change):** New capture shows no `PANIC` / `async_context_poll` errors after launch; MACRAW send/recv continues under load, indicating core-affinity crash is resolved. Noted a remaining behavior to investigate: some `[u2eth] TX` frames show zeroed/abnormal headers at larger lengths (e.g., 514/771/1518), suggesting a possible separate payload/format issue unrelated to the prior crash.
+
+- **U2 panic follow-up (latest `uart_log`):** Panic still occurred on first MACRAW SEND after core0 poll guard. Root cause was `U2_Net_SendMacraw()` entering `cyw43_arch_lwip_*` from bus/core1. `pico/uthernet2_net.cpp` now defers MACRAW TX to a core0-drained queue in `U2_Net_Poll`; rebuilt Debug with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0`; lints clean.
+
+- **U2 crash fix (wrong-core async_context):** `debug/uart_log.txt` panic (`async_context_poll ... wrong core`) traced to `U2_Poll` (core1) calling `U2_Net_Poll` → `NetworkPump_PollOnce`. Fixed by making `U2_Net_Poll` core-0-only (`get_core_num()` guard) and calling it from `main.c` `PicoW_ServiceCore0IpcAndNetwork` (core0 path). Rebuilt with `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh`; lints clean. Documented rationale in `docs/Implementation-notes-and-reasoning.md` §1k + summary table row update.
+
+- **Crash log triage (`debug/uart_log.txt`, no code change):** Panic signature `async_context_poll context check failed (IRQ or wrong core)` reproduced in capture; likely trigger is U2 network poll path running `NetworkPump_PollOnce()` from `U2_Poll` (bus/core1), which conflicts with CYW43/lwIP core affinity expected on core0. Capture also confirms `[u2eth]` traffic trace is working but Debug still emits `[u2m]`.
+
+- **Reviewed `debug/uart_log.txt` capture:** Confirmed `[u2eth]` TX/RX header trace is active and producing MACRAW traffic lines, but `[u2m]` monitor lines are also present in Debug builds and the log still shows an `async_context_poll context check failed` panic during early activity; for strictly header-only runtime noise, prefer Release with `U2_ETH_HEADER_TRACE=1`.
+
+- **Debug build (U2 TX/RX header-only):** Ran `U2_ETH_HEADER_TRACE=1 U2_IP65_TRACE_DATA=0 U2_IP65_CHECKPOINT=0 U2_MON_LOG_BUS=0 ./pico/build-debug-both.sh` to produce low-noise Uthernet traffic tracing (`[u2eth]` only, without bus/data/checkpoint flood). Outputs refreshed: `pico/pico_debug/megaflash.uf2`, `pico/pico2_debug/megaflash.uf2`.
+
+- **U2 debug-scope check (no code change):** Verified current trace knobs in `pico/CMakeLists.txt` / `build-debug*.sh` and `uthernet2_net.cpp`: minimal Uthernet-only traffic capture is `U2_ETH_HEADER_TRACE=1` with `U2_MON_LOG_BUS=0`, `U2_IP65_TRACE_DATA=0`, `U2_IP65_CHECKPOINT=0` to avoid bus/checkpoint/data flood.
+
+- **U2 summary table alignment:** Updated `docs/Implementation-notes-and-reasoning.md` §11 to match current U2 state (RECV now preserves unread bytes per §10h) and added a row noting §12 open-item scope now excludes slot decode (confirmed working).
+
+- **U2 open-items cleanup:** Updated `docs/Implementation-notes-and-reasoning.md` §12 to reflect user-confirmed slot decode correctness; removed "confirm slot" from remaining debug steps and narrowed unresolved causes to nDEVSEL signal/timing vs PIO/FIFO/CPU path.
+
+- **Uthernet status recap (no code change):** Reviewed `SESSION_LOG.md` + `docs/Implementation-notes-and-reasoning.md` (§10f–§10i, §12) to summarize latest U2 emulation state and pending validation/debug items; key outcome is that `wget65`-priority RX/TX fixes and TCP backpressure fix are in, with bench verification still needed for remaining hardware-path uncertainty.
 
 - **U2 hot path RAM:** **`pico/uthernet2.c`**, **`pico/busloop.c`**; **`./build-both.sh`** OK.
 

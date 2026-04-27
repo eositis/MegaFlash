@@ -42,6 +42,8 @@ void U2_MonNetRxUdp(int sock, uint16_t len, uint32_t src_ip_host, uint16_t src_p
 void U2_MonNetRxTcp(int sock, uint16_t len);
 void U2_MonNetRxMacraw(int sock, uint16_t len);
 void U2_MonNetMacrawTx(int sock, uint16_t len);
+void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr_full, uint16_t rd_masked,
+                           uint16_t wr_masked);
 
 #ifdef __cplusplus
 }

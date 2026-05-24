@@ -15,6 +15,9 @@
 /pico/pico_release
 /pico/pico2_debug
 /pico/pico2_release
+/pico/si_test_build
+/pico/si_test_pico_w
+/pico/si_test_pico2_w
 /pico/picotool
 
 /ip65
@@ -26,5 +29,3 @@
 
 **/*:Zone.Identifier
 .DS_Store
-pico/.DS_Store
-pico/_releases/.DS_Store

@@ -29,6 +29,9 @@
 #ifndef U2_IP65_CHECKPOINT
 #define U2_IP65_CHECKPOINT 0
 #endif
+#ifndef U2_MACRAW_COMPAT_DROP_OLDEST
+#define U2_MACRAW_COMPAT_DROP_OLDEST 0
+#endif
 
 #if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
 /* Verbose: after MR=0x03, log next N DATA reads (enable with -DU2_IP65_TRACE_DATA=1). */
@@ -52,10 +55,24 @@ typedef struct {
   uint16_t receive_base;
   uint16_t receive_size;
   uint16_t register_address;
-  uint16_t sn_rx_wr;  /* next write offset in RX buffer (0..receive_size-1) */
+  /* RX producer pointer (writer: net callbacks/core0, reader: bus/core1 for RX_RSR). */
+  uint16_t sn_rx_wr;
 } u2_socket_t;
 
 static u2_socket_t u2_sockets[W5100_NUM_SOCKETS];
+
+enum {
+  U2_RX_PROTO_UDP = 1,
+  U2_RX_PROTO_TCP = 2,
+  U2_RX_PROTO_MACRAW = 3,
+};
+
+enum {
+  U2_RX_DROP_NO_ROOM = 1,
+  U2_RX_DROP_PARTIAL = 2,
+  U2_RX_DROP_FRAME_TOO_BIG = 3,
+  U2_RX_DROP_SIZE_CLAMPED = 4,
+};
 
 static inline uint8_t get_byte(uint16_t val, unsigned shift) {
   return (uint8_t)((val >> shift) & 0xFF);
@@ -63,6 +80,53 @@ static inline uint8_t get_byte(uint16_t val, unsigned shift) {
 
 static uint16_t read_net16(const uint8_t *p) {
   return (uint16_t)p[0] << 8 | p[1];
+}
+
+static inline uint16_t u2_rx_wr_load(const u2_socket_t *s) {
+  return __atomic_load_n(&s->sn_rx_wr, __ATOMIC_ACQUIRE);
+}
+
+static inline void u2_rx_wr_store(u2_socket_t *s, uint16_t wr) {
+  __atomic_store_n(&s->sn_rx_wr, wr, __ATOMIC_RELEASE);
+}
+
+static inline uint16_t u2_size_from_rmsr_field(uint8_t field) {
+  return (uint16_t)(1u << (10 + (field & 3u))); /* 1K,2K,4K,8K */
+}
+
+static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
+  uint16_t base = is_rx ? W5100_RX_BASE : W5100_TX_BASE;
+  const uint16_t end = is_rx ? W5100_MEM_SIZE : W5100_RX_BASE;
+  uint8_t val = value;
+  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
+    uint16_t requested = u2_size_from_rmsr_field(val);
+    uint16_t assigned = requested;
+    if (base + assigned > end) {
+      assigned = (uint16_t)(end - base);
+      if (is_rx) {
+        U2_MonNetRxDrop(i, U2_RX_PROTO_MACRAW, U2_RX_DROP_SIZE_CLAMPED, requested, assigned, 0,
+                        (uint16_t)(W5100_MEM_SIZE - W5100_RX_BASE));
+      }
+    }
+    if (is_rx) {
+      u2_socket_t *sock = &u2_sockets[i];
+      uint16_t old_wr = u2_rx_wr_load(sock);
+      sock->receive_base = base;
+      sock->receive_size = assigned;
+      /* Do not zero sn_rx_wr on every RMSR write — that desyncs RX vs Sn_RX_RD and breaks TCP/ACK progress.
+       * Remap the producer offset into the new window; full chip reset clears pointers in u2_reset(). */
+      if (assigned == 0) {
+        u2_rx_wr_store(sock, 0);
+      } else {
+        u2_rx_wr_store(sock, (uint16_t)(old_wr % assigned));
+      }
+    } else {
+      u2_sockets[i].transmit_base = base;
+      u2_sockets[i].transmit_size = assigned;
+    }
+    base = (uint16_t)(base + assigned);
+    val >>= 2;
+  }
 }
 
 static void u2_reset(void) {
@@ -109,68 +173,25 @@ static void u2_reset(void) {
   /* Default buffer sizes: 0x06 so ip65 chip-check path accepts without full reset; ip65 then writes 0x0A. */
   u2_memory[W5100_RMSR] = 0x06;
   u2_memory[W5100_TMSR] = 0x06;
-  /* apply sizes to socket base/size */
-  {
-    uint16_t base = W5100_TX_BASE;
-    const uint16_t end = W5100_RX_BASE;
-    uint8_t val = 0x06;
-    for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-      u2_sockets[i].transmit_base = base;
-      uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
-      val >>= 2;
-      base += size;
-      if (base > end) base = end;
-      u2_sockets[i].transmit_size = base - u2_sockets[i].transmit_base;
-    }
-  }
-  {
-    uint16_t base = W5100_RX_BASE;
-    const uint16_t end = W5100_MEM_SIZE;
-    uint8_t val = 0x06;
-    for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-      u2_sockets[i].receive_base = base;
-      uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
-      val >>= 2;
-      base += size;
-      if (base > end) base = end;
-      u2_sockets[i].receive_size = base - u2_sockets[i].receive_base;
-    }
-  }
+  u2_apply_socket_sizes(0, 0x06);
+  u2_apply_socket_sizes(1, 0x06);
 }
 
 static void U2_BUS_RAM(set_tx_sizes)(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
-  uint16_t base = W5100_TX_BASE;
-  const uint16_t end = W5100_RX_BASE;
-  uint8_t val = value;
-  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-    u2_sockets[i].transmit_base = base;
-    uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
-    val >>= 2;
-    base += size;
-    if (base > end) base = end;
-    u2_sockets[i].transmit_size = base - u2_sockets[i].transmit_base;
-  }
+  u2_apply_socket_sizes(0, value);
 }
 
 static void U2_BUS_RAM(set_rx_sizes)(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
-  uint16_t base = W5100_RX_BASE;
-  const uint16_t end = W5100_MEM_SIZE;
-  uint8_t val = value;
-  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-    u2_sockets[i].receive_base = base;
-    uint16_t size = (uint16_t)(1 << (10 + (val & 3)));
-    val >>= 2;
-    base += size;
-    if (base > end) base = end;
-    u2_sockets[i].receive_size = base - u2_sockets[i].receive_base;
-  }
+  u2_apply_socket_sizes(1, value);
 }
 
 static uint16_t get_tx_data_size(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t size = s->transmit_size;
+  if (size == 0)
+    return 0;
   uint16_t mask = size - 1;
   const uint8_t *r = &u2_memory[s->register_address];
   int rd = read_net16(r + W5100_SN_TX_RD0) & mask;
@@ -181,18 +202,25 @@ static uint16_t get_tx_data_size(int i) {
 }
 
 static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
-  uint16_t free_size = u2_sockets[i].transmit_size - get_tx_data_size(i);
+  uint16_t ts = u2_sockets[i].transmit_size;
+  if (ts == 0)
+    return 0;
+  uint16_t free_size = ts - get_tx_data_size(i);
   return get_byte((uint16_t)free_size, shift);
 }
 
-/* RSR = bytes available = (sn_rx_wr - RX_RD + size) % size */
+/* W5100-style RX occupancy model:
+ * - producer: inbound network path appends at internal RX write pointer.
+ * - consumer: host advances Sn_RX_RD then issues RECV.
+ * RSR = unread bytes = (wr - rd + size) % size.
+ * wr is published with release semantics because producer/consumer are cross-core. */
 static uint16_t get_rx_rsr(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t size = s->receive_size;
   if (size == 0) return 0;
   uint16_t mask = size - 1;
   uint16_t rd = read_net16(&u2_memory[s->register_address + W5100_SN_RX_RD0]) & mask;
-  uint16_t wr = s->sn_rx_wr & mask;
+  uint16_t wr = u2_rx_wr_load(s) & mask;
   int d = (int)wr - (int)rd;
   if (d < 0) d += size;
   return (uint16_t)d;
@@ -328,45 +356,55 @@ static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int 
   uint16_t total = len;
   if (is_udp) {
     total += 8;  /* 4 + 2 + 2 */
-    if (free_bytes < total) return 0;  /* UDP datagram is atomic */
+    if (free_bytes < total) {
+      U2_MonNetRxDrop(socket_i, U2_RX_PROTO_UDP, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
+      return 0;  /* UDP datagram is atomic */
+    }
   } else {
-    if (free_bytes == 0) return 0;
+    if (free_bytes == 0) {
+      U2_MonNetRxDrop(socket_i, U2_RX_PROTO_TCP, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
+      return 0;
+    }
     if (accept_len > free_bytes) accept_len = free_bytes;
     total = accept_len;
+    if (accept_len < len)
+      U2_MonNetRxDrop(socket_i, U2_RX_PROTO_TCP, U2_RX_DROP_PARTIAL, len, accept_len, free_bytes, size);
   }
+  uint16_t wr = u2_rx_wr_load(s) & mask;
   if (is_udp) {
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(src_ip >> 24);
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(src_ip >> 16);
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(src_ip >> 8);
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)src_ip;
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(src_port >> 8);
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)src_port;
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(len >> 8);
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-    u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)len;
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)(src_ip >> 24);
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)(src_ip >> 16);
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)(src_ip >> 8);
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)src_ip;
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)(src_port >> 8);
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)src_port;
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)(len >> 8);
+    wr = (wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = (uint8_t)len;
+    wr = (wr + 1) & mask;
   }
   for (uint16_t k = 0; k < accept_len; k++) {
-    u2_memory[base + (s->sn_rx_wr & mask)] = data[k];
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = data[k];
+    wr = (wr + 1) & mask;
   }
+  u2_rx_wr_store(s, wr);
   return accept_len;
 }
 
-/* Advance RX_RD to sn_rx_wr: discard unread RX (host never consumed it). */
+/* Advance Sn_RX_RD to sn_rx_wr (discard unread). Not W5100-accurate; optional MACRAW compat only. */
 static void u2_socket_discard_rx(int socket_i) {
   if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS) return;
   u2_socket_t *s = &u2_sockets[socket_i];
   uint16_t size = s->receive_size;
   if (size == 0) return;
   uint16_t mask = size - 1;
-  uint16_t wr = s->sn_rx_wr & mask;
+  uint16_t wr = u2_rx_wr_load(s) & mask;
   uint16_t ra = s->register_address;
   u2_memory[ra + W5100_SN_RX_RD0] = (uint8_t)(wr >> 8);
   u2_memory[ra + W5100_SN_RX_RD1] = (uint8_t)(wr & 0xFF);
@@ -381,26 +419,37 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   uint16_t mask = size - 1;
   uint16_t base = s->receive_base;
   uint16_t total = (uint16_t)(2 + len);
-  if (get_rx_rsr(socket_i) + total > size) {
-    /* WiFi floods MACRAW faster than the II drains; drop stale unread so DHCP can progress. */
+  uint16_t used = get_rx_rsr(socket_i);
+  uint16_t free_bytes = size - used;
+  if (total > size) {
+    U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_FRAME_TOO_BIG, len, 0, free_bytes, size);
+    return;
+  }
+  if (free_bytes < total) {
+#if U2_MACRAW_COMPAT_DROP_OLDEST
+    /* Compatibility: flush unread once so DHCP/ARP bursts can progress (enable via -DU2_MACRAW_COMPAT_DROP_OLDEST=1). */
     u2_socket_discard_rx(socket_i);
-    if (get_rx_rsr(socket_i) + total > size) {
-      if (total > size)
-        U2_DEBUGF("MACRAW RX socket %d drop len=%u (frame > buffer)\n", socket_i, (unsigned)len);
+    used = get_rx_rsr(socket_i);
+    free_bytes = size - used;
+#endif
+    if (free_bytes < total) {
+      U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
       return;
     }
   }
+  uint16_t wr = u2_rx_wr_load(s) & mask;
   /* W5100 MACRAW RX length field is reported as frame_len + 2 in many drivers,
    * which then subtract 2 before reading frame bytes. */
   uint16_t wire_len = (uint16_t)(len + 2u);
-  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)(wire_len >> 8);
-  s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
-  u2_memory[base + (s->sn_rx_wr & mask)] = (uint8_t)wire_len;
-  s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
+  u2_memory[base + (wr & mask)] = (uint8_t)(wire_len >> 8);
+  wr = (wr + 1) & mask;
+  u2_memory[base + (wr & mask)] = (uint8_t)wire_len;
+  wr = (wr + 1) & mask;
   for (uint16_t k = 0; k < len; k++) {
-    u2_memory[base + (s->sn_rx_wr & mask)] = data[k];
-    s->sn_rx_wr = (s->sn_rx_wr + 1) & mask;
+    u2_memory[base + (wr & mask)] = data[k];
+    wr = (wr + 1) & mask;
   }
+  u2_rx_wr_store(s, wr);
 }
 
 /* Read TX buffer data between rd and wr and send via network */

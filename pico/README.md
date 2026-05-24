@@ -47,6 +47,14 @@ Vendor PDFs (e.g. Winbond, Alliance) for SPI flash and related ICs live in the *
 
 That folder is for human reference when comparing command sets, SFDP, and status-register layouts with what `flash.c` assumes.
 
+## SPI flash SI test firmware (`flash_si_test`)
+
+Optional UF2: **(1)** baud sweep + SR3 experiment (blocking `0Ch` read vs 10 MHz reference); **(2)** **soft-SPI GPIO diagnostic** at **~100 kHz** (bit-bang on same CS/SCK/MOSI/MISO; CPOL0 CPHA1) — JEDEC, **`SR1`**, 8 B `0Ch` at **0** and **`0x03FF0000`**, **`WEN`/`WRDI`** **`WEL`** check — isolates hardware SPI / DMA / clock-margin from PCB/chip path; **(3)** **XMODEM-image-style** destructive sequence — **`DCh`** erase of last **64 KiB** of a **64 MiB** NOR, then **per SPI baud** (ladder now also includes **500 kHz** and **1 MHz** rows): **erase + SR1/2/3 + probe64 + BLOCK0** program/verify (CSV `xfer,spi_want,spi_got,CS,...`); on the slowest row prints a **post-erase SR1 trace** (16 transactional reads with 2 ms gaps + a **12-byte “held-CS” SR1 burst** matching `wait_busy` streaming); at **75 MHz request** only, **BLOCK1..15** + triage lines. **`BITINVERSION`** same as `flash.c` image upload. Procedure in **`docs/Implementation-notes-and-reasoning.md`** §23.
+
+- Enable in CMake: **`-DMEGAFLASH_BUILD_FLASH_SI_TEST=ON`** (see `pico/CMakeLists.txt`).
+- Build only the test app: **`cmake --build <build-dir> --target flash_si_test`**.
+- Sources: **`pico/flash_si_test/main.c`**, **`flash_si_pins.c`**, **`flash_si_softspi.c`**, **`xmodem_like.c`**, plus **`pico/dmamemops.c`**.
+
 ## Build Instruction
 
 Before compiling the pico firmware, the control panel must be built first. Please follow the instruction in `cpanel` directory to build the control panel binary.

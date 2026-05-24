@@ -10,10 +10,14 @@
 #   U2_IP65_TRACE_DATA   1     # 1 = log first 48 DATA reads after MR=0x03 ([u2] DATA read addr=…)
 #   U2_MON_LOG_BUS       0     # 1 = per-cycle bus log (very verbose; can flood UART)
 #   U2_ETH_HEADER_TRACE  0     # 1 = [u2eth] first 64 bytes hex per STA TX/RX frame (UART; not tcpdump)
+#   U2_MACRAW_COMPAT_DROP_OLDEST 0  # 1 = MACRAW: discard unread RX once when full (compat; helps DHCP bursts)
 #
 # Examples:
 #   ./build-debug-both.sh
 #   U2_IP65_CHECKPOINT=2 U2_IP65_TRACE_DATA=0 ./build-debug-both.sh   # bisect RTR0 only, less noise
+#
+# After a successful build, creates an empty git commit at the MegaFlash repo root
+# documenting this run (pico_debug/ and pico2_debug/ are gitignored). Skip: MF_DEBUG_BUILD_NO_GIT_COMMIT=1
 #
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +31,7 @@ U2_IP65_CHECKPOINT="${U2_IP65_CHECKPOINT:-0}"
 U2_IP65_TRACE_DATA="${U2_IP65_TRACE_DATA:-1}"
 U2_MON_LOG_BUS="${U2_MON_LOG_BUS:-0}"
 U2_ETH_HEADER_TRACE="${U2_ETH_HEADER_TRACE:-0}"
+U2_MACRAW_COMPAT_DROP_OLDEST="${U2_MACRAW_COMPAT_DROP_OLDEST:-0}"
 
 # --- ARM toolchain (same as build-both.sh) ---
 TOOLCHAIN_BIN=""
@@ -90,7 +95,7 @@ if [ ! -d "$SDK_PATH" ]; then
 fi
 
 echo "Using CMake: $CMAKE_BIN"
-echo "Debug U2 options: U2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT U2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA U2_MON_LOG_BUS=$U2_MON_LOG_BUS U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE"
+echo "Debug U2 options: U2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT U2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA U2_MON_LOG_BUS=$U2_MON_LOG_BUS U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE U2_MACRAW_COMPAT_DROP_OLDEST=$U2_MACRAW_COMPAT_DROP_OLDEST"
 
 # Reuse host pioasm from a successful Release configure (same SDK) so Debug builds do not
 # regenerate a broken/wrong-architecture pioasm (e.g. "Bad CPU type in executable").
@@ -106,7 +111,7 @@ FIRMWARE_BUILD_TIMESTAMP="${FIRMWARE_BUILD_TIMESTAMP:-$(date +%s)}"
 FIRMWARE_BUILD_TIMESTAMP_STR="${FIRMWARE_BUILD_TIMESTAMP_STR:-$(date -u +"%Y-%m-%d %H:%M:%S UTC")}"
 echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMESTAMP_STR)"
 
-U2_FLAGS="-DU2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT -DU2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA -DU2_MON_LOG_BUS=$U2_MON_LOG_BUS -DU2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE"
+U2_FLAGS="-DU2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT -DU2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA -DU2_MON_LOG_BUS=$U2_MON_LOG_BUS -DU2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE -DU2_MACRAW_COMPAT_DROP_OLDEST=$U2_MACRAW_COMPAT_DROP_OLDEST"
 
 echo "Configuring pico_debug (Pico W, Debug)..."
 "$CMAKE_BIN" -B pico_debug -S . -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \
@@ -133,3 +138,12 @@ make -C pico2_debug -j"$JOBS" || exit 1
 echo "OK: pico_debug/megaflash.uf2 and pico2_debug/megaflash.uf2"
 echo "Flash the one that matches your board; connect UART 115200 8N1 for [u2]/[u2m] lines during wget65/ip65 init."
 echo "For L2/L3/L4 header hex on WiFi STA: U2_ETH_HEADER_TRACE=1 ./build-debug-both.sh → watch [u2eth] TX/RX lines."
+
+MF_DEBUG_BUILD_COMMIT_EXTRA="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+  "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP" \
+  "FIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  "U2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT" \
+  "U2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA" \
+  "U2_MON_LOG_BUS=$U2_MON_LOG_BUS" \
+  "U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE")"
+mf_debug_build_git_commit "pico/build-debug-both.sh"

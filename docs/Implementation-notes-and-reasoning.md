@@ -42,7 +42,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ## 1e. U2 activity monitor (`[u2m]`, Debug build)
 
-**What:** Structured tracing of Uthernet II emulation for serial capture (UART 115200).
+**What:** Structured tracing of Uthernet II emulation for serial capture (UART **460800** in Debug `main.c` after `stdio_uart_init`).
 
 **Why:** Separate from `[u2]` `U2_DEBUGF` printf-in-place: bus cycles run on **core 1** while lwIP runs on **core 0**, so `printf` from both cores is unsafe. Events are **queued** under a critical section and **drained** from `U2_Poll()` (core 1) as `[u2m]` lines.
 
@@ -124,11 +124,89 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 **What we did:** **`U2_Poll()`** now runs **`U2_Net_Poll()`** only. **`U2_MonPollFlush()`** runs on **core 0** next to **`NetworkPump_PollOnce()`** in **`core0Loop`**, at the start of each NTP cycle, and in the **USB idle** loop when MegaFlash menu runs without **`core0Loop`**. **`u2_monitor.h`** documents core‑0‑only flush.
 
-**Why (no room):** **`u2_netif_input_wrapper`** feeds **every** incoming Ethernet frame into socket 0 **MACRAW** while WiFi is up; the emulated **4K** RX ring fills faster than the II drains it during DHCP.
+**Why (no room):** **`u2_netif_input_wrapper`** feeds **every** incoming Ethernet frame into socket 0 **MACRAW** while WiFi is up; the emulated **4K** RX ring can fill faster than the II drains it.
 
-**What we did:** In **`u2_push_rx_macraw`**, if **`2+len`** does not fit, call **`u2_socket_discard_rx()`** (set **RX_RD** to **sn_rx_wr**, discarding unread data) and **retry** once so a new frame (e.g. DHCP) can land. Removed **`U2_DEBUGF`** spam on the hot path (monitor already queues **`U2_MonNetRxMacraw`** from **`uthernet2_net.cpp`**).
+**Overflow policy (W5100 parity):** If the next complete MACRAW record (**2+len**) does not fit, **drop that frame** only — **no** internal flush of unread data. See **§1au** (replaces the earlier **`u2_socket_discard_rx()`** “wipe ring and retry” helper used for DHCP convenience).
 
-**References:** `pico/main.c`, `pico/uthernet2.c` (`u2_socket_discard_rx`, `u2_push_rx_macraw`), `pico/u2_monitor.h`.
+**References:** `pico/uthernet2.c` (`u2_push_rx_macraw`), `pico/main.c`, `pico/u2_monitor.h`.
+
+---
+
+## 1au. MACRAW RX buffer full — match W5100 (reject new frame only)
+
+**Requirement:** Emulated Uthernet II RX behavior when an Ethernet frame arrives but the socket RX memory cannot store the **complete** next MACRAW record (**2-byte length** + **Ethernet payload**).
+
+**Why:** On real **W5100**, if there is **not enough free RX space** for the incoming packet, that packet is **not received** — the chip does **not** discard older unread bytes by moving **RX_RD** to free space. Older MegaFlash code called **`u2_socket_discard_rx()`** (set **RX_RD** to **sn_rx_wr**) when space was tight so DHCP could “make room”; that was **not** datasheet behavior and could hide host-side flow-control bugs.
+
+**What we did:** **`u2_push_rx_macraw`** returns without writing if **`used + (2+len) > size`**, or if **`2+len > size`**. Removed **`u2_socket_discard_rx`** from this path.
+
+**What we did not do:** No staging FIFO outside the chip (that would be an emulation extension, not W5100-accurate RX RAM).
+
+**Project policy (re-stated 2026-05):** The emulated **RX** window stays **W5100-sized** per **RMSR** / ip65 — **one** tight budget like the real chip. If a new inbound frame does not fit as a **whole** **2+len** record, it is **dropped** (§**1au**). We **do not** grow the fake RX RAM, add side staging that changes **in-order** semantics, or advance **RX_RD** / discard head data to “make room” — older MegaFlash experiments did that and traffic was lost **out of sequence**, which broke predictable behaviour. **Order of work:** (1) **consistent, reliable** (even slow) throughput with strict W5100 rules; (2) only later, optional **throughput** improvements that do not regress ordering.
+
+**References:** `pico/uthernet2.c` (`u2_push_rx_macraw`, `get_rx_rsr`).
+
+---
+
+## 1az. Inbound parity implementation (2026-05): drop-new MACRAW, atomic RX_WR publish, deterministic RMSR mapping
+
+**Requirement:** Keep MegaFlash queue architecture unchanged, but align inbound RX buffer behavior with real W5100 semantics for MACRAW/UDP/TCP.
+
+**Why:** Unusual inbound failures were more consistent with buffer-policy mismatches than with missing throughput. Two parity gaps mattered most: (1) MACRAW overflow still had a discard-old path in code, and (2) cross-core producer (`sn_rx_wr`) vs consumer (`Sn_RX_RD`) reads relied on plain loads/stores during burst traffic.
+
+**What we changed (without queue redesign):**
+
+- **`pico/uthernet2.c`**
+  - Added explicit W5100 parity comments near `get_rx_rsr()` and `Sn_CR=RECV` contract.
+  - Removed the MACRAW discard-old helper path; `u2_push_rx_macraw()` now **drops incoming** frame when `free < (2+len)` and never mutates `Sn_RX_RD` to make room.
+  - Added release/acquire publication helpers for `sn_rx_wr` and switched enqueue paths to use a local write cursor with one publish at the end.
+  - Consolidated `RMSR/TMSR` decode into `u2_apply_socket_sizes()` so size mapping is deterministic; when RX map over-allocates and must clamp, emit telemetry.
+- **`pico/u2_monitor.h` + `pico/u2_monitor.c`**
+  - Added `U2_MonNetRxDrop(...)` with protocol/reason fields (`no-room`, `partial`, `frame-too-big`, `size-map-clamped`) to make inbound pressure visible without changing queue mechanics.
+
+**What we did not do:**
+
+- No changes to `NetworkPump`, deferred queue topology, core split, or `busloop.c` timing pipeline.
+- No expansion of effective RX capacity beyond W5100-sized windows.
+
+**Validation:** Built with `MF_DEBUG_BUILD_NO_GIT_COMMIT=1 ./build-debug.sh` (success, `pico2_debug/megaflash.uf2`).
+
+**Takeaway:** Inbound buffer semantics now match the real-chip model more closely: preserve unread head data, drop only incoming units when full, and expose pressure conditions explicitly.
+
+**Follow-up (TX appeared broken after parity merge):** Resetting **`sn_rx_wr` to zero on every host **`RMSR`** write desynchronized RX bookkeeping vs **`Sn_RX_RD`** and could stall TCP/ACK-driven flows (egress looked dead). **Fix:** remap **`sn_rx_wr`** with **`old_wr % new_receive_size`** instead of zeroing. **`get_tx_data_size` / `Sn_TX_FSR`** now guard **`transmit_size == 0`** so TMSR clamp does not compute **`mask = size - 1`** garbage. Optional **`U2_MACRAW_COMPAT_DROP_OLDEST=1`** (CMake / **`build-debug-both.sh`**) restores one-shot unread discard before rejecting a MACRAW frame when full (compat, not strict W5100). **`U2_MonNetRxDrop`** is rate-limited per socket/reason (**100 ms**) to reduce debug UART contention under floods.
+
+---
+
+## 1aw. ADTProETH “host timeout” — May 2026 UART + `tcpdump` (rx_noroom)
+
+**Capture (May 2026 session):** `debug/2026-05-04 11-14-47 FT232R USB UART #1.log` (tail for last boot). **Wire:** use a **dated `tcpdump.pcap`** paired by wall-clock + **`Firmware build:`** — **do not** treat repo **`tcpdump.txt`** (or any stale text export) as “current” without matching timestamps (see `debug/README.md`).
+
+**UART (firmware with `[u2eth]` / `[u2tap]` / `[u2macraw]`):**
+
+- **`[u2macraw] tx_q_drop=0`**, **`tx_q=0`** — deferred MACRAW TX ring is not the bottleneck.
+- **`rx_noroom=2`** (non-zero on the **~5 s** stats line) — **`u2_push_rx_macraw`** rejected **two** inbound frames (§**1au**) because **`used + (2+len) > receive_size`** while the II had not **RECV**’d enough yet.
+- Immediately before, **`[u2eth] RX`** logged **many** identical **~342 B** frames (DHCP **OFFER**-shaped **`67→68`** inside Ethernet) and **`[u2m] net sock0 MACRAW rx len=342`** in a tight burst — the AP/router can flood offers; the emulated **S0 RX** budget (from **RMSR** / ip65) is finite, so **drops** are plausible even when ADTPro later “works” at the Ethernet edge.
+- Opening garbage on line 1 of the capture (`x<xxx<…`) matches **serial terminal baud ≠ firmware** (that run was still **115200** on the Pico; terminal mismatch garbles until the next clean boot block).
+
+**`tcpdump`:** Shows **many** Mac → Pico **large** UDP/6502 replies and **short** Pico → Mac polls (`UDP length 9`). **`bad udp cksum`** on inbound Mac packets is a **known capture/offload artifact** on some macOS paths — do not treat as MegaFlash corruption unless validated on the wire without checksum offload.
+
+**Interpretation (aligned with §1au policy):** **`rx_noroom=2`** means **two** frames were **correctly rejected** — same class of event a real **W5100** would produce when the **II has not RECV’d** enough to free space and the wire keeps delivering (e.g. DHCP **OFFER** bursts). That is **not** a signal to **enlarge** the emulated RX buffer in firmware: the project explicitly keeps **W5100-sized** RX and **drops** when full until **reliable in-order** behaviour is proven end-to-end (**§1au** “Project policy”). **ADTProETH / ip65** timeouts in that situation point to **application / network timing** (drain **RECV** fast enough, or fewer duplicate offers on the LAN), **not** a missing MegaFlash “bigger ring” hack.
+
+**Optional diagnostics (do not change RX capacity):** Less UART **`printf`** load (e.g. **`U2_ETH_HEADER_TRACE=0`**, **460800** already set) reduces core0 time stolen from **`U2_Net_Poll`** — helps **service** ingress but does **not** relax W5100 RX rules.
+
+**References:** `debug/2026-05-04 11-14-47 FT232R USB UART #1.log`, `pico/uthernet2_net.cpp` (`u2_netif_input_wrapper`), `pico/uthernet2.c` (`u2_push_rx_macraw`), `pico/main.c` (UART baud), `debug/README.md` (pcap + UART line semantics).
+
+---
+
+## 1av. STA `netif->input` hook — install from core 0 after CYW43 is up
+
+**Symptom:** ip65 / MACRAW **TX** could work (DHCP DISCOVER leaves the Pico) but **RX** never filled **`u2_memory`** — **`[u2eth] RX`** appeared on UART while **`[u2m] net sock0 MACRAW rx`** did not after OPEN.
+
+**Why:** **`U2_Init()`** runs before **`InitPicoLed()`** / **`cyw43_arch_init()`**. **`SN_CR OPEN`** (MACRAW) runs on **core 1**. **`U2_Net_OpenMacraw`** only hooked **`sta->input`** when **`cyw43_is_initialized()`** was already true — otherwise **`u2_netif_input_wrapper`** was **never** installed and **`push_rx_macraw_cb`** never ran.
+
+**What we did:** **`u2_macraw_sta_input_hook_ensure()`** in **`U2_Net_Poll()`** (core 0, **`cyw43_arch_lwip_begin/end`**) attaches the wrapper once socket 0 is **MACRAW**, CYW43 is up, and **`sta->input`** exists. **`OpenMacraw`** only updates **SHAR** when possible.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_macraw_sta_input_hook_ensure`, `U2_Net_Poll`).
 
 ---
 
@@ -207,8 +285,8 @@ This document records the thinking, root-cause analysis, design decisions, and d
 - In `pico/main.c`, `PicoW_ServiceCore0IpcAndNetwork()` now calls `U2_Net_Poll()` (core-0 path), so the same function performs both optional `[u2eth]` hook install and network pump polling on the correct core.
 - Kept `U2_Poll()` callable from core 1, but it no longer drives network poll off-core.
 - Follow-up from a fresh `uart_log` capture: panic still reproduced on first MACRAW SEND because `U2_Net_SendMacraw()` itself called `cyw43_arch_lwip_begin/end` from bus/core 1. Fixed by deferring MACRAW TX to core 0:
-  - `U2_Net_SendMacraw()` now queues frame bytes when called off-core.
-  - `U2_Net_Poll()` (core 0) drains one pending MACRAW frame and performs `linkoutput` there.
+  - `U2_Net_SendMacraw()` enqueues when called off-core (see §**1ag**: **ring queue**, not a single slot — rapid SEND must not overwrite an unsent frame).
+  - `U2_Net_Poll()` (core 0) drains queued MACRAW frames and performs `linkoutput` there.
   - Result: CYW43/lwIP lock entry for MACRAW TX is core-0-only.
 
 **What we didn’t do:** No protocol-level changes to U2 MACRAW/TCP/UDP behavior; this is execution-context routing only.
@@ -363,6 +441,713 @@ This document records the thinking, root-cause analysis, design decisions, and d
 **Takeaway:** For fixed-slot hardware targets, bypassing ADTPro slot scan can isolate startup crashes from network emulation issues and allow focused runtime validation.
 
 **References:** `adtpro/src/client/prodos/ethernet/ethconfig.asm` (local clone), `adtpro/build/build.xml` (`prodos-ethernet` target), generated `ADTPROETH.BIN`.
+
+---
+
+## 1r. Core0 lwIP poll cadence, deferred MACRAW TX queue, TCP SEND batching
+
+**Requirement / symptom:** Improve effective Uthernet throughput and robustness when core 1 issues network work while lwIP/CYW43 runs on core 0 — specifically: (a) **`PicoW_ServiceCore0IpcAndNetwork`** previously **`multicore_fifo_pop_timeout_us`’d first** then **`U2_Net_Poll`**, so up to tens of milliseconds could pass **without** **`NetworkPump_PollOnce`** when **`core0Loop`** used a **50 ms** FIFO timeout; (b) **MACRAW TX** deferred from core 1 used **one** pending buffer → overlapping sends could overwrite; (c) TCP **`send_data`** issued **`U2_Net_SendTcp`** per chunk with **`tcp_output`** each time.
+
+**Why / design:**
+- **Poll before block:** Serving **`U2_Net_Poll`** immediately on each core-0 entry bounds idle latency regardless of FIFO behavior; shortening the **`core0Loop`** wait from **50 ms** to **1 ms** caps worst-case **sleep-in-FIFO** delay while NTP waits (still bounded by **`time_reached(nextUpdateTime)`**).
+- **MACRAW ring:** A small queue avoids overwrite under bursty TX from the bus; **RP2040** stays **RAM-tight** — ring depth **3** vs **8** on **RP2350**. When the queue had been empty and core 1 enqueues the first frame, a **non-blocking** **`multicore_fifo_push_timeout_us`** with **`IPCCMD_NET_WAKE`** lets core 0 exit a blocking pop sooner if the FIFO was the only waiter (harmless duplicate wakes).
+- **TCP:** **`U2_Net_SendTcpEnqueue`** + **`U2_Net_SendTcpFlush`** keep **`tcp_write`** per chunk but **one `tcp_output`** per logical SEND. Chunk size stays **1024 bytes** on the stack in **`send_data`** — raising toward **MSS (1460)** increased the **core 1** stack frame and **linked with heap/stack overlap** on **Pico W (RP2040)** in practice.
+
+**What we did:** Reordered **`main.c`**; added **`IPCCMD_NET_WAKE`** in **`ipc.h`**; ring + wake in **`uthernet2_net.cpp`**; **`uthernet2_net.h`** / **`uthernet2.c`** enqueue+flush API and **`send_data`** TCP loop.
+
+**What we didn’t do:** Did not raise **`TCP_MSS`** / **`TCP_SND_BUF`** in **`lwipopts.h`** in this pass; did not use **1460-byte** stack buffers on RP2040 until RAM/stack layout allows.
+
+**References:** `pico/main.c`, `pico/ipc.h`, `pico/uthernet2_net.{h,cpp}`, `pico/uthernet2.c`.
+
+---
+
+## 1s. Pico 2 W-only throughput follow-up: fix TCP TX data loss under lwIP backpressure
+
+**Symptom after prior tuning:** UDP reliability regressed and TCP showed recovery behavior but still slow transfer plus corrupted payloads.
+
+**Root cause identified:** In `send_data()` TCP path, we were batching chunks and then always moving `Sn_TX_RD` to `TX_WR` even when `tcp_write()` could not accept all queued bytes (`ERR_MEM` path). That acknowledges data to the emulated W5100 that lwIP never queued, producing silent byte loss/corruption and retransmit-heavy behavior.
+
+**What we changed (Pico 2 W target):**
+
+- `U2_Net_SendTcpEnqueue()` now returns accepted byte count (`0` on reject) instead of `void`.
+- `send_data()` advances `Sn_TX_RD` by **accepted bytes only**, and stops enqueueing when a partial/zero accept is seen.
+- `U2_Net_SendTcpFlush()` is called once only if at least one chunk was accepted.
+- Chunk size set to **1460** for Pico 2 W (`U2_TCP_SEND_CHUNK`), matching `TCP_MSS`, to reduce per-SEND overhead.
+- Deferred MACRAW queue depth increased to **16** and the extra wake-message FIFO push removed to reduce unnecessary IPC churn while validating reliability.
+
+**What we did not change in this pass:** `PicoW_ServiceCore0IpcAndNetwork` poll-before-wait behavior and 1 ms core0 FIFO timeout remain, since those changes improve lwIP service cadence and are not in the corrupt-data path.
+
+**Takeaway:** For W5100 SEND emulation, host-visible pointer movement must reflect **actual lwIP acceptance**, not requested bytes. Throughput tuning (chunking/flush frequency) is safe only when this accounting is strict.
+
+**References:** `pico/uthernet2.c`, `pico/uthernet2_net.h`, `pico/uthernet2_net.cpp`.
+
+---
+
+## 1t. Add temporary UART counters for transfer-error triage
+
+**Requirement:** During Pico 2 W validation, expose lightweight runtime counters to confirm whether observed bad data / retries correlate with TCP enqueue backpressure (`tcp_write` reject) and/or deferred MACRAW queue pressure.
+
+**What we did:** Added periodic (`~1s`) Debug UART line in `U2_Net_Poll()`:
+
+- Format: `[u2ctr] tcp calls=<n> acceptB=<n> rej=<n> | macq enq=<n> drain=<n> drop=<n> peak=<n> q=<n>`
+- `tcp calls`: number of `U2_Net_SendTcpEnqueue` attempts.
+- `acceptB`: total bytes accepted by lwIP (`tcp_write == ERR_OK`).
+- `rej`: enqueue attempts rejected (typically `ERR_MEM`).
+- `macq enq/drain/drop`: deferred MACRAW frames queued, drained, and dropped (queue full).
+- `macq peak/q`: high-water mark and current queue depth.
+
+**Why:** This gives immediate visibility into where reliability degrades under load without adding heavy tracing. If `rej` climbs with low `acceptB` growth, TCP path is pressure-limited. If `drop` climbs, deferred MACRAW queue is the bottleneck.
+
+**What we didn’t do:** No persistent telemetry storage or host-side parser yet; counters are cumulative from `U2_Net_Init()` and intended as temporary on-device diagnostics.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_SendTcpEnqueue`, `U2_Net_SendMacraw`, `U2_Net_Poll`).
+
+---
+
+## 1u. Periodic U2 heap telemetry on UART (Pico 2 W)
+
+**Requirement:** Report available RAM while U2 is active, roughly every 10-15 seconds, to detect low-memory pressure during real transfers.
+
+**What we changed:** Extended the existing `[u2ctr]` periodic line in `U2_Net_Poll()` to include heap metrics from `GetFreeHeap()` / `GetTotalHeap()` and moved the report cadence to **10 seconds**.
+
+- Added fields: `heap free`, `used`, `total`, and `min_free` (low-water mark since `U2_Net_Init`).
+- Current line shape:
+  - `[u2ctr] heap free=<n> used=<n> total=<n> min_free=<n> | tcp ... | macq ...`
+
+**Why this location:** `U2_Net_Poll()` is the core-0 U2 network heartbeat, so heap snapshots are taken in the same execution context that drives lwIP and deferred MACRAW TX.
+
+**Takeaway:** `min_free` provides the key safety margin under load; if it trends too close to zero during problematic transfers, remaining reliability issues are likely memory-pressure related.
+
+**References:** `pico/uthernet2_net.cpp`, `pico/misc.{h,c}` (`GetFreeHeap`, `GetTotalHeap`).
+
+---
+
+## 1v. Follow-up: avoid per-poll heap sampling overhead
+
+**Symptom:** After adding heap telemetry, telnet65/ip65 behavior regressed and Uthernet detection/traffic became unstable.
+
+**Why:** The first version sampled `GetFreeHeap()` on **every** `U2_Net_Poll()` pass to track a true low-water mark. `GetFreeHeap()` uses allocator state (`mallinfo`) and is too heavy at poll-loop cadence, reducing time available for normal network pump work.
+
+**Fix:** Sample heap only at the existing periodic report interval (10s), and update `min_free` from those periodic samples. This preserves RAM visibility with much lower runtime overhead.
+
+**Takeaway:** Telemetry in hot network loops must be O(1)/cheap per pass; allocator introspection should be periodic, not per-iteration.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_Poll` reporting block).
+
+---
+
+## 1w. ip65 “device not found” triage: reduce debug-path perturbation
+
+**Symptom:** After instrumentation additions, telnet65/ip65 again reported “device not found.”
+
+**Rationale:** In Debug, `U2_IP65_TRACE_DATA=1` emits many per-read logs from the U2 path after MR=0x03. This can perturb timing enough to confound diagnosis of true slot/probe issues.
+
+**Action taken:** Rebuilt `pico2_debug` with minimal diagnostic noise and early checkpoint only:
+
+- `U2_IP65_CHECKPOINT=1`
+- `U2_IP65_TRACE_DATA=0`
+- `U2_MON_LOG_BUS=0`
+- `U2_ETH_HEADER_TRACE=0`
+
+This keeps visibility of whether ip65 reaches the first mode write while avoiding DATA-read log flood.
+
+**References:** `pico/build-debug-both.sh` options, `pico2_debug/CMakeCache.txt`.
+
+---
+
+## 1x. ADTProETH slowness/errors: prevent silent UDP/MACRAW TX drops
+
+**Symptom:** ADTProETH sometimes starts but transfers are very slow and often fail before completion; Contiki web browsing remains comparatively stable.
+
+**Why this can happen:** `send_data()` always advanced `Sn_TX_RD` to `TX_WR` at the end of SEND, but UDP/MACRAW send paths did not return whether lwIP queueing actually succeeded (e.g., `pbuf_alloc` failure, `udp_sendto` error, deferred MACRAW queue full). On those failures, the frame was effectively discarded while pointers still advanced, causing silent loss and retry-heavy behavior.
+
+**What we changed:**
+
+- `U2_Net_SendUdp(...)` now returns success/failure (`1/0`).
+- `U2_Net_SendMacraw(...)` now returns success/failure (`1/0`), including queue-full rejection.
+- `send_data()` now exits early (without pointer advance) when UDP/MACRAW TX is not accepted; pointers advance only for accepted sends.
+
+**Takeaway:** W5100 TX pointer progression must be coupled to successful enqueue into the host networking stack. Decoupling them can look like “timing issues” from the client side because retries/recovery hide silent drops.
+
+**References:** `pico/uthernet2.c` (`send_data`), `pico/uthernet2_net.h`, `pico/uthernet2_net.cpp`.
+
+---
+
+## 1y. Follow-up rollback: strict UDP/MACRAW acceptance harmed liveness
+
+**Observed after §1x:** ADTPro host-query phase timed out and Contiki responsiveness dropped noticeably.
+
+**Why likely:** The strict “don’t advance TX pointer unless UDP/MACRAW send accepted” policy was too aggressive for current software expectations and transient lwIP conditions, causing repeated/resubmitted command behavior that looked like hard stalls.
+
+**What we changed:**
+
+- Restored permissive UDP/MACRAW SEND behavior (no success-return gating for pointer progression).
+- Kept TCP accepted-byte accounting from §1s (still needed to avoid TCP data corruption).
+- Improved `U2_Net_Poll` fairness: run `NetworkPump_PollOnce()` **before** deferred MACRAW drain, and cap MACRAW drain work to **2 frames per poll** so burst MACRAW traffic cannot monopolize core-0 service time.
+
+**Takeaway:** For this emulation, TCP needs strict acceptance accounting; UDP/MACRAW currently need more permissive/liveness-first behavior to preserve compatibility with client timing assumptions.
+
+**References:** `pico/uthernet2.c`, `pico/uthernet2_net.{h,cpp}`.
+
+---
+
+## 1z. Rollback to known-good U2 runtime + enable `[u2eth]` packet-header tracing
+
+**User direction:** ADTProETH remained unstable and Contiki responsiveness worsened; request was to roll back recent runtime edits and use packet-header tracing instead of periodic counter polling.
+
+**What we did:**
+
+- Restored U2 runtime files to repository baseline (`main`) state:
+  - `pico/ipc.h`
+  - `pico/main.c`
+  - `pico/uthernet2.c`
+  - `pico/uthernet2_net.cpp`
+  - `pico/uthernet2_net.h`
+- Built `pico2_debug` with packet-header tracing enabled:
+  - `U2_ETH_HEADER_TRACE=1`
+  - `U2_IP65_TRACE_DATA=0`
+  - `U2_MON_LOG_BUS=0`
+  - `U2_IP65_CHECKPOINT=0`
+
+**Why:** This removes experimental poll/counter overhead and behavioral changes from the datapath, while preserving a low-intrusion network visibility signal (`[u2eth]` RX/TX header bytes) to diagnose ADTProETH timing/packet behavior.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_ETH_HEADER_TRACE` wrappers), `pico/build-debug-both.sh` flags.
+
+---
+
+## 1aa. ADTProETH timeout root cause from host tcpdump: ARP SHA mismatch
+
+**Status:** Reverted in code at user request after confirming the immediate ADTProETH failure was host-side configuration (fixed IP vs DHCP), not firmware.
+
+**Symptom:** ADTProETH host query timed out even though Pico could ARP for host `192.168.0.154`.
+
+**Evidence:** Host-side tcpdump showed requests from IP `192.168.0.245` with:
+
+- Ethernet source MAC = CYW43 STA (`88:a2:...`)
+- ARP sender hardware address (SHA) = emulated W5100 default (`00:08:dc:a2:a2:a2`)
+
+Host ARP reply then targeted `00:08:dc:a2:a2:a2` instead of STA MAC, so L2/L3 path broke before UDP exchange.
+
+**Fix applied:** In `u2_send_macraw_core0()`:
+
+- keep Ethernet SA rewrite to STA MAC,
+- add ARP patch helper to rewrite ARP sender hardware address to STA MAC,
+- re-enable DHCP BOOTP `chaddr` / option 61 patch call so sender identity stays consistent across ARP + DHCP.
+
+**Takeaway:** For MACRAW on Wi-Fi STA, all sender identity fields must agree (Ethernet SA, ARP SHA, DHCP client MAC fields) or peers can cache/reply to an unreachable L2 address.
+
+**References:** `pico/uthernet2_net.cpp`, `debug/tcpdump.txt`.
+
+---
+
+## 1ab. Correlated tcpdump+UART: MACRAW frames must not be forwarded to lwIP
+
+**Observation:** During ADTPro UDP/6502 attempts, host tcpdump showed valid request/response datagrams, while UART simultaneously showed Pico transmitting ICMP type 3/code 3 (port unreachable) quoting those same UDP packets.
+
+**Root cause:** `u2_netif_input_wrapper()` was feeding ingress frames to U2 MACRAW **and** forwarding the same pbuf into lwIP input. lwIP had no listener for ADTPro/U2 traffic and emitted ICMP unreachable, disrupting transfer flow.
+
+**Original symptom / observation:** Duplicate delivery into lwIP could produce **ICMP dest/port unreachable** for UDP/TCP ports owned only by ip65/MACRAW (lwIP had no pcb).
+
+**Baseline behavior (restored 2026-05, matches tree `483e8da`):** **`u2_netif_input_wrapper`** copies eligible ingress to **`push_rx_macraw_cb`**, then **always** **`return u2_saved_netif_input(p, inp)`** — **no** port filtering, **no** MACRAW-only `pbuf_free`. That keeps **MegaFlash** lwIP services (NTP, TFTP, ARP, DNS, …) on the **same STA netif** working whenever MACRAW is open.
+
+**Tradeoff:** Unwanted ICMP from lwIP may recur when ip65’s ports are not lwIP-bound — triage by tcpdump if ADTPro misbehaves; do **not** guess ports/protocols for MACRAW traffic.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_netif_input_wrapper`), `debug/tcpdump.txt`, `debug/2026-04-28 15-03-58 FT232R USB UART.log`.
+
+---
+
+## 1ar. MACRAW + lwIP (2026-05): restore duplicate netif feed (`483e8da` semantics)
+
+**What:** Removed §1ab-style “MACRAW owns ingress only” and removed §1ar port-based filtering. **`u2_netif_input_wrapper`** again matches **`git show 483e8da:pico/uthernet2_net.cpp`**: feed **U2 MACRAW** copy, then **always** chain **`u2_saved_netif_input`**.
+
+**Why:** MegaFlash traffic handling **before** U2 RX ring work used this pattern; isolating lwIP broke Pico-side Wi‑Fi; guessing ports is invalid for arbitrary MACRAW payloads.
+
+**References:** `pico/uthernet2_net.cpp`; §1ab observation text above.
+
+---
+
+## 1as. STA `netif->input` hook: defer to core 0 after CYW43 is up
+
+**Symptom:** **`U2_Init()`** runs **before** **`InitPicoLed()`** / **`cyw43_arch_init()`**. **`SN_CR OPEN`** (MACRAW) runs on **core 1** from the Apple bus. The previous **`U2_Net_OpenMacraw`** path installed **`u2_netif_input_wrapper`** only when **`cyw43_is_initialized()`** was already true — if OPEN happened first, the hook was **skipped permanently**, so **duplicate STA ingress** (MACRAW tap **+** **`u2_saved_netif_input`**) never activated and the MegaFlash + ip65 combined path failed.
+
+**What we did:** **`u2_macraw_sta_input_hook_ensure()`** runs from **`U2_Net_Poll()`** on **core 0** (inside **`cyw43_arch_lwip_begin/end`**) once socket 0 is **MACRAW**, CYW43 is up, and **`sta->input`** exists. **`OpenMacraw`** only updates **SHAR** when possible; it **does not** mutate **`netif->input`** from the bus core.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_macraw_sta_input_hook_ensure`, `U2_Net_Poll`).
+
+---
+
+## 1ac. New timeout attempts: no ICMP conflict now, but ARP SHA mismatch still present
+
+**Observation:** In the newest `debug/tcpdump.txt`, ADTPro UDP/6502 traffic is bidirectional (host sends 632-byte datagrams; Pico replies with short 8-11 byte datagrams), and there are no ICMP port-unreachable packets in this capture window.
+
+**Key failure indicator:** At `15:43:36`, Pico emits:
+
+- Ethernet SA = `88:a2:9e:48:22:7a` (STA MAC),
+- ARP request `tell 192.168.0.245`,
+- Host ARP reply is sent to `00:08:dc:a2:a2:a2` (W5100 MAC from ARP payload SHA), not to `88:a2:...`.
+
+This means L2 and ARP payload identity diverge again, so peers can cache/target the wrong MAC and ADTPro traffic becomes intermittent or times out.
+
+**Why this matters now:** The MACRAW/lwIP double-handling issue appears mitigated (no ICMP unreachables here), so the remaining dominant failure in this trace is ARP sender identity mismatch.
+
+**References:** `debug/tcpdump.txt` lines around `15:43:36`; prior ARP-SHA patch/revert in `pico/uthernet2_net.cpp`.
+
+---
+
+## 1ad. Minimal retry patch: ARP SHA normalization only (keep DHCP payload untouched)
+
+**Requirement:** After broad MACRAW ingress filtering removed ICMP conflicts, keep changes minimal and retry ADTProETH timeout mitigation focused only on ARP identity consistency.
+
+**What we changed:** In `u2_send_macraw_core0()`, after forcing Ethernet source MAC to STA MAC, we now also patch ARP payload sender hardware address (SHA) to the same STA MAC via `u2_macraw_patch_arp_sender_hwaddr()`.
+
+**What we deliberately did not change:** We did not re-enable BOOTP/DHCP `chaddr` / option 61 rewriting for this test pass.
+
+**Why:** Latest captures showed peers replying to `00:08:dc:*` due to ARP payload SHA mismatch while Ethernet SA was `88:a2:*`. This targeted patch aligns L2 and ARP identity without touching DHCP payload behavior.
+
+**Build:** `pico/pico2_debug` rebuilt successfully after patch.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_send_macraw_core0`, `u2_macraw_patch_arp_sender_hwaddr`), `debug/tcpdump.txt` around `15:43:36`.
+
+---
+
+## 1ae. Retest outcome after ARP-SHA patch: faster startup, later mid-transfer TX stall
+
+**Observation (user retest):** ADTProETH now connects and starts transfer much faster than before, but transfer still aborts.
+
+**Correlated traffic clues from `debug/tcpdump.txt`:**
+
+- ARP identity appears corrected in this run (`15:49:50` host ARP reply targets `88:a2:9e:48:22:7a`, not `00:08:dc:*`).
+- Session on UDP/6502 begins normally:
+  - host probes/requests (8–11B payloads),
+  - Pico responds with larger data frames (commonly 410–578B payloads, occasional smaller frames).
+- Near failure window, Pico large responses thin out and then stop, while host continues periodic 9B UDP/6502 packets (`15:50:28.819`, `15:50:29.558` etc.).
+
+**Interpretation:** This no longer looks like ARP-misdirection or lwIP ICMP conflict. Current dominant signature is a **mid-transfer send-path stall/starvation on Pico/U2 side** (socket TX ring/producer-consumer pacing/state transition), after initially healthy throughput.
+
+**Data gap:** Current `debug/uart_log.txt` still contains earlier boot/mDNS traces and does not include this exact crash window, limiting socket-state correlation.
+
+**References:** `debug/tcpdump.txt` lines around `15:49:56`–`15:50:29`, `debug/uart_log.txt` (missing matching window).
+
+---
+
+## 1af. Add low-overhead UDP TX counters to locate post-start transfer stall
+
+**Requirement:** After ADTPro transfer became fast-but-crashy, add lightweight runtime telemetry (not heavy packet dumps) to identify whether the Pico UDP send path fails by lwIP error, memory exhaustion, or silent stop.
+
+**What we changed (`pico/uthernet2_net.cpp`):**
+
+- Added counters:
+  - `u2_udp_tx_attempts`
+  - `u2_udp_tx_ok`
+  - `u2_udp_tx_err`
+  - `u2_udp_tx_pbuf_fail`
+  - `u2_udp_tx_bytes`
+  - `u2_udp_tx_last_err`
+- In `U2_Net_SendUdp()`:
+  - count each send attempt,
+  - capture `udp_sendto()` return code (`ERR_OK` vs error),
+  - track pbuf allocation failures as `ERR_MEM`.
+- In `U2_Net_Poll()`:
+  - print one low-rate diagnostic line every 5 seconds:
+    - `[u2udp] tx att=... ok=... err=... pbuf_fail=... bytes=... last_err=...`
+
+**Why this instrumentation:** It distinguishes:
+
+- send API failures (`err` rising),
+- allocation pressure (`pbuf_fail` rising),
+- healthy API sends with upper-layer stall (`ok` rises but transfer still stops).
+
+This should isolate whether the remaining crash is transport enqueue failure or higher-level socket/state logic.
+
+**Build:** `pico/pico2_debug` rebuilt successfully.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_Init`, `U2_Net_SendUdp`, `U2_Net_Poll`).
+
+---
+
+## 1ag. Root-cause refinement from fresh UART: MACRAW dominates; single deferred TX slot can lose frames
+
+**Observation from fresh log (`2026-04-28 16-06-53 FT232R USB UART.log`):**
+
+- `[u2udp] tx att=0 ok=0 ...` remains zero throughout the failing transfer window.
+- At the same time, there is sustained heavy `sock0 MACRAW rx len=...` and frequent `sock0 SEND` / `MACRAW tx len=...`.
+
+**Implication:** ADTPro transfer here is entirely on the MACRAW path, not `U2_Net_SendUdp()`. Therefore the UDP counters are useful negative evidence but not the active bottleneck.
+
+**Likely failure mode:** Prior implementation deferred core1 MACRAW TX using only one pending slot (`u2_macraw_tx_pending` + single buffer). Under burst load this allows overwrite/loss of unsent frame data, which can desynchronize ADTPro state after some blocks (observed progression from hang around block 24 to ~36).
+
+**Fix applied (2026-05-02, firmware):**
+
+- Replaced single-slot deferred MACRAW TX with ring queue in `uthernet2_net.cpp`:
+  - `U2_MACRAW_TX_Q_DEPTH` **16**, head + count under `u2_macraw_tx_cs`,
+  - `u2_macraw_tx_q_drop` increments on enqueue when full,
+  - `U2_Net_Poll()` drains up to **`U2_MACRAW_TX_DRAIN_PER_POLL` (8)** frames per visit (then `NetworkPump_PollOnce()`).
+- `U2_Net_Close` on a **MACRAW** socket clears the queue (stale deferred TX).
+
+**Expected diagnostic behavior next run:**
+
+- **Debug UART** (about every **5 s**): **`[u2macraw] tx_q=… tx_q_drop=… rx_noroom=… rx_toobig=…`** from **`U2_Net_Poll`** (`uthernet2_net.cpp` + **`U2_MacrawRxReject*`** in `uthernet2.c`). See `debug/README.md` (**tail** the log end first).
+- If **`tx_q_drop`** rises, raise **`U2_MACRAW_TX_Q_DEPTH`** / **`U2_MACRAW_TX_DRAIN_PER_POLL`** or reduce core0 starvation another way (not `main.c` FIFO reorder — MegaFlash regression).
+- If **`rx_noroom`** rises: **expected** under §**1au** when inbound exceeds free **W5100-sized** RX — **do not** enlarge emulated RX or discard in-order tail to make room (project policy). Correlate with **II RECV rate** / host bursts; **`rx_toobig`** = frame larger than socket **receive_size**.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_SendMacraw`, `U2_Net_Poll`, MACRAW queue state).
+
+---
+
+## 1ax. MACRAW: couple `Sn_TX_RD` advance to accepted TX (queue or linkoutput)
+
+**What:** After the core1 **MACRAW TX ring** (§**1ag**), **`send_data()`** still advanced **`Sn_TX_RD` → `Sn_TX_WR`** whenever **`U2_Net_SendMacraw`** returned — but **`void`** return and **`(void)`** on **`u2_macraw_tx_queue_enqueue`** meant **queue full** and **`pbuf_alloc`** failure **still advanced** the emulated W5100 TX pointers. The **II** then believed bytes had left the chip while nothing was queued or on the wire → “TX broke” / stuck retries / ADTPro timeouts.
+
+**Why:** The ring queue fixed **overwrite** of deferred frames; it did not fix **W5100 register semantics** vs **acceptance**.
+
+**What we did:** **`U2_Net_SendMacraw`** returns **`0`** if the frame is **accepted** (copied into the ring on core1, or **`u2_send_macraw_core0`** succeeded on core0), **`-1`** otherwise. **`send_data()`** for **MACRAW** returns **without** updating **`TX_RD`** on **`-1`**. **`U2_Net_Poll`** drain: if **`u2_send_macraw_core0`** fails after dequeue, **put the slot back at the queue head** and stop draining for that poll (retry next poll). **`u2_send_macraw_core0`** returns **`bool`**. UDP path unchanged (§**1y** liveness rollback still applies there).
+
+**Follow-up (same §):** An initial version still cleared **`Sn_CR`** to **0** after **`send_data()`** returned **`-1`**, so ip65 believed **SEND** completed while **no** frame was accepted and **`Sn_TX_RD`** did not move — **outbound stopped** and **tcpdump** on the Mac saw nothing. **Fix:** on **`W5100_SN_CR_SEND`**, if **`send_data()`** **≠** **0**, **return** from **`write_socket_register`** without clearing **`Sn_CR`**; **`U2_TryCompletePendingSocket0Send()`** (core **0**, end of **`U2_Net_Poll`**) retries **`send_data(0)`** when socket **0** **`Sn_CR=SEND`** and **MACRAW**; core **1** **`U2_Net_SendMacraw`** also **spins** briefly on full **TX** queue so core **0** can drain.
+
+**Debug UART (2026-05 follow-up):** **`[u2macraw]`** every **~5 s** now includes **`lo_err`** / **`not_rdy`** / **`pbuf_fail`** (failures inside **`u2_send_macraw_core0`**). **`U2_Net_Poll`** calls **`U2_TryCompletePendingSocket0Send`** **after** draining the deferred MACRAW queue **and** again **after** **`NetworkPump_PollOnce`**. Pair with a **non-empty** **`tcpdump.pcap`** on the **correct** Mac interface; an **empty** pcap means **no packets matched** the filter/interface, not “proof” the Pico UART lied — use **`MACRAW linkout`** lines + **`lo_err`** to separate **CYW43 refused TX** vs **capture path**.
+
+**What we didn’t do:** Did not revert the **ring queue** or increase **`U2_Net_Poll`** drain cap as the primary fix — this is pointer correctness, not throughput.
+
+**References:** `pico/uthernet2_net.h`, `pico/uthernet2_net.cpp` (`U2_Net_SendMacraw`, `U2_Net_Poll`, `u2_send_macraw_core0`), `pico/uthernet2.c` (`send_data`).
+
+---
+
+## 1ah. New regression clue: reset-abort path fires mid-transfer
+
+**Observation:** In the fresh UART session for the timeout/stall attempts, log stream contains `NETPUMP: RequestAbortAll()` in the same transfer window where ADTPro flow collapses. This abort path tears down active session timers/sockets via `NetworkPump::RequestAbortAll()`.
+
+**Context:** `main.c` currently calls `NetworkPump_RequestAbortAll()` directly from `nRESET` falling-edge GPIO IRQ callback. If `nRESET` chatters/noises, multiple rapid false triggers can abort networking during a valid transfer.
+
+**What we tried first (insufficient):**
+
+- Added simple IRQ debounce in `gpio_intr_callback`:
+  - process only `GPIO_IRQ_EDGE_FALL`,
+  - ignore edges occurring within 50ms of prior accepted edge.
+
+**Why this was not enough:** A fresh transfer that stalled at block 27 still logged `NETPUMP: RequestAbortAll()` in-window. That means we still accepted at least one false edge long enough to trip abort, so "time since previous edge" alone is not robust enough.
+
+**Mitigation update (current):**
+
+- `gpio_intr_callback` no longer calls abort functions directly.
+- IRQ now only latches "reset fell" timestamp/pending flag.
+- Core 0 service path (`PicoW_ServiceCore0IpcAndNetwork`) runs `ServiceAppleResetAbort()` which:
+  - confirms `nRESET_PIN` is still low,
+  - requires low hold for 250ms before aborting,
+  - rate-limits repeat aborts (500ms minimum gap).
+- Only then it calls `NetworkPump_RequestAbortAll()` and `AbortEraseFlashDisk()`.
+
+**Rationale:** This converts a fragile edge-triggered abort into a level-confirmed abort, which is much harder to trigger from line noise/chatter while preserving intentional reset behavior.
+
+**Follow-up from block-37 retest:** UART still showed `NETPUMP: RequestAbortAll()` in the transfer-stall window, so the 50ms confirm was still too permissive for this setup. Increased confirm/guard to 250ms/500ms to bias strongly against transient dips.
+
+**Follow-up after 250ms/500ms change (two-run retest):**
+
+- New ADTPro session starts later (`sock0 OPEN ...` around `16:29:38`) with no subsequent `NETPUMP: RequestAbortAll()` in that run window.
+- Transfer still fails (one run returns to prompt, another stalls around block 16), but failure signature changed:
+  - no reset-abort log,
+  - no MACRAW queue pressure (`mq_drop=0`, `mq_cur=0` in periodic reports),
+  - MACRAW RX/TX continues during stall window.
+
+**Takeaway:** reset-chatter abort was a real contributor earlier, but current stall is now likely a protocol/state issue on the MACRAW data path rather than queue overflow or explicit network-pump abort.
+
+**Build:** `pico/pico2_debug` rebuilt successfully after moving abort handling out of IRQ.
+
+**References:** `pico/main.c` (`gpio_intr_callback`), `pico/network_pump.cpp` (`NetworkPump::RequestAbortAll()`).
+
+---
+
+## 1ai. ADTPro stall instrumentation: socket-0 pointer progression around SEND/RECV
+
+**Requirement:** Capture where MACRAW progress stops after reset-abort noise was mitigated (`RequestAbortAll` no longer appears in failure windows).
+
+**Why:** Recent captures show active MACRAW traffic with `mq_drop=0`, but transfers still stall. Existing monitor lines (`sock0 SEND/RECV`, `MACRAW rx/tx len`) do not show whether W5100 pointer progression (`TX_RD/TX_WR/RX_RD/RX_WR`) stalls, jumps, or diverges.
+
+**What we changed:**
+
+- Added a new monitor event `U2_MonSockPtrs(...)` in `pico/u2_monitor.{h,c}`.
+- Event logs compact snapshots:
+  - phase (`send-pre`, `send-post`, `recv-pre`, `recv-post`),
+  - `TX_RD`, `TX_WR`, `RX_RD`, `RX_WR`,
+  - socket status `SR`.
+- Instrumented `pico/uthernet2.c` `write_socket_register()` for socket commands:
+  - `SN_CR_SEND`: snapshot before and after `send_data(i)`.
+  - `SN_CR_RECV`: snapshot before and after `U2_Net_RecvConfirm(i)`.
+
+**Notes:**
+
+- W5100 has no `SN_RX_WR` register; `RX_WR` in this diagnostic is the emulator’s internal `sn_rx_wr` for that socket.
+- This is Debug-monitor-only visibility (compiled to stubs when activity monitor is disabled).
+
+**Build:** Rebuilt `pico/pico2_debug` with `./build-debug.sh pico2` successfully after adding the new monitor event.
+
+**Takeaway:** The next UART run should tell us whether stalls happen with pointers still advancing (protocol-level deadlock) or with one edge frozen (specific command/ack progression break).
+
+**Follow-up from first run with this instrumentation (block ~37 crash, then immediate first-block stall):**
+
+- Crash run still showed one `NETPUMP: RequestAbortAll()` event before the later socket-open window.
+- In the immediate-stall run, socket 0 entered a long `RECV` loop where:
+  - `TX_RD == TX_WR` (no outbound progression),
+  - `RX_RD` repeatedly stayed fixed while MACRAW RX kept arriving.
+- Pointer snapshots highlighted a representation mismatch risk: emulated `sn_rx_wr` was stored as **masked ring offset** while host-visible `RX_RD` is a **full 16-bit progressing pointer**.
+
+**Fix applied (pointer-consistency hardening):**
+
+- `sn_rx_wr` is now kept as a full 16-bit monotonic pointer.
+- RX buffer indexing still masks (`sn_rx_wr & (size-1)`), but host-visible pointer operations preserve full progression.
+- `u2_socket_discard_rx()` now writes full `sn_rx_wr` to `SN_RX_RD0/1` (not masked low ring offset).
+
+**Why this matters:** with heavy MACRAW traffic and wraps, masked-only `sn_rx_wr` can drift from host full-pointer semantics and leave `RX_RSR`/RECV behavior inconsistent after wrap/discard cycles, matching the observed repeated-RECV stall pattern.
+
+**Build:** `pico/pico2_debug` rebuilt successfully after this change.
+
+**Follow-up from the latest block-19 stall (after UART 460800 + reduced RECV logging):**
+
+- `sock0 ptrs recv-pre` still showed pathological `RX_RD` jumps while `RX_WR` progressed smoothly.
+- During the stall window, inbound MACRAW frames continued (`rx len=60/63/...`) and queue drops stayed at zero, but pointer snapshots were noisy/non-physical.
+
+**Root-cause hypothesis:**
+
+- `RX_RD` is host-written as two 8-bit writes (`SN_RX_RD0` then `SN_RX_RD1`) on the bus side.
+- Emulator reads of `RX_RD` (`get_rx_rsr()` and monitor snapshots) were plain 16-bit byte-pairs with no coherence guard.
+- With cross-core overlap, this can produce torn `RX_RD` values (mixed old/new bytes), which explains random pointer jumps and can miscompute `RX_RSR` (false full/empty), leading to stalls.
+
+**Fix applied (coherent RX_RD read):**
+
+- Added `read_rx_rd_coherent()` in `pico/uthernet2.c` (high/low/high retry) to avoid torn 16-bit `RX_RD` reads.
+- Switched both:
+  - `get_rx_rsr()` to use coherent `RX_RD`,
+  - `mon_sock_ptrs_snapshot()` to log coherent `RX_RD`.
+
+**What we did not change:**
+
+- No protocol behavior changes in `U2_Net_RecvConfirm()`.
+- No additional queue depth or timing throttles in this patch.
+
+**Takeaway:** this patch targets shared-pointer coherency rather than throughput knobs; if block stalls were triggered by torn `RX_RD` accounting, this should stabilize both `RX_RSR` math and pointer traces under ADTPro load.
+
+**Build:** rebuilt `pico/pico2_debug` via `./build-debug.sh` successfully after the coherence patch.
+
+**Follow-up after first coherence patch (remaining issue):**
+
+- New traces still showed implausible `RX_RD` jumps, indicating the initial coherence read was still permissive for some byte-write interleavings.
+- The initial method (`high/low/high`) only guarantees coherence when high-byte transitions are observed in one direction.
+
+**Refinement:**
+
+- Updated `read_rx_rd_coherent()` to read the full 16-bit register twice and require an exact match before accepting (`v1 == v2`).
+- This is byte-order agnostic and rejects torn combinations for either write ordering.
+
+**Build:** rebuilt `pico/pico2_debug` via `./build-debug.sh` successfully after this refinement.
+
+**Follow-up after additional retest (connect/list/parse instability, no download start):**
+
+- UART still showed non-physical `RX_RD` progressions (`recv-pre` cycling/teleporting values) even after coherence-read refinement.
+- Failures shifted earlier in ADTPro flow (host timeouts / "garbage received"), suggesting RX accounting corruption affects control/list parsing before block transfer.
+
+**Root cause update:**
+
+- Coherent reads alone are insufficient when `SN_RX_RD0/1` are shared bytes modified on core1 while core0 RX producers advance `sn_rx_wr`.
+- The emulated "source of truth" for consumed RX pointer should not depend on racing reads from raw register bytes.
+
+**Fix applied (stable RX_RD shadow):**
+
+- Added per-socket `sn_rx_rd` shadow pointer (`u2_socket_t`) in `pico/uthernet2.c`.
+- On host writes to `SN_RX_RD0/1` (`write_socket_register`), update `sn_rx_rd` from the composed register pair.
+- `get_rx_rsr()` now uses `sn_rx_rd` (stable shadow) instead of reading raw register bytes.
+- `u2_socket_discard_rx()` now updates both `SN_RX_RD0/1` memory bytes and `sn_rx_rd`.
+- `mon_sock_ptrs_snapshot()` now reports `sn_rx_rd`, so pointer diagnostics reflect the same value used by RX accounting.
+
+**Takeaway:** RX capacity/consumption math now runs on a stable per-socket pointer model rather than race-prone byte reads, which should reduce early-session parser corruption and host timeout spirals.
+
+**Build:** rebuilt `pico/pico2_debug` via `./build-debug.sh` successfully after the shadow-pointer patch.
+
+**Follow-up from next retest (no parse timeouts, but transfer resets/stalls remain):**
+
+- User-observed behavior improved in session setup/list parsing (no timeout spiral), but transfer attempts still failed mid-run (reset around block ~37, stall around block ~31).
+- `recv-pre` snapshots still showed impossible `RX_RD` movement during hot loops because shadow updates were still occurring per-byte write to `SN_RX_RD0/1` (capturing transient half-written states).
+
+**Final refinement (protocol commit semantics):**
+
+- Removed per-byte `sn_rx_rd` updates on `SN_RX_RD0/1` register writes.
+- Latch `sn_rx_rd` only at `SN_CR_RECV` handling, which is the W5100 host commit point after RX_RD programming.
+- This prevents intermediate byte-write values from polluting `RX_RSR` accounting and pointer diagnostics.
+
+**Build:** rebuilt `pico/pico2_debug` via `./build-debug.sh` successfully after RECV-latch refinement.
+
+**References:** `pico/uthernet2.c` (`write_socket_register`, `send_data`), `pico/u2_monitor.h`, `pico/u2_monitor.c`.
+
+---
+
+## 1aj. Reset-abort isolation during Uthernet/ADTPro transfers
+
+**Requirement:** Stop transfer-session resets caused by Apple reset IRQ handling when no legacy NetworkPump task (NTP/TestWiFi/TFTP) is actually active.
+
+**Why:** Current reset path in `main.c` calls `NetworkPump_RequestAbortAll()` after a confirmed low pulse on `nRESET_PIN`. That abort API is global: it aborts all sessions, including Uthernet/MACRAW paths used by ADTPro. During U2-only traffic this can terminate an otherwise active transfer.
+
+**What we changed:**
+
+- Added `NetworkPump::HasActiveLegacyOperation()` in `pico/network_pump.h`.
+- Added C bridge `IsNetworkPumpLegacyOperationActive()` in `pico/network.{h,cpp}`.
+- In `pico/main.c` `ServiceAppleResetAbort()`, after low-hold and guard checks, abort now runs **only** when a legacy operation is active. If not, pending reset-abort is cleared and ignored.
+
+**What we did not change:**
+
+- No change to RECV/SEND pointer logic, MACRAW queueing, or lwIP polling cadence.
+- No change to legacy-task abort behavior (NTP/TFTP/Test WiFi still abort on confirmed reset).
+
+**Takeaway:** Reset-line noise or incidental reset pulses no longer globally tear down Uthernet sessions when ADTPro is the only active network workload.
+
+**References:** `pico/main.c`, `pico/network.h`, `pico/network.cpp`, `pico/network_pump.h`.
+
+**Architecture / open work:** Consolidated stack diagram, function contract table, prioritized TODO list, and per-item validation checklists live in `docs/Uthernet-II-stack-architecture-and-todos.md`.
+
+---
+
+## 1ak. May 2026 tcpdump correlation: mid-transfer stall (~17:13:16), not a silent stop at “block 37”
+
+**Symptom:** ADTProETH disk transfer reported failing around “block ~37” with latest debug firmware.
+
+**Evidence (`debug/tcpdump.txt`, segment ~17:13:12–17:13:20):**
+
+- Baseline pattern in **`debug/tcpdump.txt`**: **192.168.0.245:6502** ↔ **192.168.0.154:6502** on port **6502**; short (**~9 B**) vs large (**~520–527 B**) UDP alternates in the bulk phase **as captured**.
+- **Session intent (operator-confirmed):** Data flow **Mac → Apple IIc**, **inbound** to the Uthernet emulation — i.e. ADTPro **Send** (`CommsThread.sendDiskWide()` / `sendPacketWide()` on the Mac), Apple side **`GETREQUEST` / `RECVBLKS`** in `ethproto.asm`: bulk image bytes arrive **from the network into** the emulated W5100 RX path.
+- **IP labeling vs. tcpdump:** For **Send**, one expects **large** UDP **toward the Apple’s IP** (dst = IIc). The saved capture shows **large** UDP with **src 192.168.0.154, dst 192.168.0.245**, which **by IP headers alone** reads like **.154 → .245** (opposite of “Mac=.245, IIc=.154”). Possibilities: **Mac was actually .154** for that run, **IIc was .245**, or this **pcap** is not the same session / interface semantics differ. **Future captures:** annotate **which address is the Mac** vs **IIc** beside the file.
+- First clear anomaly: **17:13:16.652904** — first shortened **large** payload (**501 B**), then **333 B**; **~721 ms** until the next short (**9 B**) datagram (**17:13:17.484506**). That spacing matches **timeout / retry**, not the usual ~100–120 ms cadence.
+- After the gap, more large payloads (509, 550, 410, 504×3 B), then **6 B** and **5 B** short packets — consistent with **protocol wind-down / error handling**.
+- Counting **large** UDP payloads in the **500–532 B** range from the first full-speed bulk segment (~**17:13:12.456**) yields **about 25** before the **501 B** anomaly — **not** necessarily 37 disk blocks (**BAOCNT**, RLE length variation, or UI counting).
+
+**UART retest (`debug/2026-05-02 17-34-57 FT232R USB UART #1.log`, session from ~18:03 local, firmware **`2026-05-02 21:58:01 UTC`):** Operator reports **no** listing-timeout this run; **Send** still fails mid-transfer (~“block 37”). **`[u2m]`** shows steady **MACRAW rx len ~546–592 B** from ~**18:03:25** through **last ~546 B ~18:03:33.484**, then **only small** RX (≤117 B); **`[u2udp] mq_drop=0`**. **~4 s** gap (**~18:03:34.4 → ~18:03:38.4**) with sparse frames — **mid-transfer stall**, same **class** as §1ak tcpdump anomaly, distinct from directory-parse host timeout.
+
+**UART (`debug/2026-04-28 16-06-53 FT232R USB UART.log`, May 2 ~17:13):** Sampled **`[u2udp] … mq_drop=0`** lines give **no** evidence of MACRAW TX ring drops in this capture window.
+
+**tcpdump “bad udp cksum” on large datagrams:** Often indicates **checksum 0 / offload** or capture verification quirks; **not** treated as proven corruption without another check.
+
+**What we did not prove:** One-to-one mapping from Apple II block number to a particular Ethernet packet without a **sequence field** in firmware or host logs.
+
+**Cross-check — parallel ADTPro tree** (`…/adtpro`, sibling of MegaFlash):
+
+| Topic | Source | Fact |
+|--------|--------|------|
+| Host→Apple disk send | `CommsThread.sendDiskWide()` → `sendPacketWide()` | After handshake ACK **0x06**, host loops **`block = 0 .. length-1`**, batches up to **`blocksAtOnce`** (from client **BAOCNT**), builds envelope **`0xC1`, decompressed length `blocksAtOnce*512`, `0xD3`, check, start block lo/hi**, then **RLE** payload + **16-bit CRC**; waits for wide ACK whose payload must confirm **`block + blocksAtOnce`**. Progress bar: **`setProgressValue(block)`** in **block** units (not half-blocks; unlike narrow **`sendDisk()`** which uses **half-blocks**). |
+| Client BAOCNT | `prodos/ethernet/ethconfig.asm`: **`PBAO`** default indexes **`BAOTbl`**: **`.byte 1,2`** | Default index **0 → 1 block per wide packet** unless the user picks the **2** option — then each UDP carries **2 disk blocks** (wire packet count ≈ **half** block count). |
+| Apple receive path | `ethproto.asm` **`GETREQUEST`** (+ **`RECVBLKS`**) | Client sends **`CHR_G`** and **BAOCNT** in the request; receive loop uses **`PUTACKBLK`** / **`RECVWIDE_REPLY`** for acknowledgements. |
+
+**UDP payload size:** **`sendPacketWide()`** size is **not** fixed at ~522 B — RLE shrinks or expands vs raw **512×blocksAtOnce** bytes, so tcpdump **length** is only a loose proxy for “one block.”
+
+**Next steps:** Tag **Mac vs IIc IPv4** next to **`tcpdump`** output; low-rate **block index** logging on firmware RX path or ADTPro **`sendPacketWide`** traces; revisit **P0-1** in `docs/Uthernet-II-stack-architecture-and-todos.md`.
+
+**References:** `debug/tcpdump.txt`, `debug/2026-04-28 16-06-53 FT232R USB UART.log`, `docs/Uthernet-II-stack-architecture-and-todos.md`; ADTPro: `adtpro/src/org/adtpro/CommsThread.java`, `adtpro/src/client/prodos/ethernet/ethproto.asm`, `adtpro/src/client/prodos/ethernet/ethconfig.asm`.
+
+---
+
+## 1am. ADTPro Send ~block 37: how we **find** root cause and **fix** it (not “live with 30 blocks”)
+
+**Position:** The goal is **not** to cap transfers — it is to **measure** where bytes are lost or stalled, then **remove that bottleneck**. “Same block every time” usually means **same cumulative stress** on a **finite buffer / loss path**, not a magical constant.
+
+### A. Falsifiable hypotheses (pick off with evidence)
+
+| Hypothesis | If true, you would see… | Primary falsification |
+|------------|-------------------------|------------------------|
+| **H1 — MACRAW RX ring overflow / drop** | Non-zero **`reject_no_room`** (or **`reject_oversize`**) during the stall window | **`[u2macraw-rx]`** line (UART every 5 s with **`[u2udp]`**) shows counters climbing during Send; correlates with stall |
+| **H2 — UDP `u2_push_rx` drops** | Lost datagrams without MACRAW reject | Instrument **`u2_push_rx`** return-0 count (not done yet); **`mq_drop`** already stays 0 in traces |
+| **H3 — wrong RX capacity for socket 0** | Stall when **`receive_size`** too small for sustained bulk | Log **`u2_sockets[0].receive_size`** at MACRAW OPEN (or assert ≥ N KiB after ip65 writes RMSR) |
+| **H4 — host/protocol** | Clean firmware counters; failure only with one BAOCNT/disk | ADTPro trace / tcpdump shows ACK mismatch without **`reject_*`** |
+
+### B. Instrumentation now in firmware
+
+- **`pico/uthernet2.c`** **`u2_push_rx_macraw`:** atomics **`enqueue_ok`**, **`reject_no_room`** (lost after **both** ring refusal **and** staging full), **`reject_oversize`** (**`2+len > receive_size`**). Supersedes older **`discard_*`** / **`reject_ring_*`** names (§1aq).
+- **`pico/uthernet2_net.cpp`** **`U2_Net_Poll`:** every **5 s**, UART prints **`[u2macraw-rx] enqueue_ok=… reject_no_room=… reject_oversize=…`** with **`[u2udp]`**.
+- **`U2_GetMacrawRxStats`** in **`uthernet2.h`** (three out-parameters).
+
+**How to read one transfer:** Run Send until failure; snapshot last **`[u2macraw-rx]`** before/after stall. **Any sustained increase in `reject_no_room` or `reject_oversize`** → **H1 confirmed** — remediation is **ring sizing / host drain rate / Wi‑Fi burst**, not ADTPro.jar.
+
+### C. Remediation paths (after hypothesis)
+
+| Outcome | Concrete remediation |
+|---------|----------------------|
+| **H1 confirmed** | **Increase** effective **`receive_size`** for socket 0 (ip65 **RMSR** layout / W5100 memory map): give MACRAW **more KiB** so inbound bulk fits **II drain lag**. **Ring** path is **W5100-parity** (no head discard); **lwIP staging** (§1ao) still absorbs bursts before the ring. |
+| **H1 ruled out, H3 suspected** | Verify **actual** **`receive_size`** after init; fix **`set_rx_sizes`** / defaults if ip65 expects **8 KiB** but emulation applies **4 KiB**. |
+| **Host-side workaround only** | Lower Mac send rate / smaller batches (**BAOCNT**) — **diagnostic**, not the product fix. |
+
+### D. Listing works, Send never starts (host timeout before bulk)
+
+ADTPro **directory listing** and **disk Send start** are different exchanges (listing vs handshake / first **`CHR_G`** / ACK **0x06** path). Both ride **inside MACRAW Ethernet frames** for typical ip65 setups — **`u2_push_rx` UDP drops** are usually **irrelevant** (`[u2udp-rx] drop_ring_full` should stay **0**). Timeouts **before** the first block usually mean a **small** inbound frame was **lost or discarded** (`discard_recv` / **`reject_*`**) or the host never sees the II’s reply — treat **`[u2macraw-rx]`** during **only** the failed “Start transfer” attempt as decisive.
+
+### E. Operator procedure (minimal)
+
+1. Flash latest Debug UF2; confirm **`Firmware build:`** on UART.
+2. Reproduce Send failure once; save UART from boot through failure.
+3. Check **`[u2macraw-rx]`** and **`[u2udp-rx]`**: if **`reject_no_room`** / **`reject_oversize`** moved during the run → open issue **ring pressure** with numbers; if **`drop_ring_full`** rises while MACRAW stays clean → investigate **UDP pcb** path; if **all zero** → **host-side ADTPro logging** / **tcpdump** on the handshake window.
+
+**References:** `pico/uthernet2.c` (`u2_push_rx_macraw`, §1aq), `pico/uthernet2_net.cpp` (`U2_Net_Poll`), `pico/lwipopts.h` (pool sizes — secondary suspect after MACRAW stats).
+
+---
+
+## 1al. P0-3: atomic RX pointers + single publish of `sn_rx_wr`
+
+**Requirement:** Core 0 (lwIP → `u2_push_rx` / `u2_push_rx_macraw`) increments the RX write pointer; core 1 (bus → `get_rx_rsr`, RECV) reads **RX_RSR** and consumes. Without ordering, core 1 could observe **`sn_rx_wr`** advanced before all **`u2_memory`** stores for that datagram were visible (MP coherence gap).
+
+**What we did:** In `pico/uthernet2.c`, `sn_rx_rd` / `sn_rx_wr` are **`_Atomic uint16_t`**. **`get_rx_rsr()`** uses **`memory_order_acquire`** loads; **`u2_push_rx`** and **`u2_push_rx_macraw`** compute the next write offset locally, write the ring bytes, then **`atomic_store_explicit(..., memory_order_release)`** once per accepted enqueue. **`SN_CR_RECV`** uses **`release`** stores to **`sn_rx_rd`** (MACRAW ingress no longer calls **`u2_socket_discard_rx`** — see §1aq).
+
+**What we did not do:** Locking on the bus hot path; reorder **DATA-port** reads vs RSR (add instrumentation if stalls remain).
+
+**Follow-up (directory-parse / host-timeout hypothesis):** `u2_push_rx` takes an initial `(sn_rx_rd, sn_rx_wr)` snapshot for free-space. Core 1 can **RECV** (advance `sn_rx_rd`) immediately after that snapshot; the ring then has room, but core 0 could still **return 0** for UDP (atomic datagram, no partial queue) and **drop** the inbound datagram — ADTPro host waits, times out. **Mitigation:** if UDP would be dropped for “not enough free bytes,” **reload** `sn_rx_rd`/`sn_rx_wr` once and recheck; same **once** for TCP when `free_bytes == 0`. This does not replace single **release** publish of `sn_rx_wr` after ring writes.
+
+**Why P0-3 could feel worse without this:** Stricter atomic visibility makes “reject full” decisions **consistent** with the snapshot; torn non-atomic reads could occasionally **over-report** free space (risk overflow) or behave differently under race — neither is desirable, but **consistent reject** without reload increases **deterministic drop** when core 1 frees space between loads.
+
+**References:** `docs/Uthernet-II-stack-architecture-and-todos.md` (P0-3 row + checklist); `pico/uthernet2.c`.
+
+---
+
+## 1an. ADTPro Send remediation implementation (2026-05): MACRAW discard policy, TX_RD honesty, drain budget
+
+**Requirement:** Execute §1am plan branches without blaming validation software: reduce inbound loss under bulk MACRAW RX, align **`Sn_TX_RD`** with bytes actually accepted by lwIP, and drain deferred MACRAW TX faster under queue pressure.
+
+**What we did:**
+
+1. **`u2_push_rx_macraw` (`uthernet2.c`):** When a new frame does not fit, **drop oldest complete MACRAW records** (`u2_macraw_discard_head_frame`) in a bounded loop before falling back to **`u2_socket_discard_rx`** (full wipe). Counter **`discard_head`** (`u2_macraw_rx_discard_head`); **`discard_recv`** still counts full wipes. **`seq`** (`u2_macraw_rx_seq`) increments on each successful enqueue — correlates UART with tcpdump.
+2. **`send_data`:** **TCP only:** **`Sn_TX_RD`** advances by **`U2_Net_SendTcp`** accepted bytes (partial on **`tcp_write`** failure). **UDP and MACRAW:** **permissive** advance to **`TX_WR`** after every SEND (§1y) — strict lwIP-ok gating caused mid-transfer “block ~37” style failure **without** host timeouts; real stacks assume pointer progress.
+3. **`u2_send_macraw_core0`:** Returns **`bool`**; **`DHCP BOOTP chaddr`** patch is invoked here (was previously unused on this path — see architecture §P2-2). **`linkoutput`** **`ERR_OK`** required before **`U2_MonNetMacrawTx`**.
+4. **`U2_Net_Poll`:** Adaptive MACRAW drain (**4 / 8 / 16** frames per poll by queued depth). **Dequeue only after successful send** so **`linkoutput`** failure retries next poll.
+5. **UART:** **`[u2macraw-rx]`** now prints **`seq`**, **`discard_head`**, **`discard_recv`**, …
+
+**What we did not do:** Increase **RMSR** beyond ip65’s writes (still validate **H3** if stalls persist). **P0-1** “honest” UDP/MACRAW **`TX_RD`** is **not** applied when it conflicts with §1y liveness; **TCP** remains the strict path.
+
+**References:** `pico/uthernet2.c`, `pico/uthernet2_net.{h,cpp}`, `pico/uthernet2.h`; §1am.
+
+---
+
+## 1ao. MACRAW RX staging FIFO (ADTPro Send still ~block 37 after §1y TX_RD)
+
+**Symptom:** Send still failed near the **same storage block** after restoring **UDP/MACRAW permissive `TX_RD`** — points away from outbound pointer gating.
+
+**Why:** With **RMSR** giving socket 0 only **4 KiB** RX (typical ip65 **0x0A** layout), **Wi‑Fi can deliver Ethernet frames faster** than the II drains the emulated ring. Discarding (**head drop** / **reject**) loses **in-order bulk** and surfaces as a **repeatable block index**, not necessarily host “timeout.”
+
+**What we did:** **`u2_push_rx_macraw_into_ring`** holds the prior ring logic; if it fails, **socket 0** frames are copied to a **16×1518 B FIFO** (`U2_MACRAW_STAGE_DEPTH`). **`U2_MacrawRxStagingPoll()`** runs at start and end of **`U2_Net_Poll`** and moves staged frames into the ring when space exists. UART: **`[u2macraw-stage] enq= flush= staging_full=`**. Counters: **`U2_GetMacrawRxStagingStats`**.
+
+**What we did not do:** Change visible **RMSR** or ip65 buffer math (would risk host/emulator mask mismatch).
+
+**Follow-up (still ~block 36–37):** **`PicoW_ServiceCore0IpcAndNetwork`** had **`multicore_fifo_pop_timeout_us` before `U2_Net_Poll`** with **`50 ms`** timeout in **`core0Loop`’s NTP wait loop** — core 0 could go **tens of ms** between **`cyw43`/lwIP/staging** service while Wi‑Fi kept delivering MACRAW. **Fix:** run **`U2_Net_Poll`/`U2_MonPollFlush` first**, then FIFO wait; **`core0Loop`** FIFO timeout **50 ms → 1 ms** (`main.c`). Aligns with earlier SESSION_LOG intent that had drifted from code.
+
+**Follow-up (timeouts in file-selection UI + ~block 37):** **1 ms** idle FIFO wait still caps core‑0 servicing at **~1 kHz** when the FIFO is empty — marginal for **small MACRAW control** exchanges (selection) and **bulk**. **Updates:** **`core0Loop`** idle wait **1 ms → 100 µs**; **`U2_Net_Poll()` twice** per service tick; **MACRAW staging depth 16 → 32**; staging drain **32 → 64** attempts per **`U2_MacrawRxStagingPoll`**. **Operator note:** ADTPro **BAOCNT** **2 blocks/packet** advancing failure **37 → 38** fits **wire packet count / burst size** better than a magic disk-block constant — still stress on **ingress FIFO + 4 KiB W5100 RX**.
+
+**Regression (host timeout before list parse / initial connect):** **Double `U2_Net_Poll`** per wake + **100 µs** FIFO spin correlated with **host** waiting on **II** for early ADTProETH path. **Reverted** to **single `U2_Net_Poll`**; **idle FIFO 100 µs → 500 µs** (~**2 kHz** max). **Kept:** poll **before** FIFO block, **32**-frame MACRAW staging, **64**-step staging drain. *Reasoning:* double `NetworkPump`/lwIP service per tick may have reordered or starved a path the listing handshake needs; 100 µs may have interacted badly with CYW43/timing on some runs.
+
+---
+
+## 1aq. MACRAW RX W5100 parity (2026-05): no head discard in ring; lwIP staging **outside** emulated RX
+
+**Requirement (W5100 register file):** If the **complete** MACRAW record (2-byte BE **wire_len** + payload) does not fit in the **free** emulated receive memory, that record is **not** written to **`u2_memory`**; **existing** ring bytes stay untouched (no head eviction, no **RX_RD→WR** wipe). A separate **core0 staging FIFO** (§1ao) may still hold a copy from lwIP until **`U2_MacrawRxStagingPoll`** can move it into the ring — that FIFO is **not** the W5100’s internal buffer; it restores MegaFlash timing without changing **RSR** math.
+
+**Why:** ip65/ADI were written for silicon that **drops the newest** frame if the **chip** RX is full. §1an’s **head discard** / **full wipe** in **`into_ring`** was non-silicon; **removed**. **Staging** is the pre-§1aq bridge from **CYW43/lwIP** to the emulator when the II has not **RECV**’d yet — **not** a second W5100 buffer.
+
+**What we did:** **`u2_push_rx_macraw_into_ring`** (`uthernet2.c`) checks **`used + total <= size`** (with one **rd/wr** reload vs §1al TOCTOU); if not, returns **false** without mutating the ring — **no** head eviction, **no** **`RX_RD→WR`** wipe (**removed** **`u2_macraw_discard_head_frame`** / **`u2_socket_discard_rx`** from MACRAW). **`reject_oversize`** counts **`2+len > receive_size`** inside **`into_ring`**. **`reject_no_room`** increments only when socket **0** cannot **`macraw_stage_enqueue`** after **`into_ring`** fails (**staging full** = combined ingress loss). **Staging FIFO** (`32×1518 B`) and **`U2_MacrawRxStagingPoll`** restored: lwIP→MegaFlash absorb bursts **outside** the emulated W5100 RX memory — **does not** alter parity **inside** **`sn_rx_rd`/`sn_rx_wr`** geometry; **UDP `u2_push_rx`** unchanged.
+
+**What we did not do:** Restore §1an **head discard** or **full-ring wipe** inside **`into_ring`**. **`u2_netif_input_wrapper`** duplicate **`netif->input`** is §**1ar** / **`483e8da`** semantics — not ring parity.
+
+**Takeaway:** **`reject_no_room`** (after staging) means lost inbound Ethernet when MACRAW is active; staging mirrors pre–§1aq MegaFlash servicing behavior without falsifying W5100 ring rules.
+
+**References:** `pico/uthernet2.c`, `pico/uthernet2.h`, `pico/uthernet2_net.cpp`; §1am (hypothesis table: interpret **`reject_no_room`** like **`reject_*`**); §1an–§1ao (superseded ingress policy).
 
 ---
 
@@ -568,7 +1353,7 @@ This document records the thinking, root-cause analysis, design decisions, and d
 **Reasoning:**
 - “Debug mode” is determined by **build type**, not a runtime flag: Debug build = `NDEBUG` not defined; Release = `NDEBUG` defined. So it’s “Debug build” vs “Release build.”
 - In Debug, `pico/debug.h` macros (e.g. `DEBUG_PRINTF`) expand to `printf(...)`; in Release they are no-ops. So all debug logging is compiled in only for Debug.
-- `main.c`: In Debug, UART stdio is initialized (115200 baud) and the bus loop (Core 1) is **always** started, even if the Apple is not connected, so you can plug in the Apple later and test. In Release, the bus loop is started only when `IsAppleConnected()` is true.
+- `main.c`: In Debug, UART stdio is initialized (**460800** baud via `uart_set_baudrate(uart_default, 460800)` after `stdio_uart_init`) and the bus loop (Core 1) is **always** started, even if the Apple is not connected, so you can plug in the Apple later and test. In Release, the bus loop is started only when `IsAppleConnected()` is true.
 - Startup banner (version, CPU/peri clock, SPI speed, WiFi support, heap) is printed only when Debug macros are active (i.e. Debug build).
 - lwIP: In `lwipopts.h`, when `NDEBUG` is not defined, `LWIP_DEBUG` is set to 1 so the network stack can produce extra debug output.
 - TinyUSB: Debug build compiles with `CFG_TUSB_DEBUG=1`.
@@ -695,7 +1480,7 @@ Then “disabling debug” (NDEBUG) only affects our code (assert, DEBUG_PRINTF 
 
 **Root cause:** On Pico W, **`core0Loop()`** (NTP, **`NetworkPump_PollOnce()`**, **`multicore_fifo`** handling for **`IPCCMD_WIFITEST`** and **`IPCCMD_TFTP`**) runs only when **`IsAppleConnected()`** is true at boot, or after a later 2 s poll detects the Apple. If **`appleConnected`** is false, the firmware takes the **USB / `UserTerminal()`** path instead. That path **never** popped the FIFO or polled lwIP/CYW43, so **`DoTestWifi()`** on core 1 pushed an IPC message and spun on **`testResult.testCompleted`** while core 0 never ran **`TestWifi()`**. Same starvation for TFTP IPC. A plain **`sleep_ms(1000)`** when USB was not connected also left the stack idle for up to one second between polls.
 
-**What we did:** Factor **`PicoW_ServiceCore0IpcAndNetwork(fifo_timeout_us)`** (same order as before: optional FIFO wait, then **`NetworkPump_PollOnce()`**, **`U2_MonPollFlush()`**, then dispatch). **`core0Loop()`** inner loop calls it with **50 ms** FIFO timeout. The Pico W USB-terminal **`while (true)`** calls it with **0** each iteration (non-blocking) and replaces the 1 s idle sleep with **1 ms** sleeps so **`cyw43_arch_poll`** runs continuously during idle.
+**What we did:** Factor **`PicoW_ServiceCore0IpcAndNetwork(fifo_timeout_us)`**: optional **`multicore_fifo_pop_timeout_us`**, then **`U2_Net_Poll()`** (hooks + **`NetworkPump_PollOnce()`**), **`U2_MonPollFlush()`**, then IPC dispatch. **`core0Loop()`** inner loop uses **50 ms** FIFO timeout. (A trial **poll-before-FIFO** + **500 µs** timeout to help ADTPro MACRAW was **reverted** — it regressed **MegaFlash** NetworkPump/TFTP-style traffic; ADTPro needs a different lever, e.g. §**1au** / dedicated scheduling, not this reorder.) The Pico W USB-terminal **`while (true)`** calls it with **0** each iteration (non-blocking) and replaces the 1 s idle sleep with **1 ms** sleeps so **`cyw43_arch_poll`** runs continuously during idle.
 
 **What we didn’t do:** **`UserTerminal()`** can still block core 0 for a long time; Test WiFi from the Apple while an interactive USB session is active may still stall until the terminal returns. Unusual vs Apple-only + no USB.
 
@@ -908,6 +1693,25 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 
 ---
 
+## 1ap. tcpdump vs UART: MACRAW ingress length vs host RECV (6502 commit path)
+
+**What:** Correlate **Ethernet framing** with **`tcpdump`** using UART — first at **lwIP → MACRAW enqueue** (historical **`MACRAW rx len=`**, removed), now at **W5100 RECV** after the host has updated **RX_RD** (what the **6502 / ip65 stack committed** as consumed).
+
+**Ingress experiment (May 2026):** **328** Mac→Pico bulk frames in **`debug/tcpdump.txt`** matched **`[u2m] MACRAW rx len=`** in order — framed ingress matched wire lengths (**§1ap** analysis session).
+
+**Current firmware (Debug):**
+- **Removed:** **`U2_MonNetRxMacraw`** from **`u2_netif_input_wrapper`** (`uthernet2_net.cpp`) — no log at lwIP ingress.
+- **Added:** On **`SN_CR_RECV`** when socket is **MACRAW**, **`u2_mon_emit_macraw_host_consumed`** walks **`old_rd → new_rd`** in the RX ring, parses each **W5100 MACRAW record** (2-byte BE **wire_len** + Ethernet octets), and queues **`U2_MonMacrawHostRx`** (flushed on core 0 as **`[u2m] net sock0 MACRAW host eth_len=… fnv=… seq=… sip→dip`**).
+  - **`eth_len`** **== `wire_len − 2`** **==** **`tcpdump`** first-line **`length N`** for that frame (same **Ethernet** byte count as before).
+  - **`fnv`** — **FNV‑1a** over the **full Ethernet payload bytes** the ring holds for that frame (offline: compute the same hash from a **`tcpdump -xx`** hex slice or **pcap** extract to compare **byte integrity**).
+  - **`sip` / `dip`** — parsed only for **IPv4 + UDP** (otherwise **`0.0.0.0`**); helps line up rows with **`tcpdump`** IP summaries without hashing.
+
+**Caveats:** One **RECV** may commit **multiple** frames; order remains host order. **`fnv`** mismatches implicate **ring / DATA read / RECV** semantics or corruption after enqueue; matching **`fnv`** + **`eth_len`** strongly constrains faults to **software above** the emulated buffer.
+
+**References:** `uthernet2.c` (`u2_mon_emit_macraw_host_consumed`, **`W5100_SN_CR_RECV`**), `u2_monitor.c` (**`U2M_NET_MACHOST_RX`**), `debug/tcpdump.txt`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -919,9 +1723,11 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | Two DATA reads both $07 | §1f, `uthernet2.c` `auto_increment` | Pointer only advances when **MR** has **AI** ($02); **$03** = IND+AI; **$00** after reset or **$01** → no increment, second read still RTR0 |
 | First `$C0C7` wrong then RTR OK | §1f, `busloop.c`, `U2_PeekDataPort` | RP2350 PIO prefetches next read’s byte; **`r[7]`** must hold **`U2_PeekDataPort()`** after each U2 cycle so first DATA read after addr setup isn’t stale |
 | **`async_context` PANIC at `ck=5`** | §1g, `main.c`, `u2_monitor.h` | **`U2_MonPollFlush`** only on **core 0** — not from **`U2_Poll`** on core 1 |
-| MACRAW RX `drop (no room)` / DHCP stall | §1g, `uthernet2.c` `u2_socket_discard_rx` | On overflow, discard unread RX (RX_RD→wr) then accept new frame |
+| MACRAW RX full (W5100 parity) | §1au, `uthernet2.c` `u2_push_rx_macraw` | If **used+(2+len) > size**, new frame **not written**; **no** implicit **RX_RD** flush. (Older doc rows §**1ao**/§**1aq** refer to optional staging / **`into_ring`** paths not present in minimal tree.) |
+| MACRAW TX `Sn_TX_RD` vs queue / `pbuf` | §**1ax**, `uthernet2_net.cpp`, `uthernet2.c` `send_data` | **`U2_Net_SendMacraw`** **`0`/`-1`**; advance **`TX_RD`** only on accept; drain **re-queue** on **`u2_send_macraw_core0`** fail |
+| ADTProETH timeout vs captures | §**1aw** | **`rx_noroom`** = §**1au** **drops** (W5100-sized RX full); not fixed by bigger fake buffer; **`tcpdump`** UDP/6502 OK; UART **460800** |
 | UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
-| UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from `build-both.sh`/`cmakeall.sh`; **`unknown` / `0`** if configured without timestamp) |
+| UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from CMake **`–DFIRMWARE_BUILD_TIMESTAMP`**). **`./build-debug.sh`** refreshes those vars each configure so the UF2 matches the UART line; **`cmake --build` alone** can leave a stale **`build_id.h`**. This stamp is **configure-time wall clock**, not the git commit author date — correlate binaries with the **build script run**, not only **`git log`**. |
 | ip65 init bisect (Pico 2 W Debug) | `CMakeLists.txt` `U2_IP65_CHECKPOINT`, `uthernet2.c`, `u2_monitor.c` | Default **quiet**: one **`[u2] ck=n`** per run when **`U2_IP65_CHECKPOINT=n`** (1=MODE 0x03 … 5=MACRAW OPEN). Optional **`U2_IP65_TRACE_DATA`**, **`U2_MON_LOG_BUS`** (floods UART) |
 | ADTPro crash triage (`system-$01`) | §1p, `debug/uart_log.txt` | If no `sock0 OPEN/SEND/RECV` or checkpoint lines appear in failure window, treat as pre-W5100 crash/handoff issue first; use `U2_IP65_CHECKPOINT=1` build to confirm first mode write is reached |
 | Apple readback for U2 | `busloop.c` U2 branch, `a2bus.h` | **`registers.r[4..7]`** → **`i32[1]`** chunk **1** → **`UpdateMegaFlashRegisters(1,…)`**; RP2350 waits for IRQ0 before update (§1d) so SM1 presents the merged byte on the next cycle |
@@ -931,6 +1737,7 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | A0–A3, nDEVSEL pulls | `a2bus_rp2040.pio`, `a2bus_rp2350.pio` | A2=GPIO8, A3=GPIO9, no pulls; nDEVSEL pull-up on; data bus pull-up |
 | Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses **`$HOME/pico-sdk`** when env or `-D` unset (§4); SDK is same git repo on all host architectures |
 | Host CMake | `build-env.sh`, `cmakeall.sh`, `build-both.sh`, `build-debug.sh` | **`CMAKE_BIN`**: `/opt/homebrew/bin/cmake` → `/usr/local/bin/cmake` → **`PATH`**; **`CMAKE`** env override |
+| Debug build → git marker | `build-env.sh` `mf_debug_build_git_commit`, `build-debug.sh`, `build-debug-both.sh` | After a **successful** debug build: **`git commit --allow-empty`** at **MegaFlash** repo root (UF2 trees are **gitignored**). Message includes **HEAD**, **branch**, **clean/dirty**, host uname, and **`build-debug-both.sh`**-specific **`FIRMWARE_BUILD_TIMESTAMP*`** / **`U2_*`** CMake env lines. **Opt out:** **`MF_DEBUG_BUILD_NO_GIT_COMMIT=1`**. Commit failure **does not** fail the build (warns only). |
 | Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
 | Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
 | **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
@@ -953,19 +1760,28 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | TFTP upload block count UI | `tftptxtask.cpp`, `tftprxtask.cpp` | Set `tftp_state.tsize` (TX) / WiFi status (RX) in `EvtStart()`; pump path does not call `Run()` (§7h) |
 | CP version + clock | `cpanel/asm-megaflash.s` | `CMD_GETFIRMWAREVER` → cols 20–31; `CMD_GETTIMESTR` → 32–39; `ClearTime` clears 20–39 (§10c) |
 | Flash JEDEC at boot | `flash.c` `ChipIDToCapacity` | §16: capacity from type+capacity bytes only; manufacturer byte ignored |
+| NOR flash SI / vendor skew | §23, `pico/flash_si_test/*`, `datasheets/` | Winbond vs Alliance AC deltas; **`flash_si_test`**: baud sweep + SR3 A/B + **soft-SPI** (`35h`/`15h` SR2/3 + `0Ch`) + **XMODEM-like** DMA program/verify (`xmodem_like.c`, **BITINVERSION**) |
 | Flash validate (Applesoft + C soak) | `tools/flash-validate/` | §17-18 + §19 + §20 + §21 + §22: `FLASHVAL.BAS` baseline + `FLASHSOAK.BAS` overnight CSV/TFTP + `TFTPUTIL.BAS` (80-col startup, auto slot detect preferring 4, host FQDN/IP prompt + `TFTPUTIL.CFG` default persistence, volume list by unit number + name before selection); `TFTPUTIL.TXT` shipped to disk as `TFTPUTIL.DOC`; `FLASHSOAK/flashsoak.c` + `Makefile` (cc65 → `flashsoak.bin`); `build-flashval-disk.sh` → `FLASHVALID.po` |
 | WGET65V on-screen ip65 trace | `tools/wget65-verbose/`, §1h | Fork of `wget65` + register dumps; **`eth_init`** fixed **slot 4** (`$C0C4`); optional **`WGET65V`** on **`FLASHVALID.po`** when **`wget65v.bin`** built locally |
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
 | lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
-| Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | Pump/TX/RX remain in U2 net layer; `U2_Net_Poll` is **core-0-only** (guarded) and is called from `PicoW_ServiceCore0IpcAndNetwork`. MACRAW TX called from bus/core1 is queued and executed on core0 to avoid wrong-core `async_context` panic (§1k, §14.10b). A full-pointer TX arithmetic experiment in `send_data` regressed ip65 detection and was reverted; ring math remains masked/consistent with TX_FSR (`§1l`). |
+| Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | **`u2_netif_input_wrapper`**: MACRAW copy **+** always **`u2_saved_netif_input`** (same as **`483e8da`**); §**1ar**. Hook install deferred via **`u2_macraw_sta_input_hook_ensure`** in **`U2_Net_Poll`** (§**1av**) — not **`OpenMacraw`** alone (CYW43 / core ordering). `U2_Net_Poll` before FIFO wait. Pico 2 W: MACRAW TX queue **16**, TCP **`Sn_TX_RD`** partial accept. Reset-abort §1ah; §1k/§1l. |
+| ADTPro socket-pointer tracing | `uthernet2.c`, `u2_monitor.{h,c}` | Added `sock ptrs` monitor snapshots for `send-pre/send-post/recv-pre` with `TX_RD/TX_WR/RX_RD/RX_WR/SR`; later added coherent `RX_RD` reads (high/low/high retry) to avoid torn cross-core pointer values in `RX_RSR` and trace output (§1ai) |
 | Telnet65 walkthrough + fixes | §10f, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp` | Implemented: TX wrap fix (`<0`), UDP/TCP chained pbuf flattening (`pbuf_copy_partial`), removed duplicate lwIP lock in `U2_Net_OpenUdp`; later `wget65` follow-ups changed RECV to preserve unread bytes (§10h) |
 | Other ip65 tools walkthrough | §10g, `ip65/apps/*`, `ip65/apps/w5100.c`, `uthernet2*.{c,cpp}` | Risks: RECV discards unread bytes (shared-access mismatch), TCP RX overflow can drop+ACK, SEND chunk currently capped at 2048; `wget65` highest risk |
 | `wget65` priority fixes | §10h, `uthernet2.c`, `ip65/apps/w5100.c` | SN_CR=RECV no longer forces `RX_RD->WR`; TCP SEND drains entire queued TX data in chunks (not single 2 KiB cap) |
 | TCP RX backpressure | §10i, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | U2 RX callback returns accepted bytes; TCP `tcp_recved()` now acknowledges only accepted payload (UDP unchanged/all-or-drop) |
 | Open C0C4 unresolved item | §12 | Slot decode confirmed working; remaining investigation is nDEVSEL signal/timing visibility at Pico/PIO point vs timing/FIFO/CPU-drain behavior |
 | Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |
+| Reset-abort scope during U2 transfers | `main.c`, `network.{h,cpp}`, `network_pump.h` | Confirmed `nRESET` abort now requires active legacy operation; ignore abort during Uthernet-only sessions so ADTPro MACRAW transfer is not globally torn down (§1aj) |
+| ADTPro mid-transfer stall (May 2026 capture) | §1ak, `debug/tcpdump.txt` | Send path (Mac→IIc) confirmed by operator; pcap src/dst for large UDP must be reconciled with Mac/IIc IPs; ~721 ms gap after shortened large payload (501→333 B); ~25× ~500 B large payloads before anomaly |
+| Wire vs MACRAW **length** / **host** correlation | §1ap, `debug/tcpdump.txt`, UART **`MACRAW host`** | Ingress study used **`MACRAW rx len`** (removed). **Debug** UART: **`MACRAW host eth_len`** at **RECV** (+ **fnv**, sip→dip) vs **`tcpdump`** `length N`; **fnv** = FNV‑1a over Ethernet bytes in ring |
+| ADTPro Send RC / remediation procedure | §1am, §1aq, `[u2macraw-rx]` / `[u2macraw-stage]` UART | Ring parity in **`into_ring`**; staging non-zero if FIFO used; **`reject_no_room`** only if staging also full |
+| P0-3 RX cross-core | §1al, `uthernet2.c`, `Uthernet-II-stack-architecture-and-todos.md` | `_Atomic` `sn_rx_rd`/`sn_rx_wr`; single **release** publish of `sn_rx_wr` after each UDP/TCP/MACRAW enqueue; **acquire** loads in `get_rx_rsr`; **UDP/TCP** one reload if ring appears full / TCP starved |
+| Inbound parity implementation (2026-05) | §1az, `uthernet2.c`, `u2_monitor.{h,c}`, `CMakeLists.txt`, `build-debug-both.sh` | W5100 drop-new MACRAW when full; **`sn_rx_wr`** remap on **`RMSR`** (not zero); **`Sn_TX_FSR`** safe when **`transmit_size==0`**; optional **`U2_MACRAW_COMPAT_DROP_OLDEST`**; **`U2_MonNetRxDrop`** rate-limited; atomic **`sn_rx_wr`** + sizing helper + `[u2m]` RX-drop telemetry |
+| U2 stack architecture + TODO / validation | `docs/Uthernet-II-stack-architecture-and-todos.md` | Mermaid diagrams, contract table, P0–P2 issues, validation checklists for stabilization work |
 
 ---
 
@@ -1357,6 +2173,8 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **References:** `pico/flash.c` (`ChipIDToCapacity`, `InitFlash`, `SetFlashDriveStrength`).
 
+**Note (XMODEM image upload vs format):** USB receive (`filetransfer.c` → `PacketReceived`) ACKs each valid CRC packet **before** `WriteBlockForImageTransfer()` finishes programming (`mediaaccess.c`); flash writes use `tsProgramOnePage` / Fast Read verify (`flash.c`), same SPI stack as format/erase. The Alliance **AS25F3512MQ** datasheet (Ver 1.0 Aug 2024) documents the same class of commands (**50h** volatile SR enable, **11h**/ **15h** SR‑3 write/read, **B7** 4‑byte mode, **12h** page program, **0Ch** fast read with dummy, **DCh** 64 KB erase) and DRV1/DRV0 coding compatible with **75 %** drive (**0,1** = default). If uploads show **`Verification Error:`** nonzero while Winbond passes, first suspects remain **marginal SR‑3 masking** in `SetFlashDriveStrength()` (still unguarded by manufacturer) or **electrical/SI** at final SPI speed—not a separate XMODEM protocol layer. **AC timing comparison vs Winbond and a Pico-side discrimination procedure** are in **§23**.
+
 ---
 
 ## 17. Applesoft flash-path validator (`tools/flash-validate`)
@@ -1450,5 +2268,57 @@ This is intentionally conservative: the common case remains unchanged, but the c
 **Later revert:** A menu option to run ProDOS `CATALOG` on the selected volume from the upload/download prompt was added then removed: TFTP has no remote directory listing, and the local-only catalog was not worth the extra menu complexity.
 
 **References:** `tools/flash-validate/TFTPUTIL.BAS`, `tools/flash-validate/TFTPUTIL.TXT`, `common/defines.h`, `pico/cmdhandler.c`.
+
+---
+
+## 23. NOR flash timing (Winbond vs Alliance) and SI discrimination tests
+
+**What:** Operators reported **Winbond W25Q512JV** reliable on **flash1** (CS0, longer traces) while **Alliance AS25F3512MQ** misbehaves there; both parts work on **flash2** (CS1, shorter traces). Need datasheet-backed reasoning and a **repeatable way to tell** “marginal MISO/setup” vs “SR3 / software” vs “DMA-only”.
+
+**Why (datasheets, same AC framing):** Both parts specify SPI AC timing with **CL = 30 pF** at the device pins (Winbond §9.5; Alliance “AC Measurement Conditions”). Under that framing, **Alliance allows a slower worst-case `tCLQV` (clock low → output valid)** than Winbond at the same load (**7 ns vs 6.5 ns max @ 30 pF**; Alliance also quotes **6 ns @ 15 pF**). Alliance specifies **shorter minimum output hold `tCLQX` / `tHO` (1 ns vs 1.5 ns)**, which shrinks the stable eye at the receiver when reflections or extra delay are present. Alliance also requires **longer `/CS` active hold and not-active setup vs CLK (`tCHSH`, `tSHCH` = 5 ns vs Winbond 3 ns)**—layout-dependent if CS and SCK skew differently per socket. Headline **fc** for fast read remains **133 MHz** class on both; the practical difference on a long MISO stub is more about **output delay/hold and SI** than MHz alone.
+
+**What we did:** Documented the above and added an **optional CMake target** **`flash_si_test`**: a minimal UF2 that uses the **same pins, SPI mode 3, and `0Ch` + 1-byte dummy fast read** as `flash.c`, sweeps SPI baud, and counts read mismatches vs a **10 MHz reference** buffer. It prints **CSV lines** (`baud_target,baud_actual,failures/N`) for each **CS0 and CS1** that responds to JEDEC, first with **boot SR3**, then after **volatile SR3 write** with **DRV bits cleared** (`SR3 & 0x9F`, Winbond-style “strongest” output table entry—verify on Alliance if anomalies appear), then restores SR3. After the read sweep, the UF2 runs an **XMODEM-image-style destructive sequence** (`flash_si_test/xmodem_like.c`, links **`dmamemops.c`**): **`DCh`** erase of the **last 64 KiB** of a **64 MiB** map (`0x03FF0000`), then **16×** **`tsWriteOneBlockWithoutErase`-equivalent** steps (**`CopyMemoryAlignedBG`** DMA CRC of source, two **`0x12`** page programs, **`ReadFromFlashByDMA`** verify CRC match). Source bytes match **`WriteBlockForImageTransfer`** via **`BITINVERSION=1`** (invert into a wire buffer before program, same as `tsWriteOneBlockAlreadyErased_Public` in `flash.c`). **Warning:** overwrites tail of flash; adjust **`TEST_SECTOR_BASE`** for non‑64 MiB parts.
+
+**Test algorithm (recommended order):**
+
+1. **Host / board sanity:** Confirm **3V3**, CS idling high, no contention on MISO when both flashes are populated. Compare **scope** SCK/MISO at CS0 vs CS1 at production **75 MHz** (see `SPI_SPEED_FINAL` in `flash.c`): edge-to-edge data valid window, overshoot, and time from **SCK falling** to **MISO stable** vs bit period.
+2. **JEDEC and 4-byte mode:** `9F` read on each CS; `B7` enter 4-byte address mode (matches `InitFlash()`).
+3. **Stable reference at low speed:** At **10 MHz**, read **512 bytes** from **address 0** with **`0Ch` + 32-bit address + 1 dummy**; repeat until **consecutive reads match** (rules out intermittent open or wrong CS).
+4. **Baud staircase (blocking SPI):** Increase `spi_set_baudrate` through a ladder (e.g. 10 → … → 75 → … → 100 MHz **requested**, log **actual** baud from `spi_get_baudrate`). At each step, run **many** identical reads and **`memcmp` to reference**. **First baud with any mismatch** estimates the **SI-limited** ceiling for that chip + trace. Run **A/B**: Winbond vs Alliance on **same socket**, and **CS0 vs CS1** with **same part** if possible.
+5. **SR3 output-drive experiment:** If failures **only at high SPI** and **clearing DRV** (or setting production **75%** drive in `SetFlashDriveStrength`) **raises** the passing baud on CS0, weight **output strength / line RC**; if **no change**, weight **setup/hold, /CS skew, or dummy/read path** (e.g. try **2 dummy bytes** once—production uses **1**; a mismatch here would point to **command timing**, not raw MISO RC).
+6. **DMA path (optional extension):** Production reads use **`ReadFromFlashByDMA()`** with a **timeout**. Re-run the same sweep using the **DMA+TX-stuff** read path (or temporarily lower `SPI_SPEED_FINAL` in firmware) to separate **“MISO wrong”** from **“DMA timeout / FIFO”**.
+7. **`flash_si_test` XMODEM-like phase:** If blocking reads pass but **USB XMODEM** fails verification, run the UF2’s second phase (or build/run **`flash_si_test`** alone after commenting the read sweep if UART noise is an issue). Failures isolate **program + DMA verify** vs **blocking read-only** paths.
+
+**Interpretation cheat-sheet:** CS0 fails high SPI but CS1 passes with the **same chip** → **layout / capacitance / reflections / CS–SCK skew**. If **`flash_si_test`** shows **CS0 XMODEM-like failures at ~9 MHz as well as 75 MHz** (same **`probe_nonff`**, bogus **`SR=00`**), weight **CS0 net / MISO / `/CS` / false `wait_busy`** over **SPI clock margin alone**. Alliance fails but Winbond passes on **same layout** at same baud → consistent with **datasheet `tCLQV` / `tHO` deltas** and **process spread**, not a different command set. SR3 experiment moves the ceiling → **drive strength** helps; no movement → **host setup or trace** first.
+
+**Observed lab result (2026-05, `flash_si_test`):** Blocking **read sweep** at address **0** reported **0 failures** on **both** CS0 and CS1 (including **75 MHz actual**). The **XMODEM-like** phase (**`DCh`** erase of **`0x03FF0000`**, **`BITINVERSION`**, DMA CRC + **`0x12`** ×2 + **`ReadFromFlashByDMA`** verify) then reported **16/16 failures on CS0** and **0/16 on CS1** — reproducing **“long-trace socket only”** under **program + DMA verify**, not under **short reads from address 0 alone**. **CS0 SR3 readback stuck at `FF`** while **CS1** returns **`21`** remains a red flag for **short-status / MISO** behaviour on that CS net (not definitive of SR contents). **Next:** re-run UF2 after **`xmodem_like.c`** triage lines (**`post-erase probe64`**, **`triage bn0:`** with `crc2_dma_sniff` vs **`crc2_blocking`**) to see whether failure is **erase**, **program**, or **DMA read path only**.
+
+**Triage follow-up (same run, decoded):** **`post-erase probe64`** on **CS0** reported **`non-FF bytes=64`** — the **64 KiB erase did not leave `FF` in the first 64 bytes** at **`0x03FF0000`** (erase not effective on that CS, wrong address window, or **BUSY polling exited while erase still running / bogus status**). On **CS1**, **`non-FF bytes=0`** — erase **did** blank that window. **`dma_rx_ok=1`** and **`crc2_dma_sniff == crc2_blocking`** — verify is **not** “DMA-only”; blocking read agrees with DMA read. **`crc1_dma_repeat == crc_src_plain`** — source CRC path is self-consistent. So the mismatch is **flash content ≠ programmed pattern**, consistent with **never getting a clean erased + programmed image on CS0** at that address. **Firmware:** after erase the test now prints **SR1/SR2/SR3** and **probe first8** for the next log (BP/CMP/WEL/BUSY context). **SPI sweep:** XMODEM-like **erase + probe + BLOCK0** program/verify repeats at **each** baud in the same ladder as the read sweep (CSV **`xfer,spi_want,spi_got,CS,SR1,SR2,SR3,probe_nonff,block0`**); **BLOCK1..15** + triage run only when **`spi_want=75MHz`** (production). **`read_from_flash_dma`** recomputes RX DMA **timeout** whenever SPI baud changes.
+
+**SPI baud sweep (2026-05, CSV decode):** On **CS0**, **every** ladder step (**`spi_got`** from **~9.37 MHz** through **75 MHz**) shows **`probe_nonff=64`**, **`block0=FAIL`**, and **`SR1=SR2=SR3=00`**. On **CS1**, **every** row shows **`probe_nonff=0`**, **`block0=OK`**, and **`SR1=00 SR2=02 SR3=21`**. **Reproducible on two boards**, with **Winbond W25Q512JV** (not Alliance-only). **Conclusion:** the CS0 tail-sector failure is **not specific to 75 MHz SPI** under this test — it reproduces at **the lowest** bit rates too. The **all-zero status** on CS0 during xfer (vs plausible **`SR2=02` / `SR3=21`** on CS1) strongly suggests **bogus MISO / status reads on the CS0 path** (e.g. line stuck low, wrong device selected, or **`wait_busy`** exiting on a **false “not busy”**), not a marginal **fc** limit at one clock.
+
+**Pico-only follow-up diagnostics (no LA / scope required):** Because we cannot capture a 75 MHz waveform with the available equipment, **`flash_si_test`** was extended to push the CS0 vs CS1 split into ranges where SI is not the variable. **UART sanity:** builds print **`build …`** (CMake timestamp, often **`unknown`** unless **`build-both.sh`** sets the cache vars) plus **`compiled __DATE__ __TIME__`**; expect **`=== Soft SPI GPIO`**, **`xfer` row `0,500000,…`**, and **`postErase … SR2`/`SR3`** lines. Logs that jump from **`read sweep done`** to **`XMODEM-like`** with **`0,10000000`** are **older UF2s**.
+
+1. **Soft-SPI GPIO at ~100 kHz (`flash_si_softspi.c`).** **`spi_deinit(spi0)`**, then bit-bang the **same** CS/SCK/MOSI/MISO pins (CPOL0 CPHA1) at a half-bit delay of **5 µs** (~100 kHz SCK). The test prints **JEDEC**, **`SR1`/`SR2`/`SR3`**, **8 B** of **`0Ch`** at address **0** and at the tail **`0x03FF0000`**, and an **`06h`** **WEN** → **`SR1`** (**WEL** bit check) → **`04h`** **WRDI** sequence per CS. **Why this matters:** If CS0 still returns **all `FF`** or **all `00`** at 100 kHz when CS1 returns plausible bytes, the failure is **not an SI / clock-margin issue at all** — the **CS0 net or the second-flash chip-select signal itself** is wrong. If both CS lines return the **same bytes** at 100 kHz, the **JEDEC / MISO / CS routing is fine** and the production-SPI failure is **path-specific** (RP2350 SPI peripheral, DMA, or trace SI at high `fc`). Reads of **0x9F / 0x05 / 0x0C** are tiny enough that even a poor MISO net should resolve at this clock.
+
+2. **Post-erase SR1 transactional vs held-CS bursts (`xmodem_like.c`).** On the **slowest** sweep row (now also includes **500 kHz** and **1 MHz** rows added to the ladder), after the **`DCh`** erase the test prints:
+   - **`postErase SR1 tx16+2ms gaps`** — sixteen **independent** `05h` transactions with **2 ms** spacing (CS toggles between each). For **idle** flash after erase, **`SR1=00`** (BUSY clear, WEL clear) on **both** CS is **expected** — this line does **not** discriminate CS0 vs CS1 by itself.
+   - **`heldBurst12`** — one CS-low assert, **`05h`**, then **12** consecutive **`SR1`** byte reads. **All `00`** on **both** CS is again consistent with **idle `SR1`**, not proof of a stuck MISO on CS0 alone.
+   - **`postErase transactional SR2`/`SR3`** — printed immediately after the burst; compare to CSV **`SR2`/`SR3`** on the same row. **CS0 vs CS1** split here is the primary **HW-SPI** discriminator after erase.
+
+3. **Slow-baud rows.** **500 kHz** and **1 MHz** are now first in `xfer_spi_bauds`. If CS0 still shows **`probe_nonff=64`** at those, it is essentially impossible for **`tCLQV` / `tHO` / fc margin** to be the cause.
+
+**Soft-SPI lab decode (2026-05, two-chip compare, Winbond `20 40 20` on both CS):** **Soft-SPI** showed **identical JEDEC**, **identical first 8 B** of **`0Ch @0h`**, **both** **`SR1=00`** before **`06h`**, **both** **`SR1=02` after `06h`** (WEL works on each chip), and **different** tail **`0Ch @03FF0000h`**: **CS0** first 8 B all **`FF`** (blank tail window), **CS1** **`FF FF 58 59…`** (leftover programmed bytes — content history only). So **CS0 is not “globally broken”** at ~100 kHz: **MISO, `9Fh`, `0Ch`, `06h` all behave**. The failure is **specific to the HW-SPI + erase/probe/program path** on **CS0**, not “cannot talk to flash2 at all.” **Refine SR1-only forensics:** **`postErase` sixteen transactional `SR1` reads and `heldBurst12` showing all `00` on *both* CS** is consistent with **idle `SR1`** (BUSY=0, WEL=0) after a **completed** erase — it does **not** prove **`wait_busy`** is wrong by itself. The strong **CS0 vs CS1** contrast in the same UART row is **`SR2`/`SR3`**: CSV still has **CS0 `00,00,00`** vs **CS1 `00,02,21`** at **500 kHz** — either **HW SPI returns wrong bytes for `35h`/`15h` on CS0** after that transaction sequence, or an **implausible** SR mask difference vs the same part on CS1. **Follow-up log (same §):** **Soft-SPI** on **CS0** now prints **`SR2=02 SR3=21`** (matches **CS1**); **`postErase transactional SR2`/`SR3`** on **HW SPI** is **`00`/`00` on CS0** vs **`02`/`21` on CS1** — the **die / SR image is correct**; **`spi_write_read_blocking` for `35h`/`15h` on CS0 is bogus** while **`05h` SR1** can still read **`00`** (idle). Earlier **read sweep** had **CS0 `SR3(read)=FF`** via HW — also wrong vs **`21`** — so **CS0 HW `15h` is unreliable** (`FF` vs `00` vs **`21`** truth from soft-SPI). **`flash_si_test`** prints **`HW SPI baseline 500kHz SR2/SR3 (no erase)`** before the xfer loop; **observed:** **`CS0=00/00 CS1=02/21`** — **CS0** HW **`35h`/`15h`** is wrong **before** the first xfer-loop **`DCh`** (not erase-induced; post-erase matches baseline).
+
+**Decision matrix after running the rebuilt UF2:**
+- **Confirmed (2026-05 log):** Soft-SPI **CS0** **`SR2`/`SR3`** = **`02`/`21`** = **CS1**; **HW SPI** **`35h`/`15h`** on **CS0** returns **`00`/`00`** after erase (and read sweep had **`SR3=FF`** on CS0) → **RP2350 HW SPI + CS0 analogue path** for **MISO capture on multi-byte status / config reads**, not wrong chip family, not Alliance-only. **Baseline before `DCh`:** **`CS0=00/00 CS1=02/21`** — failure is **not** erase-induced.
+- Soft-SPI **CS0** **`SR2`/`SR3`** also **`00`** while **CS1** shows **`02`/`21`** → **same instruction, same GPIO bit-bang**, different result per **`/CS`** → **CS0-specific analogue path** (device, socket, **`/CS0`**, or a **stray coupling** that only affects that chip’s MISO timing).
+- Soft-SPI CS0 JEDEC = `FF FF FF` or `00 00 00` (CS1 fine) → **CS0 net / select** broken (superseded if lab already shows good JEDEC on CS0).
+- **`heldBurst12` SR1 = `00…` on both CS** → **normal idle**; rely on **`SR2`/`SR3`** and **probe** columns, not SR1 burst alone.
+- **`probe_nonff=64` on CS0** with soft tail **all `FF`** before XMODEM → first HW row **mutates** that window or **readback** is wrong; **`postErase SR2`/`SR3`** line narrows **register read** vs **array read**.
+
+**What we did not do:** Integrate this test into `megaflash` runtime or the Applesoft validator; no change to default `SPI_SPEED_FINAL` based on JEDEC (policy remains: operator/hardware fix or future adaptive tuning).
+
+**References:** `MegaFlash/datasheets/W25Q512JV SPI RevB 06252019 KMS.pdf`, `MegaFlash/datasheets/AlliacheFlashDatasheet.pdf` (Alliance **AS25F3512MQ**), `pico/flash.c` (`InitSpi`, `SPI_SPEED_FINAL`, `tsReadOneBlock`, `tsWriteOneBlockWithoutErase`, `ReadFromFlashByDMA`, `BITINVERSION`), `pico/mediaaccess.c` (`WriteBlockForImageTransfer`), `pico/flash_si_test/main.c`, `pico/flash_si_test/xmodem_like.c`, `pico/flash_si_test/flash_si_softspi.c`, `pico/flash_si_test/flash_si_pins.c`, `pico/dmamemops.c`, `pico/CMakeLists.txt` (`MEGAFLASH_BUILD_FLASH_SI_TEST`).
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

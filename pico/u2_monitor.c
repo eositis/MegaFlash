@@ -33,6 +33,7 @@ enum {
   U2M_NET_UDPRX,
   U2M_NET_TCPRX,
   U2M_NET_MACRX,
+  U2M_NET_RXDROP,
   U2M_NET_MACTX,
   U2M_NET_MACTX_PTRS,
   U2M_MODE_LINE,
@@ -132,6 +133,27 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
   case U2M_NET_MACRX:
     printf("[u2m] %lu net sock%d MACRAW rx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
     break;
+  case U2M_NET_RXDROP: {
+    const char *proto = "?";
+    const char *reason = "?";
+    switch (e->a1) {
+    case 1: proto = "UDP"; break;
+    case 2: proto = "TCP"; break;
+    case 3: proto = "MACRAW"; break;
+    default: break;
+    }
+    switch (e->a2) {
+    case 1: reason = "no-room"; break;
+    case 2: reason = "partial"; break;
+    case 3: reason = "frame-too-big"; break;
+    case 4: reason = "size-map-clamped"; break;
+    default: break;
+    }
+    printf("[u2m] %lu net sock%d %s rx %s offered=%u accepted=%u free=%u ring=%u\n", (unsigned long)e->t_us,
+           (int)e->a0, proto, reason, (unsigned)e->w0, (unsigned)e->w1, (unsigned)(e->w2 & 0xFFFFu),
+           (unsigned)(e->w2 >> 16));
+    break;
+  }
   case U2M_NET_MACTX:
     printf("[u2m] %lu net sock%d MACRAW tx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
     break;
@@ -306,6 +328,30 @@ void U2_MonNetRxMacraw(int sock, uint16_t len) {
   u2_mon_push(&ev);
 }
 
+#ifndef U2_MON_RXDROP_MIN_INTERVAL_US
+#define U2_MON_RXDROP_MIN_INTERVAL_US 100000u
+#endif
+
+void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, uint16_t accepted, uint16_t free_bytes,
+                     uint16_t ring_size) {
+  static uint32_t u2_mon_rxdrop_last_us[4][6];
+  if (sock >= 0 && sock < 4 && reason > 0 && reason < 6) {
+    uint32_t now = time_us_32();
+    if ((uint32_t)(now - u2_mon_rxdrop_last_us[sock][reason]) < U2_MON_RXDROP_MIN_INTERVAL_US)
+      return;
+    u2_mon_rxdrop_last_us[sock][reason] = now;
+  }
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_NET_RXDROP,
+                     .a0 = (uint8_t)sock,
+                     .a1 = proto,
+                     .a2 = reason,
+                     .w0 = offered,
+                     .w1 = accepted,
+                     .w2 = ((uint32_t)ring_size << 16) | (uint32_t)free_bytes};
+  u2_mon_push(&ev);
+}
+
 void U2_MonNetMacrawTx(int sock, uint16_t len) {
   u2_mon_evt_t ev = {.t_us = time_us_32(), .op = U2M_NET_MACTX, .a0 = (uint8_t)sock, .w0 = len};
   u2_mon_push(&ev);
@@ -385,6 +431,16 @@ void U2_MonNetRxTcp(int sock, uint16_t len) {
 void U2_MonNetRxMacraw(int sock, uint16_t len) {
   (void)sock;
   (void)len;
+}
+void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, uint16_t accepted, uint16_t free_bytes,
+                     uint16_t ring_size) {
+  (void)sock;
+  (void)proto;
+  (void)reason;
+  (void)offered;
+  (void)accepted;
+  (void)free_bytes;
+  (void)ring_size;
 }
 void U2_MonNetMacrawTx(int sock, uint16_t len) {
   (void)sock;

@@ -41,6 +41,9 @@ void U2_MonNetTcpSend(int sock, uint16_t len);
 void U2_MonNetRxUdp(int sock, uint16_t len, uint32_t src_ip_host, uint16_t src_port);
 void U2_MonNetRxTcp(int sock, uint16_t len);
 void U2_MonNetRxMacraw(int sock, uint16_t len);
+/** RX enqueue outcome telemetry (proto: 1=UDP 2=TCP 3=MACRAW; reason: 1=no-room 2=partial 3=frame-too-big 4=size-map-clamped). */
+void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, uint16_t accepted, uint16_t free_bytes,
+                     uint16_t ring_size);
 void U2_MonNetMacrawTx(int sock, uint16_t len);
 void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr_full, uint16_t rd_masked,
                            uint16_t wr_masked);

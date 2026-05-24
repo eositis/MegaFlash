@@ -7,6 +7,9 @@
 #   ./build-debug.sh
 #   JOBS=8 ./build-debug.sh
 #
+# After a successful build, the script creates an empty git commit at the MegaFlash
+# repo root (marker only; pico2_debug/ is gitignored). Skip: MF_DEBUG_BUILD_NO_GIT_COMMIT=1
+#
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -24,3 +27,6 @@ echo "Building pico2_debug (Pico 2 W / RP2350) with $CMAKE_BIN..."
 "$CMAKE_BIN" --build pico2_debug -j"$JOBS"
 echo "OK: pico2_debug/megaflash.uf2 — flash this for MegaFlash + ip65 bring-up."
 echo "UART 115200; default [u2] is checkpoint-only (U2_IP65_CHECKPOINT). Use -DU2_IP65_TRACE_DATA=1 for 48 DATA lines."
+
+MF_DEBUG_BUILD_COMMIT_EXTRA="target=pico2_debug board=pico2_w (configure CMake cache for U2_* / FIRMWARE_BUILD_TIMESTAMP)"
+mf_debug_build_git_commit "pico/build-debug.sh"

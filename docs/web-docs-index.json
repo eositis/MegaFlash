@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "updated": "2026-06-11",
+  "files": [
+    "C0x-register-comparison-Uthernet2-MegaFlash.md",
+    "Debug-mode.md",
+    "FujiNet-network-stack-on-MegaFlash.md",
+    "Implementation-notes-and-reasoning.md",
+    "MegaFlash-AppleII-API.md",
+    "MegaFlash-firmware-summary.md",
+    "ROM-patches-description.md",
+    "Slot1-redirect-to-C0C8-C0CB.md",
+    "Slot1-serial-port-in-iic-bin.md",
+    "Uthernet-II-emulation-on-MegaFlash.md",
+    "a2osx-megaflash-lib.md",
+    "cc65-megaflash-lib.md",
+    "ip65-Uthernet-II-integration.md",
+    "ThomasFok-upstream-comparison.md",
+    "Uthernet-II-stack-architecture-and-todos.md"
+  ],
+  "documents": [
+    {
+      "id": "C0x-register-comparison-Uthernet2-MegaFlash",
+      "file": "C0x-register-comparison-Uthernet2-MegaFlash.md",
+      "title": "C0x Register Comparison: Uthernet II vs MegaFlash",
+      "summary": "Both the **Uthernet II** (AppleWin emulation) and **MegaFlash** (hardware) use the same Apple II slot I/O region and decode the same **low 2 address bits** for their first four registers. So from the 6502’s point of view, the **first four C0x locations have the same address la…"
+    },
+    {
+      "id": "Debug-mode",
+      "file": "Debug-mode.md",
+      "title": "MegaFlash Debug Mode",
+      "summary": "MegaFlash has **two separate debug mechanisms**: one in the **Apple II ROM firmware** (6502) and one in the **Pico firmware** (C/C++). They use different outputs and build flags."
+    },
+    {
+      "id": "FujiNet-network-stack-on-MegaFlash",
+      "file": "FujiNet-network-stack-on-MegaFlash.md",
+      "title": "Could FujiNet’s SmartPort-Based Network Stack Be Added to MegaFlash?",
+      "summary": "Short answer: **not as a direct drop-in**, but **yes in principle** by reusing the **design and protocol ideas** and reimplementing them on MegaFlash’s hardware and software stack."
+    },
+    {
+      "id": "Implementation-notes-and-reasoning",
+      "file": "Implementation-notes-and-reasoning.md",
+      "title": "Implementation Notes and Reasoning",
+      "summary": "This document records the thinking, root-cause analysis, design decisions, and dead ends from work on the MegaFlash Pico firmware (Uthernet II, build, GPIO, C0C4 visibility). It is intended for future maintainers and for debugging similar issues."
+    },
+    {
+      "id": "MegaFlash-AppleII-API",
+      "file": "MegaFlash-AppleII-API.md",
+      "title": "MegaFlash Apple IIc API Reference",
+      "summary": "This document catalogs the **features MegaFlash exposes to the Apple IIc/IIc+**, and how to call them:"
+    },
+    {
+      "id": "MegaFlash-firmware-summary",
+      "file": "MegaFlash-firmware-summary.md",
+      "title": "MegaFlash Firmware – Concise Summary",
+      "summary": "**MegaFlash** is an internal storage and I/O card for the **Apple IIc / IIc+**. It plugs into the Memory Expansion slot and is built around a **Raspberry Pi Pico (W)** plus **Winbond NOR flash**, with a **GAL** for address decode. The 65C02 only moves data between its RAM and …"
+    },
+    {
+      "id": "ROM-patches-description",
+      "file": "ROM-patches-description.md",
+      "title": "MegaFlash ROM Patches – Description",
+      "summary": "The **firmware** folder contains **Apple IIc / IIc+ system ROM patches**. The IIc has no slot ROM socket; $C100–$CFFF is internal ROM only. MegaFlash therefore **replaces** the built-in “Memory Expansion” (Slinky) firmware in **virtual slot 4** by patching the original ROM and…"
+    },
+    {
+      "id": "Slot1-redirect-to-C0C8-C0CB",
+      "file": "Slot1-redirect-to-C0C8-C0CB.md",
+      "title": "Redirecting Slot 1 (Serial Port) to $C0C8–$C0CB",
+      "summary": "This note addresses whether it is realistic to make **PR#1** and **IN#1** use new hardware registers at **$C0C8–$C0CB** on the MegaFlash (slot 4) instead of the built-in ACIA at $C098–$C09B."
+    },
+    {
+      "id": "Slot1-serial-port-in-iic-bin",
+      "file": "Slot1-serial-port-in-iic-bin.md",
+      "title": "Slot 1 (Serial Port) in iic.bin",
+      "summary": "This note describes how **slot 1** works in the MegaFlash-patched Apple IIc ROM image **iic.bin** (and the firmware that builds it)."
+    },
+    {
+      "id": "Uthernet-II-emulation-on-MegaFlash",
+      "file": "Uthernet-II-emulation-on-MegaFlash.md",
+      "title": "Uthernet II Emulation on MegaFlash",
+      "summary": "This document describes the Uthernet II (W5100) emulation implemented in the MegaFlash firmware. Slot selection uses the **default MegaFlash bus behaviour** (no GPIO slot-select pin); the card responds when the bus is active for its slot."
+    },
+    {
+      "id": "a2osx-megaflash-lib",
+      "file": "a2osx-megaflash-lib.md",
+      "title": "MegaFlash C Library for A2osX",
+      "summary": "This document adapts the cc65 MegaFlash library to the **C environment used by A2osX**. It describes:"
+    },
+    {
+      "id": "cc65-megaflash-lib",
+      "file": "cc65-megaflash-lib.md",
+      "title": "MegaFlash cc65 Library",
+      "summary": "This library gives cc65 programs (Apple IIc / IIc+) a small, C‑friendly wrapper around the **MegaFlash** `$C0C0` command interface:"
+    },
+    {
+      "id": "ip65-Uthernet-II-integration",
+      "file": "ip65-Uthernet-II-integration.md",
+      "title": "ip65 Stack and MegaFlash Uthernet II Integration",
+      "summary": "**Goal:** Make the [ip65](https://github.com/cc65/ip65) TCP/IP stack work with MegaFlash’s Uthernet II (W5100) emulation. **No changes to ip65.** The MegaFlash Uthernet II emulation must satisfy ip65’s expectations."
+    },
+    {
+      "id": "ThomasFok-upstream-comparison",
+      "file": "ThomasFok-upstream-comparison.md",
+      "title": "ThomasFok / eositis MegaFlash — upstream diff findings",
+      "summary": "**Purpose:** Side-by-side reference while you work in the repo. Compares **this fork (`eositis`)** `main` to **[ThomasFok/MegaFlash](https://github.com/ThomasFok/MegaFlash)** `main`, with emphasis on **storage** and **Apple IIc Plus / Applesoft acceleration**."
+    },
+    {
+      "id": "Uthernet-II-stack-architecture-and-todos",
+      "file": "Uthernet-II-stack-architecture-and-todos.md",
+      "title": "Uthernet II stack — architecture review, contracts, and open work",
+      "summary": "This document supplements `docs/Implementation-notes-and-reasoning.md` (§1j–§1ak, §1az) with a consolidated **data-path view**, **diagrams**, **function contracts**, and a **prioritized TODO list** with **validation checklists**. Primary sources: `pico/uthernet2.c`, `pico/uthe…"
+    }
+  ]
+}

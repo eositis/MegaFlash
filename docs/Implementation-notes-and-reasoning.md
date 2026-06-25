@@ -1789,11 +1789,15 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 
 **What we did:** `git restore` on **`pico/uthernet2.c`**, **`uthernet2.h`**, **`uthernet2_net.cpp`**, **`uthernet2_net.h`**, **`main.c`**, **`ipc.h`**, **`network_pump.cpp`**, **`network_pump.h`** → **`865d4d7`** (merge) baseline. Rebuilt **`pico2_debug/megaflash.uf2`**.
 
+**Follow-up (§10l re-land):** User requested **§10l only** (RX pointer geometry) without §10j/k/m. Re-applied in **`pico/uthernet2.c`**: **`read_rx_rd_coherent`**, **`u2_rx_used_bytes`**, monotonic **`sn_rx_wr`** with mask-only indexing, TOCTOU reload, **`u2_socket_discard_rx`** writes **`receive_base + wr_off`** to **RX_RD**. **Did not** change **`uthernet2_net.cpp`** (TCP partial accept remains). Rebuilt **`pico2_debug/megaflash.uf2`**.
+
+**Validation (user, post-§10l re-land):** Contiki browsing **much faster**; MegaFlash native networking **OK**; Contiki **wget ~100 KiB** before timeout (was failing much earlier with **regular** checksum errors every ~1390 B). Checksum errors **still occur** but **no longer at fixed intervals** — consistent with §10l fixing ring geometry overwrite; remaining corruption likely **§10j** partial TCP segment accept and/or **§10k** poll/`refused_data` stall on long transfers.
+
 **What we did not do:** Did not revert **`docs/`** §10j–§10m prose (historical record of attempted fixes; **not in firmware** until re-applied). ROM disk already reverted separately (§SESSION_LOG 2026-06-21).
 
-**Takeaway:** §10j–§10m remain design notes for a future **selective** re-land; current firmware matches pre-session **`uthernet2*`** / **`main.c`** poll path (**50 ms** core-0 FIFO wait, no **`IPCCMD_NET_WAKE`**, masked **`sn_rx_wr`**, partial TCP RX accept, permissive **`U2_Net_RecvConfirm`** stub).
+**Takeaway:** §10j–§10m remain design notes for a future **selective** re-land; **§10l** is now in firmware again as an isolated change.
 
-**References:** git **`865d4d7`**; summary table rows §10j–§10m marked superseded by this revert.
+**References:** git **`865d4d7`**; summary table rows §10j–§10m marked superseded by this revert except §10l re-land.
 
 ---
 
@@ -1879,7 +1883,7 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | TCP RX backpressure | §10i, ~~§**10j**~~ §**10n**, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | **§10j reverted (§10n):** firmware at **`865d4d7`** — partial TCP ring accept; **`U2_Net_RecvConfirm`** no-op |
 | TCP TX backpressure | ~~§**10j**~~ §**10n**, `uthernet2.c`, `uthernet2_net.cpp` | **Reverted:** **`U2_Net_SendTcp`** void; **`Sn_TX_RD`** advances on SEND path per pre-§10j tree |
 | U2 core-0 poll cadence | ~~§**10k**~~ §**10n**, `main.c`, `ipc.h`, `uthernet2.c` | **Reverted:** **50 ms** FIFO wait; core 1 **`U2_Poll`** no **`IPCCMD_NET_WAKE`** |
-| Contiki wget large-file checksum | ~~§**10l**~~ §**10n**, `uthernet2.c` | **Reverted:** masked **`sn_rx_wr`**; no **`read_rx_rd_coherent`** (§10l design retained as doc only) |
+| Contiki wget large-file checksum | §**10l**, §**10n**, `uthernet2.c` | **§10l re-landed:** monotonic **`sn_rx_wr`**, **`read_rx_rd_coherent`**, **`u2_rx_used_bytes`**; discard writes **`receive_base+off`**; **§10j TCP all-or-nothing not yet** |
 | MegaFlash native NTP/DHCP vs U2 | ~~§**10m**~~ §**10n**, `network_pump.cpp`, `uthernet2_net.cpp` | **Reverted:** no **`IsLegacyOperationActive`** / **`U2_Net_ServicePoll`** |
 | Open C0C4 unresolved item | §12 | Slot decode confirmed working; remaining investigation is nDEVSEL signal/timing visibility at Pico/PIO point vs timing/FIFO/CPU-drain behavior |
 | Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |

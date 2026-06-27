@@ -2066,6 +2066,25 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 
 ---
 
+## 10z. P0-2 MACRAW TX ring + honest `Sn_TX_RD` (§1ag / §1ax re-land)
+
+**Requirement:** §**10y** validation — long telnet/wacbbs sessions eventually **`[CYW43] STALL`**, stuck TCP ACK, RECV-only storm. Root cause: **1-slot** deferred MACRAW TX overwrite + **`send_data`** advanced **`TX_RD`** when frame only queued or **`linkoutput`** failed.
+
+**What we did:**
+
+- **`U2_MACRAW_TX_Q_DEPTH`**: **16** on RP2350 (**4** on RP2040); **`U2_MACRAW_TX_DRAIN_PER_POLL`** **8**.
+- **`U2_Net_SendMacraw`**: returns **0** if accepted, **-1** if queue full or send failed; **`tx_q_drop`** on enqueue reject.
+- **`u2_send_macraw_core0`**: returns **`bool`**; checks **`linkoutput`** **`ERR_OK`**; **`lo_err`** / **`pbuf_fail`** counters.
+- **`send_data`**: MACRAW path returns **-1** without advancing **`TX_RD`**; **`SN_CR_SEND`** leaves **`Sn_CR=SEND`** set on failure.
+- **`U2_TryCompletePendingSocket0Send`**: core-0 retry after drain; called from **`U2_Net_ServicePoll`**.
+- Debug UART every **10 s**: **`[u2macraw] tx_q=… tx_q_drop=… lo_err=… pbuf_fail=…`**.
+
+**Validation gate:** Sustained telnet/wacbbs without mid-session ACK freeze; watch **`tx_q_drop`** / **`lo_err`** during stress.
+
+**References:** `pico/uthernet2_net.cpp`, `pico/uthernet2.c`, `pico/uthernet2.h`; §**1ag**, §**1ax**; `docs/Uthernet-II-stack-architecture-and-todos.md` P0-2.
+
+---
+
 ## 1ap. tcpdump vs UART: MACRAW ingress length vs host RECV (6502 commit path)
 
 **What:** Correlate **Ethernet framing** with **`tcpdump`** using UART — first at **lwIP → MACRAW enqueue** (historical **`MACRAW rx len=`**, removed), now at **W5100 RECV** after the host has updated **RX_RD** (what the **6502 / ip65 stack committed** as consumed).

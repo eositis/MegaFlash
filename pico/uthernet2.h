@@ -29,6 +29,9 @@ void U2_Poll(void);
 /** Wake core 0 for lwIP poll (core 1 only; rate-limited). Phase 1 §10k. */
 void U2_RequestCore0NetPoll(void);
 
+/** Retry sock0 MACRAW SEND when Sn_CR still set after deferred TX (core 0 only). §10z P0-2. */
+void U2_TryCompletePendingSocket0Send(void);
+
 /**
  * Handle one Apple II bus access for Uthernet II at C0x4–C0x7 (slot 4: $C0C4–$C0C7).
  * busdata: lower nibble = C0x address (4–7 → W5100 ports 0–3 via &3), bit4 = read flag, bits 5–12 = write data.

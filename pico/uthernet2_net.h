@@ -26,7 +26,8 @@ void U2_Net_Close(int i);
 int  U2_Net_OpenUdp(int i, uint16_t local_port);
 int  U2_Net_OpenTcp(int i);
 int  U2_Net_OpenMacraw(int i);
-void U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len);
+/** Returns 0 if accepted (queued or sent), -1 if queue full or linkoutput failed. */
+int  U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len);
 /** Feed a received raw Ethernet frame into socket i (MACRAW RX). Call from driver hook if available. */
 void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len);
 int  U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_t local_port);

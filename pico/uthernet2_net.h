@@ -37,6 +37,9 @@ void U2_Net_RecvConfirm(int i);
 
 uint8_t U2_Net_GetStatus(int i);
 
+/** Drain deferred MACRAW TX (core 0). Safe from `NetworkPump::PollOnce` during native ops. */
+void U2_Net_ServicePoll(void);
+
 /** Advance lwIP and drain recv into RX buffers. Call periodically from bus loop. */
 void U2_Net_Poll(void);
 

@@ -82,23 +82,33 @@ void __no_inline_not_in_flash_func(core1Main)() {
 volatile bool updateNTPNow = false;
 
 //
-// Core 0: lwIP/CYW43 poll + IPC from core 1 (Test WiFi, TFTP).
+// Core 0: lwIP/CYW43 poll + IPC from core 1 (Test WiFi, TFTP, NET_WAKE).
 // Must run whenever Pico W is used: both inside core0Loop and on the
 // USB-terminal path when appleConnected was false at boot (otherwise
 // IPC is never popped and Test WiFi hangs; WiFi LED/stack stay idle).
 //
+// Poll network stack before blocking on the FIFO so inbound MACRAW/TCP and
+// deferred MACRAW TX are serviced immediately (§10x); IPCCMD_NET_WAKE only
+// needs to unblock the wait — dispatch is a no-op after poll.
+//
+static void PicoW_DispatchIpc(struct IpcMsg *msg) {
+  if (msg->command == IPCCMD_WIFITEST) {
+    TestWifi((TestResult_t *)msg->data);
+  } else if (msg->command == IPCCMD_TFTP) {
+    ExecuteTFTP(msg->data /* taskid */);
+  }
+}
+
 static void PicoW_ServiceCore0IpcAndNetwork(uint64_t fifo_timeout_us) {
-  uint32_t param;
-  bool msgReceived = multicore_fifo_pop_timeout_us(fifo_timeout_us, &param);
   U2_Net_Poll();
   U2_MonPollFlush();
-  if (msgReceived) {
-    struct IpcMsg *msg = (struct IpcMsg *)param;
-    if (msg->command == IPCCMD_WIFITEST) {
-      TestWifi((TestResult_t *)msg->data);
-    } else if (msg->command == IPCCMD_TFTP) {
-      ExecuteTFTP(msg->data /* taskid */);
-    }
+  uint32_t param;
+  while (multicore_fifo_pop_timeout_us(0, &param)) {
+    PicoW_DispatchIpc((struct IpcMsg *)param);
+  }
+  if (fifo_timeout_us > 0 &&
+      multicore_fifo_pop_timeout_us(fifo_timeout_us, &param)) {
+    PicoW_DispatchIpc((struct IpcMsg *)param);
   }
 }
 
@@ -124,7 +134,7 @@ void __no_inline_not_in_flash_func(core0Loop)() {
 #if defined(NDEBUG)
           ReleaseUpdateBusUsbGate();
 #endif
-          PicoW_ServiceCore0IpcAndNetwork(50 * 1000);
+          PicoW_ServiceCore0IpcAndNetwork(0);
         } while (!time_reached(nextUpdateTime) && !updateNTPNow);
       
     } while(1);

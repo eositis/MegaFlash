@@ -1,6 +1,9 @@
 #include "network_pump.h"
 #include "debug.h"
 #include "misc.h"
+#if PICO_CYW43_ARCH_POLL
+#include "uthernet2_net.h"
+#endif
 #include <algorithm>
 #include "lwip/pbuf.h"
 #include "udptask.h"
@@ -256,6 +259,9 @@ void NetworkPump::RemoveSession(INetworkSession *session) {
 }
 
 void NetworkPump::PollOnce() {
+#if PICO_CYW43_ARCH_POLL
+  U2_Net_ServicePoll();
+#endif
   cyw43_arch_poll();
   for (INetworkSession *s : sessions_) {
     if (s) s->OnPump(*this);

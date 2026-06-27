@@ -1791,6 +1791,8 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 
 **Follow-up (§10l re-land):** User requested **§10l only** (RX pointer geometry) without §10j/k/m. Re-applied in **`pico/uthernet2.c`**: **`read_rx_rd_coherent`**, **`u2_rx_used_bytes`**, monotonic **`sn_rx_wr`** with mask-only indexing, TOCTOU reload, **`u2_socket_discard_rx`** writes **`receive_base + wr_off`** to **RX_RD**. **Did not** change **`uthernet2_net.cpp`** (TCP partial accept remains). Rebuilt **`pico2_debug/megaflash.uf2`**.
 
+**Follow-up (§10j re-land, after §10l commit `7adb4ee`):** Isolated **§10j** on top of §10l — **`u2_push_rx` TCP all-or-nothing**; **`u2_tcp_recv`** **`ERR_MEM`** without freeing pbuf when ring full; **`U2_Net_RecvConfirm`** sets retry flag, **`U2_Net_TcpRetryRefusedPending`** on core 0; **`U2_Net_SendTcp`** returns accepted bytes; **`send_data`** honest **`Sn_TX_RD`** + pending **`Sn_CR=SEND`**; **`U2_TryCompletePendingSends`**. **Did not** land §10k (no **`IPCCMD_NET_WAKE`**). Rebuilt **`pico2_debug/megaflash.uf2`**.
+
 **Validation (user, post-§10l re-land):** Contiki browsing **much faster**; MegaFlash native networking **OK**; Contiki **wget ~100 KiB** before timeout (was failing much earlier with **regular** checksum errors every ~1390 B). Checksum errors **still occur** but **no longer at fixed intervals** — consistent with §10l fixing ring geometry overwrite; remaining corruption likely **§10j** partial TCP segment accept and/or **§10k** poll/`refused_data` stall on long transfers.
 
 **What we did not do:** Did not revert **`docs/`** §10j–§10m prose (historical record of attempted fixes; **not in firmware** until re-applied). ROM disk already reverted separately (§SESSION_LOG 2026-06-21).
@@ -1798,6 +1800,269 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 **Takeaway:** §10j–§10m remain design notes for a future **selective** re-land; **§10l** is now in firmware again as an isolated change.
 
 **References:** git **`865d4d7`**; summary table rows §10j–§10m marked superseded by this revert except §10l re-land.
+
+---
+
+## 10o. §10j collateral: DNS first-try fail, wget connect timeout, telnet immediate disconnect
+
+**Symptom (user, post-§10j on §10l `7adb4ee`):** Contiki browser **very good** (better than §10l alone). **DNS** fails on first try more often than before §10j. Contiki **wget** resolves IP but **cannot establish TCP** (timeout from the start). **ip65 telnet65**: “connecting to &lt;IP&gt; OK” then **immediate disconnect**.
+
+**Why:**
+
+1. **§10j without §10k:** TCP **`refused_data`** ( **`ERR_MEM`** when RX ring appears full) holds **pbufs** until core 0 retries **`U2_Net_TcpRetryRefusedPending`**. With Apple connected, **`core0Loop`** only polled lwIP every **~50 ms**; **`U2_Poll`** on core 1 is a no-op for lwIP. That starves UDP/DNS and delays TCP handshake/recv retry.
+2. **Stale `sn_rx_wr` on socket reuse:** **`sn_rx_wr`** was not reset on **OPEN** / **CLOSE**. After a prior session, **`u2_rx_used_bytes`** can report a nearly full ring on a fresh connection → first inbound TCP segment gets **`ERR_MEM`** → peer may RST or host sees **CLOSED** (telnet “connect OK then disconnected”).
+3. **`send_data` during SYNSENT:** Honest TX returns **-1** when **`data_len>0`** but status is not **ESTABLISHED**, leaving **`Sn_CR=SEND`** stuck until poll — some clients issue **SEND** before **ESTABLISHED**.
+
+**What we did (§10k + §10o, no §10m):**
+
+- **`IPCCMD_NET_WAKE`**: **`U2_RequestCore0NetPoll()`** from **`U2_Poll`** (core 1, rate-limited **1/ms**); **`core0Loop`** FIFO wait **50 ms → 5 ms**.
+- **`u2_socket_reset_rx`**: zero **`sn_rx_wr`** and set **`Sn_RX_RD`** to **`receive_base`** on successful **OPEN** and on **CLOSE/DISCON**.
+- **`send_data`**: **SYNSENT** / **SOCK_INIT** with pending TX returns **0** (clear **`Sn_CR`**, data stays for **SEND** after **ESTABLISHED**).
+- **`u2_tcp_connected_cb`**: on **ESTABLISHED**, **`U2_TryCompletePendingSends`** on core 0 or **`U2_RequestCore0NetPoll`** from core 1.
+- **`u2_tcp_recv`**: **`ERR_MEM`** only when **`copied>0 && accepted==0`** (not on **`copied==0`**).
+
+**What we didn’t do:** §**10m** native-op MACRAW ingress gate (user’s MegaFlash native path was OK on §10l; avoid re-introducing NTP/DHCP regressions until validated).
+
+**Takeaway:** §**10j** segment-atomic RX is necessary for wget integrity but **requires** timely core-0 poll (**§10k**) and **fresh RX geometry per socket** — otherwise connect-path TCP and DNS regress while bulk browse can still look fast.
+
+**References:** `pico/ipc.h`, `pico/main.c`, `pico/uthernet2.c` (`U2_Poll`, `u2_socket_reset_rx`, `send_data`), `pico/uthernet2_net.cpp` (`u2_tcp_connected_cb`, `u2_tcp_recv`).
+
+---
+
+## 10p. wget/telnet connect timeout persists after §10o (browser OK)
+
+**Symptom (user, post-§10o):** Contiki **browsing works**. Contiki **wget** still resolves host then **TCP connect times out**. **telnet65** unchanged (connect OK → immediate disconnect).
+
+**Why:** §10o kept §10j **`ERR_MEM`** when the emulated RX ring could not accept a whole segment. That holds **`refused_data`** pbufs and can stall **new** TCP handshakes even with §10k poll wake, while **browser** sockets stay warm on existing sessions. Separately, §10o **cleared `Sn_CR` without advancing `TX_RD` during SYNSENT** — Contiki/ip65 often **SEND** before **ESTABLISHED**; §10l advanced **`TX_RD`** (discarding mistimed payload) so the host re-queues HTTP after connect. §10o **OPEN-time `RX_RD` reset** may also have raced Contiki init ordering.
+
+**What we did:**
+
+- **`u2_tcp_recv`**: back to §10l — **`tcp_recved` only when `accepted>0`**, always **`pbuf_free(p)`** (no **`ERR_MEM`**). **Kept** §10j **all-or-nothing** **`u2_push_rx`** (no partial ring slice → no silent tail drop).
+- **`send_data`**: restore §10l **SYNSENT/INIT** behavior — advance **`TX_RD→TX_WR`** without lwIP send; **ESTABLISHED** path stays §10j honest **`tcp_write`**.
+- **`u2_rx_rd_ring_offset`**: **`(physical_rd − receive_base) & mask`** for **`u2_rx_used_bytes`**.
+- **`u2_socket_reset_rx`**: on **CONNECT** (success) and **CLOSE** only — not **OPEN**.
+- **`U2_TcpFlushPendingTx`**: on **`u2_tcp_connected_cb`** and each **`U2_Net_Poll`** when **ESTABLISHED** and **`TX_RD≠TX_WR`**.
+
+**What we didn’t do:** Did not revert §10k poll wake or §10l ring geometry.
+
+**Takeaway:** Segment-atomic **ring enqueue** and **honest ESTABLISHED TX** can coexist with §10l **recv free** semantics; **`ERR_MEM`** on the hot path is too aggressive for multi-socket Contiki + ip65 bring-up.
+
+**References:** `pico/uthernet2.c`, `pico/uthernet2_net.cpp`, `pico/uthernet2.h`.
+
+---
+
+## 10q. Revert §10j–§10p to §10l only — ip65 probe / Contiki ipconfig broken
+
+**Symptom (user, post-§10p):** **ip65** no longer recognizes Uthernet emulation (“device not found”). **Contiki** cannot run **ipconfig** (fails before networking). Browsing/TCP experiments moot if W5100 chip probe fails.
+
+**Why:** §10j–§10p bundled changes to **`u2_tcp_recv`**, **`send_data`**, **`U2_Poll`** FIFO wake, **`u2_socket_reset_rx`**, and poll-side **`U2_TcpFlushPendingTx`** regressed **bring-up** — the ip65 **`w5100.s`** RTR XOR probe and Contiki init path depend on stable, low-latency **`$C0C4–$C0C7`** register reads without side effects from core-0 networking on the bus hot path.
+
+**What we did:** **`git restore --source=7adb4ee`** on **`pico/uthernet2.c`**, **`uthernet2_net.cpp`**, **`uthernet2.h`**, **`uthernet2_net.h`**, **`main.c`**, **`ipc.h`** — firmware back to **§10l only** (RX ring geometry). Rebuilt **`pico2_debug/megaflash.uf2`**.
+
+**What we didn’t do:** Did not delete §10j–§10p design notes; future TCP fixes must be re-landed **one at a time** with ip65 probe + Contiki ipconfig as first gate.
+
+**Takeaway:** Never ship bundled U2 TCP/poll changes without passing **ip65 detect** and **Contiki ipconfig** before wget/telnet tuning.
+
+**References:** git **`7adb4ee`**; summary table rows §10j–§10p superseded in firmware by this revert.
+
+---
+
+## 10r. telnet65 pcap — `sensoroni_onion_1005.pcap` (onionfu.com / 71.63.243.155:6502)
+
+**Capture:** 10 packets, ~427 ms, STA **192.168.0.203:26135** → **71.63.243.155:6502** (telnet65 “connect then immediate disconnect”).
+
+**Timeline (seconds from first SYN):**
+
+| Δt (ms) | Direction | Flags | Notes |
+|--------:|-----------|-------|-------|
+| 0 | → server | **SYN** | `win=1460` (one MSS), TTL 64 |
+| 86 | ← server | **SYN-ACK** | `mss 1460`, `win=64240` |
+| 152 | → server | **SYN** (retry) | Same seq — **SYN-ACK not ACKed within ~66 ms** |
+| 154 | → server | **RST** | TTL **255**, `win=41005` — **abort before handshake done** |
+| 239 | ← server | SYN-ACK (retry) | |
+| 241 | → server | **ACK** | Handshake completes |
+| 289 | → server | **RST** | TTL 255 again — **~47 ms after ESTABLISHED** |
+| 325 | ← server | RST | |
+| … | | stray ACK/RST | tail retransmits |
+
+**What this means:**
+
+1. **Not a DNS or routing problem** — SYN reaches the server and SYN-ACK returns.
+2. **Handshake latency** — the Pico does not ACK the first SYN-ACK for **~66 ms**, so lwIP retransmits SYN. That matches **core 0 `U2_Net_Poll` only every ~50 ms** while the II bus runs on core 1 (§10k hypothesis).
+3. **We abort the connection** — RST packets from **192.168.0.203** use **TTL 255** (vs TTL 64 on SYN/ACK), consistent with **lwIP `tcp_abort` / CLOSE** after the emulated W5100 socket goes **CLOSED**, not a middlebox drop.
+4. **No application data** — the server never sends a telnet banner in this window; the session dies from **RST ~47 ms after the ACK that completes the handshake**, matching “connecting … OK” then “disconnected” if the UI reports success at **ESTABLISHED** (or a brief SYNSENT window before the first RST).
+5. **`win=1460` on SYN** — receive window is only one segment; worth checking later but not the primary failure here.
+
+**Next captures / correlation:**
+
+- Same test with UART **`[u2m]`** socket **OPEN / CONNECT / SR / CLOSE / RECV** lines aligned to wall clock.
+- Optional: wget or browser TCP to the same host for comparison (does server send data before we RST?).
+- If §10l baseline is confirmed on hardware, re-land **§10k poll wake only** (no §10j recv) and re-capture — expect first SYN-ACK ACK within one poll period and no pre-handshake RST.
+
+**References:** user file `sensoroni_onion_1005.pcap`; `pico/main.c` (`core0Loop` 50 ms FIFO); §10k/§10q notes.
+
+---
+
+## 10s. Contiki browser pcap — `sensoroni_onion_1006.pcap` (asimov.applefritter.com)
+
+**Capture:** 10 packets, two load attempts (**22:52:33** and **23:08:13**), STA **192.168.0.203:1026** → **66.59.109.26:80**. Contiki browser (not wget): `GET /` with `Host: asimov.applefritter.com`, `User-Agent: Contiki/3.x`.
+
+**Per-attempt pattern (identical both times):**
+
+| Δt (ms) | Direction | Flags | Notes |
+|--------:|-----------|-------|-------|
+| 0 | → server | **SYN** | **`seq=0` ISN**, `win=1460`, `mss 1460` |
+| 16 | ← server | **SYN-ACK** | Fast reply |
+| 58 | → server | **RST** | TTL **255** — **handshake never ACKed** |
+| 418 | → server | **PSH** | **HTTP GET** (124 B) `seq 1:125` on **same 4-tuple** |
+| 434 | ← server | **RST** | Dead connection |
+
+**What this means:**
+
+1. **DNS/routing OK** — TCP SYN reaches a live web server.
+2. **Handshake never completes on the wire** — unlike telnet65 (§10r), there is **no ACK** at all; we go **SYN → SYN-ACK → RST**.
+3. **~58 ms from SYN-ACK to RST** — strongly suggests the **II stack times out CONNECT** and issues **CLOSE** before core 0 processes SYN-ACK and sends ACK (poll latency + W5100/lwIP state gap). SYN-ACK arrives in 16 ms; the bottleneck is **not** WAN RTT.
+4. **Split-brain after RST** — **~344 ms later** Contiki still **SENDs HTTP** on the same **src port 1026** as if the socket were up; server correctly RSTs. Explains browser “tries to connect / hangs” without wget involvement.
+5. **`seq=0` on SYN** — both attempts use **ISN 0** (visible in hex). Unusual for lwIP; worth correlating with `tcp_connect` / PCB init (may be Contiki-visible only if we mirror oddly; still flag for firmware review).
+6. **`win=1460`** again — one-MSS receive window on SYN (same as telnet §10r).
+
+**Contrast with telnet65 (`sensoroni_onion_1005.pcap`):**
+
+| | telnet65 | Contiki browser |
+|--|----------|-----------------|
+| SYN-ACK → ACK | Delayed (~66 ms), eventually ACKs | **Never ACKs** |
+| RST timing | ~2 ms after SYN retry; second RST ~47 ms after ACK | **~58 ms after SYN-ACK** |
+| App data after RST | None | **HTTP GET on dead session** |
+
+**Firmware implication:** Priority fix is **timely SYN-ACK processing** (§10k-style core-0 poll wake) **without** breaking ip65 probe (§10q). Second: on **CLOSE/RST**, ensure **W5100 `Sn_SR` and TX path** cannot **SEND** afterward (Contiki ghost HTTP).
+
+**Next:** UART `[u2m]` for **CONNECT → SR → CLOSE/SEND** aligned to pcap; optional §10k-only trial + re-capture.
+
+**References:** user file `sensoroni_onion_1006.pcap`; §10r; `pico/uthernet2_net.cpp` (`U2_Net_ConnectTcpEx`, `u2_tcp_connected_cb`).
+
+---
+
+## 10t. Long session pcap — `sensoroni_onion_1012.pcap`
+
+**Capture:** ~**10 hours** (11:37 → 21:22), **~1360** packets — mostly **ARP** (~477 entries). STA **192.168.0.203** (CYW43 **88:a2:9e:48:22:7a**). Includes Contiki HTTP attempts, telnet65, MegaFlash **NTP**, DHCP, and background ARP.
+
+**Note:** Path `MegaFlash-TF/pico-sdk-cache/.../btstack_uart_block_windows.c` is **unrelated** (Windows BTstack in SDK cache); analysis is from the pcap only.
+
+### TCP (all failures — zero application payload in entire file)
+
+| Time | Target | Pattern |
+|------|--------|---------|
+| 15:29–15:30 | **64.227.13.248:80** | SYN **seq=0** → SYN-ACK **+18 ms** → **RST +47 ms** (no ACK, no HTTP) |
+| 15:31 | **71.63.243.155:6502** (telnet) | Same as §10r: SYN retry, ACK, **RST ~68 ms** after ACK |
+| 21:21–21:22 | **64.227.13.248:80** | SYN; one flow **SYN-ACK only** (no follow-up in capture) |
+| 21:22 | **71.63.243.155:6502** | ACK **+12 ms** after SYN → **RST +0.2 ms** after ACK |
+
+**Constant:** client **RST**, TTL **255**, `win=41005`; SYN/ACK use TTL **64**, `win=1460`. **No PSH/HTTP** anywhere (unlike `1006.pcap` ghost GET).
+
+### DNS — replies dropped (Contiki / U2 UDP)
+
+ICMP **port unreachable** from **192.168.0.203** when the router delivers DNS responses:
+
+- **15:29:58** — `192.168.0.1:53` → `192.168.0.203:**1025**` (unreachable)
+- **15:31:06 / 15:31:19** — replies to ports **13696**, **13697** (unreachable)
+
+Queries likely went out on those ephemeral ports; by the time the reply arrived, **no lwIP UDP PCB** was bound — consistent with **W5100 socket closed** or **U2 poll too slow** vs Contiki DNS timeout. Explains **ipconfig / browser DNS** pain separate from WAN RTT.
+
+Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) — **MegaFlash native NTP** path; **NTP succeeds** (+27 ms).
+
+### ARP / SHAR mismatch (background)
+
+**288** ARP requests: `who-has 192.168.0.203 (00:08:dc:a2:a2:a2)` — default **W5100 SHAR**, not STA **88:a2:9e:48:22:7a**. LAN peers may have stale/wrong L2 mapping for inbound (§1j). Outbound TCP still reaches the Internet.
+
+### Takeaways
+
+1. **Same core failure as §10r/§10s:** ~**50–65 ms** connect budget; **no ACK** (Contiki) or **ACK then immediate RST** (telnet).
+2. **DNS is a second bug:** replies arrive but **ICMP unreachable** — U2 UDP socket lifetime / port binding vs reply latency.
+3. **§10k-only** re-land should help both if probe-safe; also audit **UDP socket close** on DNS timeout and **SHAR vs STA** for local ARP.
+
+**References:** `sensoroni_onion_1005.pcap`, `1006.pcap`; §10r, §10s; `pico/uthernet2_net.cpp` (`U2_Net_OpenUdp`, `U2_Net_Close`).
+
+---
+
+## 10u. Phase 1 — §10k poll wake only (isolated on §10l)
+
+**Requirement:** Pcap analysis (§10r–§10t) shows SYN-ACK arrives in ~16 ms but **ACK/RST ~47–65 ms** later — core 0 **`U2_Net_Poll`** too infrequent while core 1 runs the II bus. Re-land **§10k only** without §10j recv/TX/RX-reset (§10q/§10p regressions).
+
+**What we did:**
+
+- **`IPCCMD_NET_WAKE`** in **`ipc.h`**
+- **`U2_RequestCore0NetPoll()`** in **`uthernet2.c`**: core 1 only, rate-limited **1/ms**, non-blocking FIFO push of static **`u2_net_wake_msg`**
+- **`U2_Poll()`** calls **`U2_RequestCore0NetPoll()`** before **`U2_Net_Poll()`** (no-op on core 0)
+- **`main.c` `core0Loop`**: **`PicoW_ServiceCore0IpcAndNetwork`** FIFO timeout **50 ms → 5 ms**
+
+**What we did not do:** No changes to **`uthernet2_net.cpp`**, **`u2_tcp_recv`**, **`send_data`**, **`u2_socket_reset_rx`**, or §10m MACRAW gating.
+
+**Validation gate (user):** ip65 detect → Contiki **ipconfig** → telnet pcap: **ACK within ~25 ms** of SYN-ACK, no **RST at +50 ms**.
+
+**References:** `pico/ipc.h`, `pico/main.c`, `pico/uthernet2.c`, `pico/uthernet2.h`; §10k design notes.
+
+---
+
+## 10w. §10m re-land — MACRAW/lwIP ingress split (telnet65 RST fix)
+
+**Symptom:** Local telnet65 to Mac **telnetd** (`192.168.194.172` → `192.168.194.143:2323`): bidirectional pcap shows **SYN-ACK &lt;2 ms**, then **RST from Pico at +12–18 ms** (TTL **255**, win **41005**), then **ip65 ACK ~100–150 ms later**, then server **RST**. UART shows only **sock0 MACRAW** (correct for stock ip65 — no W5100 **`CONNECT`**).
+
+**Why:** **`u2_netif_input_wrapper`** (§**1ar** duplicate feed) copied every inbound frame to ip65 **and** called **`u2_saved_netif_input`**. ip65 builds TCP in software over MACRAW; lwIP has no PCB for that flow → **`tcp_input`** emits **spurious RST** on SYN-ACK before ip65 can ACK.
+
+**What we did (isolated on Phase 1 / §10l + §10k):**
+
+- **`NetworkPump::IsLegacyOperationActive()`** — public; true during **`RunNTP` / `RunTFTP` / `RunTestWifi`**.
+- **`u2_netif_input_wrapper`**: if **legacy active** → **lwIP only** (no MACRAW ring copy). Else if **sock0 MACRAW** → **MACRAW copy only**, **`pbuf_free`**, **do not** chain lwIP. Else → lwIP as before.
+- **`U2_Net_ServicePoll()`** — MACRAW TX drain on core 0; called from **`NetworkPump::PollOnce()`** so native **`RunX`** inner loops drain deferred MACRAW SEND while legacy owns ingress.
+- **`U2_Net_Poll()`** → **`NetworkPump_PollOnce()`** only (single poll entry).
+
+**What we did not do:** No §10j recv/TX/RX-reset; no change to **`send_data`** or **`u2_tcp_recv`**.
+
+**Validation gate:** telnet65 pcap — **no TTL-255 RST** between SYN-ACK and ACK; telnet banner from server; MegaFlash native **NTP** still OK with ip65 MACRAW open.
+
+**References:** `debug/megaflash.pcap` (2026-06-27 16:20); `pico/uthernet2_net.cpp`, `pico/network_pump.{h,cpp}`; §**10m** design; `docs/ip65-Uthernet-II-integration.md` (socket 0 MACRAW only).
+
+---
+
+## 10x. Core 0 poll-before-FIFO + SEND/RECV wake (telnet ACK latency)
+
+**Symptom (post-§10w):** Local telnet65 **sometimes works** (banner, short session) but often stalls: pcap shows **SYN-ACK** and server **banner** with **no ACK** from `.172`; UART shows **`MACRAW rx len=58/91`** then long **`sock0 RECV`** storms, **`MACRAW tx len=1518`**, **`[CYW43] STALL`**.
+
+**Why:** **`PicoW_ServiceCore0IpcAndNetwork`** blocked on **`multicore_fifo_pop_timeout_us(5 ms)`** **before** **`U2_Net_Poll`**, so core 0 could sit in the FIFO wait while inbound frames and deferred MACRAW TX needed service. **`IPCCMD_NET_WAKE`** from **`U2_Poll`** (every **32** U2 bus cycles) helped unblock the wait but did not run **`U2_Net_Poll`** until after the pop returned. During ip65 **RECV-only** polls, **`U2_Poll`** may run less often than **SEND/RECV** commands — ACK/banner responses need core-0 **`U2_Net_ServicePoll`** promptly after **`SN_CR_SEND`**.
+
+**What we did (on §10w + Phase 1 §10k):**
+
+- **`PicoW_ServiceCore0IpcAndNetwork`**: **`U2_Net_Poll` / `U2_MonPollFlush` first**; drain all pending FIFO messages with **0** timeout; optional blocking wait only if **`fifo_timeout_us > 0`**.
+- **`core0Loop`** inner wait: FIFO timeout **5 ms → 0** (poll-first loop at full core-0 cadence while Apple connected; user OK with CPU use).
+- **`U2_RequestCore0NetPoll()`** on **`SN_CR_SEND`** and **`SN_CR_RECV`** (existing **1/ms** rate limit) so MACRAW TX drain and lwIP service wake sooner than **`U2_Poll`** cadence alone.
+
+**What we didn’t do:** Did not re-land the earlier **500 µs** poll-before-FIFO trial that regressed MegaFlash TFTP (§**7i**) without §**10w** ingress split; did not change **`U2_Net_RecvConfirm`** / §**10j** TCP path.
+
+**Validation gate:** telnet pcap — **ACK &lt;25 ms** after SYN-ACK; interactive session without mid-stream **`STALL`**; native **NTP** still OK.
+
+**References:** `pico/main.c` (`PicoW_ServiceCore0IpcAndNetwork`, `core0Loop`), `pico/uthernet2.c` (`write_socket_register` SEND/RECV), `pico/ipc.h` (`IPCCMD_NET_WAKE`).
+
+---
+
+## 10y. §10x validation — telnet/wacbbs improved, eventual STALL + RECV storm
+
+**Symptom (user, post-§10x):** Performance **much improved**. Local telnet and **wacbbs.ddns.net** both connect and run interactively for a while, then **eventually break**.
+
+**Capture (`debug/megaflash.pcap`, 294 packets):** **Local telnet only** (`192.168.194.172:18147 → 192.168.194.143:2323`). **No RST** from Pico (TTL 255). **SYN-ACK → ACK ~43 ms** (gate was &lt;25 ms — still a large win vs ~100–150 ms pre-§10w). **~11 KiB** payload, **~71 s** session. **Tail:** client **ACK frozen** at **`ack=4173365936`** while server **retransmits** 1-byte PSH (**4173365936:4173365937**) for **20+ s** — ip65 stopped advancing TCP ACK (stuck echo byte).
+
+**UART (`2026-06-27 15-11-46 FT232R USB UART.log`, ~21k lines):** End of session = **`sock0 RECV`** storm (~8 ms spacing, **no SEND**), sparse **`MACRAW rx len=55`**. **wacbbs** traffic **not in pcap** but UART shows same MACRAW patterns (**`rx len=58`** SYN-ACK, **`91`** banner, **`tx len=1518`** bursts). **Failure cluster (~line 764):** burst **`SEND`/`MACRAW tx len=76`**, then **`[CYW43] STALL(0;237-237)`** + **`send_ethernet failed: -2`** (×8), **`RequestAbortAll`** (Apple **/RESET** or abort). **Second boot** at ~line 14058 after another **`RequestAbortAll`** storm.
+
+**Why (emulation gap, not ip65):**
+
+1. **Single-slot MACRAW TX trampoline** (`u2_macraw_tx_pending` + **1518 B** buf): overlapping core-1 **SEND**s can **overwrite** pending frame before **`U2_Net_ServicePoll`** drains; **`send_data`** still **advances `Sn_TX_RD→TX_WR`** unconditionally after **`U2_Net_SendMacraw`** (queue-only path).
+2. **`u2_send_macraw_core0`** does not treat **`linkoutput`** failure / **CYW43 STALL** as “not sent” — host believes frame left, wire did not → TCP/ip65 ACK stall, **RECV-only** polling.
+3. **§10x** fixed **ingress/poll latency** (handshake, banners); **egress under burst + Wi‑Fi stall** remains the long-session limiter.
+
+**What we didn’t do in this pass:** No **P0-2** MACRAW TX **ring** + **`mq_drop`** counters; no defer-**`TX_RD`** on queue full / **`linkoutput`** fail (§**1ax** honest TX for MACRAW).
+
+**Next lever:** Implement **bounded MACRAW TX queue** (depth **8–16** on RP2350), drain multiple frames per **`U2_Net_ServicePoll`**, **`TX_RD`** advance only on accept/send success; optional **`[u2macraw] tx_q_drop`** telemetry.
+
+**References:** `debug/megaflash.pcap`, `debug/2026-06-27 15-11-46 FT232R USB UART.log`; `pico/uthernet2_net.cpp` (`U2_Net_SendMacraw`, `U2_Net_ServicePoll`), `pico/uthernet2.c` (`send_data` MACRAW **`TX_RD`** advance); §**8** P0-2 / P0-5.
 
 ---
 
@@ -1875,15 +2140,15 @@ TCP flow control now reflects emulated RX capacity, preventing “acknowledged-b
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
 | lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
-| Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | **`u2_netif_input_wrapper`**: MACRAW copy **+** always **`u2_saved_netif_input`** (same as **`483e8da`**); §**1ar**. Hook install deferred via **`u2_macraw_sta_input_hook_ensure`** in **`U2_Net_Poll`** (§**1av**) — not **`OpenMacraw`** alone (CYW43 / core ordering). `U2_Net_Poll` before FIFO wait. Pico 2 W: MACRAW TX queue **16**, TCP **`Sn_TX_RD`** partial accept. Reset-abort §1ah; §1k/§1l. |
+| Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | **`u2_netif_input_wrapper`**: §**10w** — MACRAW-only ingress when sock0 MACRAW + not legacy; lwIP-only when **`IsLegacyOperationActive()`**; **`U2_Net_ServicePoll`** from **`PollOnce`**. **`main.c` §10x**: poll-before-FIFO, **`core0Loop`** FIFO **0**, **`U2_RequestCore0NetPoll`** on SEND/RECV. **`U2_Net_Poll`** → **`PollOnce`**. §**1ar** duplicate feed superseded for coexistence. |
 | ADTPro socket-pointer tracing | `uthernet2.c`, `u2_monitor.{h,c}` | Added `sock ptrs` monitor snapshots for `send-pre/send-post/recv-pre` with `TX_RD/TX_WR/RX_RD/RX_WR/SR`; later added coherent `RX_RD` reads (high/low/high retry) to avoid torn cross-core pointer values in `RX_RSR` and trace output (§1ai) |
 | Telnet65 walkthrough + fixes | §10f, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp` | Implemented: TX wrap fix (`<0`), UDP/TCP chained pbuf flattening (`pbuf_copy_partial`), removed duplicate lwIP lock in `U2_Net_OpenUdp`; later `wget65` follow-ups changed RECV to preserve unread bytes (§10h) |
 | Other ip65 tools walkthrough | §10g, `ip65/apps/*`, `ip65/apps/w5100.c`, `uthernet2*.{c,cpp}` | Risks: RECV discards unread bytes (shared-access mismatch), TCP RX overflow can drop+ACK, SEND chunk currently capped at 2048; `wget65` highest risk |
 | `wget65` priority fixes | §10h, `uthernet2.c`, `ip65/apps/w5100.c` | SN_CR=RECV no longer forces `RX_RD->WR`; TCP SEND drains entire queued TX data in chunks (not single 2 KiB cap) |
-| TCP RX backpressure | §10i, ~~§**10j**~~ §**10n**, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | **§10j reverted (§10n):** firmware at **`865d4d7`** — partial TCP ring accept; **`U2_Net_RecvConfirm`** no-op |
-| TCP TX backpressure | ~~§**10j**~~ §**10n**, `uthernet2.c`, `uthernet2_net.cpp` | **Reverted:** **`U2_Net_SendTcp`** void; **`Sn_TX_RD`** advances on SEND path per pre-§10j tree |
-| U2 core-0 poll cadence | ~~§**10k**~~ §**10n**, `main.c`, `ipc.h`, `uthernet2.c` | **Reverted:** **50 ms** FIFO wait; core 1 **`U2_Poll`** no **`IPCCMD_NET_WAKE`** |
-| Contiki wget large-file checksum | §**10l**, §**10n**, `uthernet2.c` | **§10l re-landed:** monotonic **`sn_rx_wr`**, **`read_rx_rd_coherent`**, **`u2_rx_used_bytes`**; discard writes **`receive_base+off`**; **§10j TCP all-or-nothing not yet** |
+| TCP RX backpressure | §10i, §**10j**, §**10n**, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | §10i: `tcp_recved` only for accepted bytes; **§10j re-landed:** TCP ring **all-or-nothing**; **`ERR_MEM`** + **`refused_data`**; **`U2_Net_RecvConfirm`** flag + core-0 retry |
+| TCP TX backpressure | §**10j**, §**10n**, `uthernet2.c`, `uthernet2_net.cpp` | **§10j re-landed:** **`U2_Net_SendTcp`** returns accepted bytes; **`Sn_TX_RD`** advances only on success; **`U2_TryCompletePendingSends`** (**TCP ESTABLISHED** only) |
+| U2 core-0 poll cadence | §**10u** (Phase 1), `ipc.h`, `main.c`, `uthernet2.c` | **`IPCCMD_NET_WAKE`** 1/ms from core 1; **`core0Loop`** FIFO **5 ms**; §10l otherwise unchanged |
+| Contiki wget / TCP | §**10l** only (`7adb4ee`), `uthernet2.c` | RX ring geometry; §10j–§10p **reverted** — re-land incrementally |
 | MegaFlash native NTP/DHCP vs U2 | ~~§**10m**~~ §**10n**, `network_pump.cpp`, `uthernet2_net.cpp` | **Reverted:** no **`IsLegacyOperationActive`** / **`U2_Net_ServicePoll`** |
 | Open C0C4 unresolved item | §12 | Slot decode confirmed working; remaining investigation is nDEVSEL signal/timing visibility at Pico/PIO point vs timing/FIFO/CPU-drain behavior |
 | Pump TCP + session timers | `network_pump.{h,cpp}` | `CreateTcpPcb`: `tcp_arg(owner)`, `NetworkPump_LegacyTcpRecv` / `NetworkPump_LegacyTcpErr` → `OnTcpRecvPbuf` / `OnTcpErr`; `tcp_pcb_owners_` for unregister. `ScheduleTimer` / `CancelTimer`; `PollOnce` → `DrainSessionTimers` → `OnTimer` (§14.12) |

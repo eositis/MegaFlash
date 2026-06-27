@@ -4,9 +4,11 @@ This document supplements `docs/Implementation-notes-and-reasoning.md` (§1j–�
 
 ---
 
-## Latest updates (2026-05)
+## Latest updates
 
-Inbound buffer parity and follow-up fixes (details in **§1az** and §**1az** follow-up in `Implementation-notes-and-reasoning.md`):
+**2026-06-27 (§10k / §10w / §10x):** MACRAW/lwIP ingress split, **`U2_Net_ServicePoll`** from **`PollOnce`**, core-0 poll-before-FIFO — see **§2.5**. **P0-2** MACRAW TX ring — §**10z**.
+
+**2026-05 (§1az):** Inbound buffer parity and follow-up fixes (details in **§1az** and §**1az** follow-up in `Implementation-notes-and-reasoning.md`):
 
 | Topic | Behavior |
 |-------|----------|
@@ -117,6 +119,18 @@ sequenceDiagram
   CB->>MEM: u2_push_rx_macraw (2B len + frame)
   W->>CYW: pbuf_free, ERR_OK (lwIP not fed)
 ```
+
+### 2.5 Firmware changes since §10l (`7adb4ee`) — §10k / §10w / §10x
+
+| Area | What changed | Why |
+|------|----------------|-----|
+| **Ingress** (`u2_netif_input_wrapper`) | If **`IsLegacyOperationActive()`** → lwIP only. If sock0 **MACRAW** and not legacy → MACRAW ring only, **`pbuf_free`**, no lwIP. | lwIP **RST** on ip65 SYN-ACK (duplicate **`netif->input`**) — §**10w**. |
+| **MACRAW TX drain** | **`U2_Net_ServicePoll()`** from **`PollOnce()`** first; **`U2_Net_Poll()`** → **`PollOnce()`** only. | Drain MACRAW TX during native **`RunX`** without ingress competition — §**10m**. |
+| **Core 0 poll** (`main.c`) | Poll **before** FIFO; **`core0Loop`** FIFO **0** (was **50 ms**). | Tens of ms lwIP starvation when FIFO blocked first — §**10x**. |
+| **Core 1 wake** | **`IPCCMD_NET_WAKE`** + **`U2_RequestCore0NetPoll`** on **`U2_Poll`** (1/ms) and **`SN_CR_SEND`/`RECV`**. | Faster service during ip65 storms — §**10k** / §**10x**. |
+| **Still open (P0-2)** | 1-slot MACRAW TX trampoline; unconditional **`TX_RD`** advance. | **CYW43 STALL** + stuck ACK on long telnet — §**10y**; fixed in §**10z**. |
+
+**Validation (2026-06-27):** Local telnet SYN-ACK→ACK **~43 ms**; **~71 s** session; **wacbbs** several screens. See **`debug/megaflash.pcap`** + UART log.
 
 ### 2.4 Coexistence view (MegaFlash native + Uthernet II on one lwIP)
 

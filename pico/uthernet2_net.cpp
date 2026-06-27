@@ -362,16 +362,38 @@ void Uthernet2Session::Abort() {
 
 extern "C" {
 static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
-  if (sockets[0].type == PCB_MACRAW && push_rx_macraw_cb && p && p->tot_len > 0 &&
-      p->tot_len <= U2_MACRAW_MAX_FRAME) {
-    uint8_t buf[U2_MACRAW_MAX_FRAME];
-    u16_t len = (u16_t)pbuf_copy_partial(p, buf, p->tot_len, 0);
-    if (len > 0) {
-      U2_MonNetRxMacraw(0, len);
-      push_rx_macraw_cb(0, buf, len);
-    }
+  if (!p)
+    return ERR_ARG;
+
+  const bool legacy = GetNetworkPump().IsLegacyOperationActive();
+  const bool macraw0 = (sockets[0].type == PCB_MACRAW && push_rx_macraw_cb);
+
+  /* Native MegaFlash (NTP/TFTP/TestWifi): lwIP owns STA ingress; do not copy into ip65 ring. */
+  if (legacy) {
+    if (u2_saved_netif_input)
+      return u2_saved_netif_input(p, inp);
+    pbuf_free(p);
+    return ERR_ARG;
   }
-  return u2_saved_netif_input(p, inp);
+
+  /* ip65 / Contiki MACRAW: deliver to W5100 ring only; lwIP must not see TCP/UDP (spurious RST). */
+  if (macraw0) {
+    if (p->tot_len > 0 && p->tot_len <= U2_MACRAW_MAX_FRAME) {
+      uint8_t buf[U2_MACRAW_MAX_FRAME];
+      u16_t len = (u16_t)pbuf_copy_partial(p, buf, p->tot_len, 0);
+      if (len > 0) {
+        U2_MonNetRxMacraw(0, len);
+        push_rx_macraw_cb(0, buf, len);
+      }
+    }
+    pbuf_free(p);
+    return ERR_OK;
+  }
+
+  if (u2_saved_netif_input)
+    return u2_saved_netif_input(p, inp);
+  pbuf_free(p);
+  return ERR_ARG;
 }
 } // extern "C"
 
@@ -600,7 +622,7 @@ void U2_Net_RecvConfirm(int i) { (void)i; }
 
 uint8_t U2_Net_GetStatus(int i) { return get_status(i); }
 
-void U2_Net_Poll(void) {
+void U2_Net_ServicePoll(void) {
   /* cyw43/lwIP poll is core-0 only; U2_Poll() may run on core 1 from bus loop. */
   if (get_core_num() != 0)
     return;
@@ -628,6 +650,11 @@ void U2_Net_Poll(void) {
       cyw43_arch_lwip_end();
     }
   }
+}
+
+void U2_Net_Poll(void) {
+  if (get_core_num() != 0)
+    return;
   NetworkPump_PollOnce();
 }
 
@@ -697,6 +724,7 @@ uint8_t U2_Net_GetStatus(int i) {
   (void)i;
   return W5100_SN_SR_CLOSED;
 }
+void U2_Net_ServicePoll(void) {}
 void U2_Net_Poll(void) {}
 
 } // extern "C"

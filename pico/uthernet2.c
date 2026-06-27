@@ -6,7 +6,10 @@
 #include "uthernet2_net.h"
 #include "u2_monitor.h"
 #include "w5100_regs.h"
+#include "ipc.h"
 #include "pico.h"
+#include "pico/multicore.h"
+#include "pico/time.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -624,10 +627,12 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       break;
     case W5100_SN_CR_SEND:
       U2_MonSockSendRecv(i, 1);
+      U2_RequestCore0NetPoll();
       send_data(i);
       break;
     case W5100_SN_CR_RECV: {
       U2_MonSockSendRecv(i, 0);
+      U2_RequestCore0NetPoll();
       /* W5100 semantics: host updates RX_RD to consumed length before RECV.
        * Do not force RX_RD->WR here; that drops unread tail data and breaks
        * shared-access partial reads (notably wget65). */
@@ -679,7 +684,27 @@ void U2_Init(void) {
   u2_reset();
 }
 
+#if PICO_CYW43_ARCH_POLL
+static struct IpcMsg u2_net_wake_msg;
+static absolute_time_t u2_last_net_wake;
+
+void U2_RequestCore0NetPoll(void) {
+  if (get_core_num() != 1)
+    return;
+  absolute_time_t now = get_absolute_time();
+  if (absolute_time_diff_us(u2_last_net_wake, now) < 1000)
+    return;
+  u2_last_net_wake = now;
+  u2_net_wake_msg.command = IPCCMD_NET_WAKE;
+  u2_net_wake_msg.data = 0;
+  (void)multicore_fifo_push_timeout_us((uint32_t)&u2_net_wake_msg, 0);
+}
+#else
+void U2_RequestCore0NetPoll(void) {}
+#endif
+
 void U2_Poll(void) {
+  U2_RequestCore0NetPoll();
   U2_Net_Poll();
   /* U2_MonPollFlush: call from core 0 only — see u2_monitor.h (stdio + cyw43 async_context). */
 }

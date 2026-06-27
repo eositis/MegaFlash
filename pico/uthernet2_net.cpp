@@ -25,6 +25,7 @@
 #include "lwip/prot/ip.h"
 #include "pico/multicore.h"
 #include "pico/sync.h"
+#include "pico/time.h"
 #include <cstring>
 #include <vector>
 #if U2_ETH_HEADER_TRACE
@@ -33,6 +34,12 @@
 
 #define U2_NET_MAX_SOCKETS W5100_NUM_SOCKETS
 #define U2_MACRAW_MAX_FRAME 1518
+#if PICO_RP2040
+#define U2_MACRAW_TX_Q_DEPTH 4
+#else
+#define U2_MACRAW_TX_Q_DEPTH 16
+#endif
+#define U2_MACRAW_TX_DRAIN_PER_POLL 8
 
 typedef enum { PCB_NONE = 0, PCB_UDP, PCB_TCP, PCB_MACRAW } pcb_type_t;
 
@@ -51,10 +58,20 @@ static u2_push_rx_macraw_fn push_rx_macraw_cb;
 static netif_input_fn u2_saved_netif_input;
 static u2_net_socket_t sockets[U2_NET_MAX_SOCKETS];
 static critical_section_t u2_macraw_tx_cs;
-static bool u2_macraw_tx_pending;
-static int u2_macraw_tx_sock;
-static uint16_t u2_macraw_tx_len;
-static uint8_t u2_macraw_tx_buf[U2_MACRAW_MAX_FRAME];
+
+typedef struct {
+  int sock;
+  uint16_t len;
+  uint8_t data[U2_MACRAW_MAX_FRAME];
+} u2_macraw_tx_slot_t;
+
+static u2_macraw_tx_slot_t u2_macraw_tx_q[U2_MACRAW_TX_Q_DEPTH];
+static uint8_t u2_macraw_tx_q_head;
+static uint8_t u2_macraw_tx_q_count;
+static uint32_t u2_macraw_tx_q_drop;
+static uint32_t u2_macraw_tx_lo_err;
+static uint32_t u2_macraw_tx_pbuf_fail;
+static absolute_time_t u2_macraw_tx_stats_next;
 
 struct U2TcpArg {
   int sock_index;
@@ -399,29 +416,88 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
 
 extern "C" {
 
-static void u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
-  struct netif *netif = u2_cyw43_sta_netif();
-  if (cyw43_is_initialized(&cyw43_state) && netif && netif->linkoutput && netif->hwaddr_len == 6) {
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
-    if (p) {
-      memcpy(p->payload, data, len);
-      uint8_t *eth = (uint8_t *)p->payload;
-#if U2_ETH_HEADER_TRACE
-      u2_eth_trace_tap("core0-pre", eth, len);
-#endif
-      /* Keep BOOTP payload bytes untouched for client-side DHCP validation compatibility. */
-      /* Ethernet header: bytes 0-5 DA, 6-11 SA. Force SA = STA MAC. */
-      if (len >= 12)
-        memcpy(eth + 6, netif->hwaddr, 6);
-#if U2_ETH_HEADER_TRACE
-      u2_eth_trace_tap("core0-post", eth, len);
-#endif
-      U2_SetStationMacFromBytes(netif->hwaddr);
-      netif->linkoutput(netif, p);
-      pbuf_free(p);
-      U2_MonNetMacrawTx(i, len);
-    }
+static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len);
+
+static void u2_macraw_tx_queue_clear(void) {
+  critical_section_enter_blocking(&u2_macraw_tx_cs);
+  u2_macraw_tx_q_head = 0;
+  u2_macraw_tx_q_count = 0;
+  critical_section_exit(&u2_macraw_tx_cs);
+}
+
+static bool u2_macraw_tx_queue_enqueue(int sock, const uint8_t *data, uint16_t len) {
+  critical_section_enter_blocking(&u2_macraw_tx_cs);
+  if (u2_macraw_tx_q_count >= U2_MACRAW_TX_Q_DEPTH) {
+    u2_macraw_tx_q_drop++;
+    critical_section_exit(&u2_macraw_tx_cs);
+    return false;
   }
+  uint8_t tail = (uint8_t)((u2_macraw_tx_q_head + u2_macraw_tx_q_count) % U2_MACRAW_TX_Q_DEPTH);
+  u2_macraw_tx_q[tail].sock = sock;
+  u2_macraw_tx_q[tail].len = len;
+  memcpy(u2_macraw_tx_q[tail].data, data, len);
+  u2_macraw_tx_q_count++;
+  critical_section_exit(&u2_macraw_tx_cs);
+  return true;
+}
+
+static void u2_macraw_tx_drain(void) {
+  for (int n = 0; n < U2_MACRAW_TX_DRAIN_PER_POLL; n++) {
+    int sock;
+    uint16_t len;
+    uint8_t buf[U2_MACRAW_MAX_FRAME];
+    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    if (u2_macraw_tx_q_count == 0) {
+      critical_section_exit(&u2_macraw_tx_cs);
+      break;
+    }
+    sock = u2_macraw_tx_q[u2_macraw_tx_q_head].sock;
+    len = u2_macraw_tx_q[u2_macraw_tx_q_head].len;
+    memcpy(buf, u2_macraw_tx_q[u2_macraw_tx_q_head].data, len);
+    critical_section_exit(&u2_macraw_tx_cs);
+
+    cyw43_arch_lwip_begin();
+    bool ok = u2_send_macraw_core0(sock, buf, len);
+    cyw43_arch_lwip_end();
+
+    if (!ok)
+      break;
+
+    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    u2_macraw_tx_q_head = (uint8_t)((u2_macraw_tx_q_head + 1) % U2_MACRAW_TX_Q_DEPTH);
+    u2_macraw_tx_q_count--;
+    critical_section_exit(&u2_macraw_tx_cs);
+  }
+}
+
+static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
+  struct netif *netif = u2_cyw43_sta_netif();
+  if (!cyw43_is_initialized(&cyw43_state) || !netif || !netif->linkoutput || netif->hwaddr_len != 6)
+    return false;
+  struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
+  if (!p) {
+    u2_macraw_tx_pbuf_fail++;
+    return false;
+  }
+  memcpy(p->payload, data, len);
+  uint8_t *eth = (uint8_t *)p->payload;
+#if U2_ETH_HEADER_TRACE
+  u2_eth_trace_tap("core0-pre", eth, len);
+#endif
+  if (len >= 12)
+    memcpy(eth + 6, netif->hwaddr, 6);
+#if U2_ETH_HEADER_TRACE
+  u2_eth_trace_tap("core0-post", eth, len);
+#endif
+  U2_SetStationMacFromBytes(netif->hwaddr);
+  err_t err = netif->linkoutput(netif, p);
+  pbuf_free(p);
+  if (err != ERR_OK) {
+    u2_macraw_tx_lo_err++;
+    return false;
+  }
+  U2_MonNetMacrawTx(i, len);
+  return true;
 }
 
 void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
@@ -429,11 +505,11 @@ void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
   push_rx_macraw_cb = push_rx_macraw;
   memset(sockets, 0, sizeof(sockets));
   critical_section_init(&u2_macraw_tx_cs);
-  critical_section_enter_blocking(&u2_macraw_tx_cs);
-  u2_macraw_tx_pending = false;
-  u2_macraw_tx_sock = 0;
-  u2_macraw_tx_len = 0;
-  critical_section_exit(&u2_macraw_tx_cs);
+  u2_macraw_tx_queue_clear();
+  u2_macraw_tx_q_drop = 0;
+  u2_macraw_tx_lo_err = 0;
+  u2_macraw_tx_pbuf_fail = 0;
+  u2_macraw_tx_stats_next = make_timeout_time_ms(10000);
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++)
     sockets[i].status = W5100_SN_SR_CLOSED;
   GetNetworkPump().AddSession(&g_u2_session);
@@ -457,26 +533,22 @@ int U2_Net_OpenMacraw(int i) {
   return 0;
 }
 
-void U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
+int U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_MACRAW || !data || len == 0 ||
       len > U2_MACRAW_MAX_FRAME)
-    return;
-  /* U2 bus path can invoke this on core 1; defer TX to U2_Net_Poll() on core 0. */
+    return -1;
   if (get_core_num() != 0) {
-    critical_section_enter_blocking(&u2_macraw_tx_cs);
-    memcpy(u2_macraw_tx_buf, data, len);
-    u2_macraw_tx_len = len;
-    u2_macraw_tx_sock = i;
-    u2_macraw_tx_pending = true;
-    critical_section_exit(&u2_macraw_tx_cs);
-    return;
+    if (!u2_macraw_tx_queue_enqueue(i, data, len))
+      return -1;
+    return 0;
   }
   cyw43_arch_lwip_begin();
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_tap("direct", data, len);
 #endif
-  u2_send_macraw_core0(i, data, len);
+  bool ok = u2_send_macraw_core0(i, data, len);
   cyw43_arch_lwip_end();
+  return ok ? 0 : -1;
 }
 
 void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len) {
@@ -507,6 +579,8 @@ void U2_Net_Close(int i) {
       tcp_close(s->pcb.tcp);
       s->pcb.tcp = NULL;
     }
+  } else if (s->type == PCB_MACRAW) {
+    u2_macraw_tx_queue_clear();
   }
   s->type = PCB_NONE;
   s->status = W5100_SN_SR_CLOSED;
@@ -629,27 +703,20 @@ void U2_Net_ServicePoll(void) {
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_try_install();
 #endif
-  if (u2_macraw_tx_pending) {
-    uint16_t len = 0;
-    int sock = 0;
-    uint8_t buf[U2_MACRAW_MAX_FRAME];
+  u2_macraw_tx_drain();
+  U2_TryCompletePendingSocket0Send();
+#ifndef NDEBUG
+  if (time_reached(u2_macraw_tx_stats_next)) {
+    u2_macraw_tx_stats_next = make_timeout_time_ms(10000);
+    uint8_t q_count;
     critical_section_enter_blocking(&u2_macraw_tx_cs);
-    if (u2_macraw_tx_pending) {
-      len = u2_macraw_tx_len;
-      sock = u2_macraw_tx_sock;
-      memcpy(buf, u2_macraw_tx_buf, len);
-      u2_macraw_tx_pending = false;
-    }
+    q_count = u2_macraw_tx_q_count;
     critical_section_exit(&u2_macraw_tx_cs);
-    if (len > 0) {
-#if U2_ETH_HEADER_TRACE
-      u2_eth_trace_tap("drain", buf, len);
-#endif
-      cyw43_arch_lwip_begin();
-      u2_send_macraw_core0(sock, buf, len);
-      cyw43_arch_lwip_end();
-    }
+    printf("[u2macraw] tx_q=%u tx_q_drop=%lu lo_err=%lu pbuf_fail=%lu\n",
+           (unsigned)q_count, (unsigned long)u2_macraw_tx_q_drop,
+           (unsigned long)u2_macraw_tx_lo_err, (unsigned long)u2_macraw_tx_pbuf_fail);
   }
+#endif
 }
 
 void U2_Net_Poll(void) {
@@ -685,10 +752,11 @@ int U2_Net_OpenMacraw(int i) {
   (void)i;
   return -1;
 }
-void U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
+int U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
   (void)i;
   (void)data;
   (void)len;
+  return -1;
 }
 void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len) {
   (void)i;

@@ -6,6 +6,8 @@ This document supplements `docs/Implementation-notes-and-reasoning.md` (§1j–�
 
 ## Latest updates
 
+**2026-06-27 (§10z):** P0-2 MACRAW TX **ring** (depth 16), honest **`Sn_TX_RD`**, **`[u2macraw]`** telemetry.
+
 **2026-06-27 (§10k / §10w / §10x):** MACRAW/lwIP ingress split, **`U2_Net_ServicePoll`** from **`PollOnce`**, core-0 poll-before-FIFO — see **§2.5**. **P0-2** MACRAW TX ring — §**10z**.
 
 **2026-05 (§1az):** Inbound buffer parity and follow-up fixes (details in **§1az** and §**1az** follow-up in `Implementation-notes-and-reasoning.md`):
@@ -52,7 +54,7 @@ flowchart TB
   end
 
   subgraph Bridge["uthernet2_net.cpp"]
-    Q["MACRAW TX trampoline 1-slot @1518B"]
+    Q["MACRAW TX ring depth 16 @1518B"]
     Poll["U2_Net_Poll (core 0 only)"]
     Wrap["STA netif input wrapper"]
     Core0Tx["u2_send_macraw_core0: pbuf + linkoutput"]
@@ -87,19 +89,19 @@ sequenceDiagram
   participant II as Apple II core1
   participant U2 as uthernet2.c
   participant NET as uthernet2_net.cpp
-  participant Q as MACRAW TX trampoline (1-slot)
+  participant Q as MACRAW TX ring (depth 16)
   participant P as U2_Net_Poll core0
   participant NF as STA netif linkoutput
 
   II->>U2: SN_CR SEND (MACRAW)
   U2->>NET: U2_Net_SendMacraw(i, buf, len)
   alt get_core_num != 0
-    NET->>Q: memcpy into pending slot (overwrites if already pending)
+    NET->>Q: enqueue (drop + tx_q_drop if full)
   else core 0
     NET->>NF: u2_send_macraw_core0 (pbuf, SA patch)
   end
-  P->>Q: drain pending slot (if any)
-  P->>NF: u2_send_macraw_core0
+  P->>Q: drain up to 8 frames / poll
+  P->>NF: u2_send_macraw_core0 (retry head on STALL)
 ```
 
 ### 2.3 MACRAW RX path (ingress ownership)
@@ -128,7 +130,7 @@ sequenceDiagram
 | **MACRAW TX drain** | **`U2_Net_ServicePoll()`** from **`PollOnce()`** first; **`U2_Net_Poll()`** → **`PollOnce()`** only. | Drain MACRAW TX during native **`RunX`** without ingress competition — §**10m**. |
 | **Core 0 poll** (`main.c`) | Poll **before** FIFO; **`core0Loop`** FIFO **0** (was **50 ms**). | Tens of ms lwIP starvation when FIFO blocked first — §**10x**. |
 | **Core 1 wake** | **`IPCCMD_NET_WAKE`** + **`U2_RequestCore0NetPoll`** on **`U2_Poll`** (1/ms) and **`SN_CR_SEND`/`RECV`**. | Faster service during ip65 storms — §**10k** / §**10x**. |
-| **Still open (P0-2)** | 1-slot MACRAW TX trampoline; unconditional **`TX_RD`** advance. | **CYW43 STALL** + stuck ACK on long telnet — §**10y**; fixed in §**10z**. |
+| **Still open (P0-2)** | ~~1-slot MACRAW TX trampoline; unconditional **`TX_RD`** advance.~~ **Fixed §10z:** ring depth **16** (RP2350), honest **`TX_RD`**, **`[u2macraw]`** counters. | **CYW43 STALL** + stuck ACK — §**10y** / §**10z**. |
 
 **Validation (2026-06-27):** Local telnet SYN-ACK→ACK **~43 ms**; **~71 s** session; **wacbbs** several screens. See **`debug/megaflash.pcap`** + UART log.
 
@@ -278,7 +280,7 @@ Key reads from the diagram:
 | Socket TX/RX windows | inside `u2_memory` | From `TMSR`/`RMSR` via `u2_apply_socket_sizes()` | Host-visible rings; `transmit_base`/`receive_base` per socket; **`RMSR`** remap remaps **`sn_rx_wr`** modulo new size (does not zero) |
 | `Sn_RX_RD` | `u2_memory` socket regs | Host-written consume pointer | Consumer for **`RX_RSR`**; updated by Apple stack before/around **`RECV`** |
 | `sn_rx_wr` | `u2_socket_t` | Ring offset; **`__atomic`** release/acquire vs **`get_rx_rsr`** | Producer for inbound UDP/TCP/MACRAW; **not** a host register |
-| MACRAW TX trampoline | `uthernet2_net.cpp` | 1-slot (`u2_macraw_tx_buf[1518]` + len + sock, guarded by `critical_section_t`) | Core1 → Core0 deferral; **silent overwrite if a second `U2_Net_SendMacraw` lands before drain — no drop counter today** (see §8.5 P0-5 / P2-4) |
+| MACRAW TX ring | `uthernet2_net.cpp` | **16×1518 B** queue (depth **4** on RP2040); `tx_q_drop` / `lo_err` / `pbuf_fail` counters; drain **8**/poll — §**10z** | Core1 enqueue; core0 **`u2_send_macraw_core0`**; **`Sn_TX_RD`** advances only on accept |
 | lwIP `pbuf` | lwIP heap | Per TX/RX op | MACRAW TX alloc `PBUF_RAW`; UDP `PBUF_TRANSPORT` |
 | UDP/TCP RX temp | `uthernet2_net.cpp` | `std::vector` copy of payload | Bridge lwIP → `u2_push_rx` |
 | MACRAW RX temp | `u2_netif_input_wrapper` | Stack `buf[1518]` | Copy frame before push to W5100 RX |
@@ -295,7 +297,7 @@ Contracts describe **intended** behavior as implemented today; rows marked **gap
 | Symbol | Callable from | Preconditions | Effects | Failure / gap |
 |--------|----------------|---------------|---------|----------------|
 | `U2_HandleBusAccess` | Core 1 (bus loop) | Valid `busdata` decode | Read/write MR/addr/data path; may trigger `send_data`, socket ops | Long paths block bus (timing-sensitive) |
-| `send_data` | Core 1 via `SN_CR SEND` | Socket mode matches status | Copies TX ring → `U2_Net_*`; advances `SN_TX_RD` to `SN_TX_WR` | **gap:** advances TX_RD even if net send fails |
+| `send_data` | Core 1 via `SN_CR SEND` | Socket mode matches status | Copies TX ring → `U2_Net_*`; MACRAW: **`TX_RD`** only if send accepted (§**10z**) | UDP/TCP still advance **`TX_RD`** unconditionally |
 | `u2_push_rx` | Core 0 (lwIP callback → cb) | Socket valid | Writes UDP header + payload or TCP payload into RX ring; **one release store of `sn_rx_wr` per enqueue** (P0-3) | Partial TCP accept; UDP atomic or drop; **`U2_MonNetRxDrop`** on no-room/partial |
 | `u2_push_rx_macraw` | Core 0 via cb | Space for `2+len` | Prepends 2B wire length + frame; **strict:** drop incoming if full; **`U2_MACRAW_COMPAT_DROP_OLDEST`:** optional **`u2_socket_discard_rx`** then retry | Oversize frame dropped; compat path mutates **`Sn_RX_RD`** (non-W5100) |
 | `set_rx_sizes` / `u2_apply_socket_sizes` | Core 1 (`W5100_RMSR` write) | Valid chip layout | Updates **`receive_base`/`receive_size`**; **remaps `sn_rx_wr`** | Clamp telemetry if map overflows 8 KiB RX window |
@@ -307,10 +309,11 @@ Contracts describe **intended** behavior as implemented today; rows marked **gap
 |--------|----------------|---------------|---------|----------------|
 | `U2_Net_Init` | Core 0 (`U2_Init`) | CYW43 path compiled in | Registers callbacks; MACRAW ring reset; `AddSession(Uthernet2Session)` | — |
 | `U2_Net_OpenMacraw` | Core 1 via OPEN | `i` valid | Sets PCB_MACRAW; wraps STA `input` if socket 0 | Only socket 0 installs wrapper |
-| `U2_Net_SendMacraw` | Core 0 or 1 | MACRAW open, len ≤ 1518 | Core1: `memcpy` into 1-slot trampoline (`u2_macraw_tx_pending` / `u2_macraw_tx_buf`) under crit-sect; Core0: calls `u2_send_macraw_core0` directly | **gap:** if slot already pending when called from Core1, new frame silently **overwrites** the un-drained one — no `u2_macraw_tx_drop` counter exists (§8.5 P0-5 / P2-4) |
-| `U2_Net_Poll` | Core 0 only | — | If `u2_macraw_tx_pending`, take the slot under crit-sect and call `u2_send_macraw_core0`; then `NetworkPump_PollOnce`; periodic `[u2udp]` stats | Returns immediately on core ≠ 0; **not called from inner `RunTFTP/RunNTP/RunTestWifi` loop**, so MACRAW outbound stalls during native ops (§8.5 P0-5) |
-| `u2_netif_input_wrapper` | lwIP (core 0) | MACRAW open sock0 | Feeds MACRAW cb only; **does not** pass to lwIP stack | lwIP sees no IP frames while MACRAW owns ingress |
-| `u2_send_macraw_core0` | Core 0 | Initialized STA netif | Alloc pbuf, patch SA + ARP SHA, `linkoutput`, free pbuf | **gap:** no explicit error path if `pbuf_alloc` fails |
+| `U2_Net_SendMacraw` | Core 0 or 1 | MACRAW open, len ≤ 1518 | Core1: ring enqueue (**`tx_q_drop`** if full); Core0: **`u2_send_macraw_core0`**. Returns **0** / **-1** | — |
+| `U2_Net_ServicePoll` | Core 0 (`PollOnce` first) | — | Drain ring (≤8); **`U2_TryCompletePendingSocket0Send`**; **`[u2macraw]`** stats | Stops drain on **`linkoutput`** fail |
+| `U2_Net_Poll` | Core 0 only | — | `NetworkPump_PollOnce()` (includes **`U2_Net_ServicePoll`**) | Returns immediately on core ≠ 0 |
+| `u2_netif_input_wrapper` | lwIP (core 0) | §**10w** gate | Legacy op → lwIP only; MACRAW sock0 → ring only; else lwIP | — |
+| `u2_send_macraw_core0` | Core 0 | Initialized STA netif | pbuf + SA patch + **`linkoutput`**; returns **`bool`** | **`lo_err`** / **`pbuf_fail`** counters |
 | `U2_Net_SendUdp` | Core 1 via `send_data` | UDP pcb bound | `udp_sendto`; counts stats | Returns void; no backpressure to W5100 |
 | `U2_Net_SendTcp` | Core 1 | TCP pcb | `tcp_write` + `tcp_output` | Same |
 
@@ -331,7 +334,7 @@ Contracts describe **intended** behavior as implemented today; rows marked **gap
 | ID | Issue | Notes |
 |----|--------|------|
 | **P0-1** | **`send_data` advances `SN_TX_RD` to `SN_TX_WR` unconditionally** after calling net send. Host believes data sent even if lwIP rejected or MACRAW queue dropped. | Align with accepted-byte semantics (UDP/TCP partially improved historically; MACRAW path needs explicit ack or retry). |
-| **P0-2** | **MACRAW TX trampoline overrun is silent** — single-slot `u2_macraw_tx_pending` / `u2_macraw_tx_buf` in `uthernet2_net.cpp`; a second `U2_Net_SendMacraw` from core 1 that lands before the previous slot drains will `memcpy`-overwrite the pending frame. **No `u2_macraw_tx_drop` counter exists today**, and the host sees no W5100-visible failure. | Add a drop counter; consider growing trampoline to a small ring; consider blocking SEND completion, partial advance, or explicit socket error bit. See §8.5 P0-5 / P2-4. |
+| **P0-2** | ~~MACRAW TX trampoline overrun~~ **Done (§10z):** bounded ring + **`tx_q_drop`** + honest **`TX_RD`**. | Depth **16** (RP2350), drain **8**/poll, **`U2_TryCompletePendingSocket0Send`**. |
 | **P0-3** | **Cross-core RX producer vs consumer** — `sn_rx_wr` updated on core 0; `get_rx_rsr` / host reads on core 1 without locks. | **Implemented (2026-05):** **`sn_rx_wr`** uses **`__atomic_*` acquire/release**; **`u2_push_rx` / `u2_push_rx_macraw`** publish **`sn_rx_wr` once per enqueue** after ring writes; **`get_rx_rsr`** atomic load; **`RMSR`** remap uses **`sn_rx_wr ← old % new_size`** (not zero — avoids RX/TX stalls after ip65 reprograms **`RMSR`**). Validate under ADTProETH Send load; revisit if DATA-port reads still need barriers vs ring bytes. |
 
 ### P1 — Robustness / throughput

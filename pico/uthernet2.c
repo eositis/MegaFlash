@@ -482,11 +482,11 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   u2_rx_wr_store(s, wr);
 }
 
-/* Read TX buffer data between rd and wr and send via network */
-static void send_data(int i) {
+/* Read TX buffer data between rd and wr and send via network. Returns 0 on success, -1 if MACRAW not accepted. */
+static int send_data(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t buf_size = s->transmit_size;
-  if (buf_size == 0) return;
+  if (buf_size == 0) return 0;
   uint16_t mask = buf_size - 1;
   const uint8_t *r = &u2_memory[s->register_address];
   uint16_t rd_full = read_net16(r + W5100_SN_TX_RD0);
@@ -495,7 +495,7 @@ static void send_data(int i) {
   uint16_t wr = wr_full & mask;
   int data_len = (int)wr - (int)rd;
   if (data_len < 0) data_len += buf_size;
-  if (data_len == 0) return;
+  if (data_len == 0) return 0;
   uint16_t base = s->transmit_base;
   uint8_t status = U2_Net_GetStatus(i);
   if (status == W5100_SN_SR_SOCK_UDP) {
@@ -537,12 +537,14 @@ static void send_data(int i) {
     for (int j = 0; j < n; j++)
       buf[j] = u2_memory[base + ((rd + j) & mask)];
     U2_MonNetMacrawTx(i, (uint16_t)n);
-    U2_Net_SendMacraw(i, buf, (uint16_t)n);
+    if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0)
+      return -1;
   }
   /* Advance TX_RD to TX_WR */
   /* Keep full host-visible pointer progression; only ring indexing is masked. */
   u2_memory[s->register_address + W5100_SN_TX_RD0] = (uint8_t)(wr_full >> 8);
   u2_memory[s->register_address + W5100_SN_TX_RD1] = (uint8_t)wr_full;
+  return 0;
 }
 
 static void write_socket_register(uint16_t address, uint8_t value) {
@@ -628,7 +630,8 @@ static void write_socket_register(uint16_t address, uint8_t value) {
     case W5100_SN_CR_SEND:
       U2_MonSockSendRecv(i, 1);
       U2_RequestCore0NetPoll();
-      send_data(i);
+      if (send_data(i) != 0)
+        return;
       break;
     case W5100_SN_CR_RECV: {
       U2_MonSockSendRecv(i, 0);
@@ -702,6 +705,23 @@ void U2_RequestCore0NetPoll(void) {
 #else
 void U2_RequestCore0NetPoll(void) {}
 #endif
+
+void U2_TryCompletePendingSocket0Send(void) {
+#if PICO_CYW43_ARCH_POLL
+  if (get_core_num() != 0)
+    return;
+  for (int sock = 0; sock < W5100_NUM_SOCKETS; sock++) {
+    uint16_t cr_addr = (uint16_t)((0x04 + sock) << 8) + W5100_SN_CR;
+    if (u2_memory[cr_addr] != W5100_SN_CR_SEND)
+      continue;
+    if (U2_Net_GetStatus(sock) != W5100_SN_SR_SOCK_MACRAW)
+      continue;
+    if (send_data(sock) != 0)
+      continue;
+    u2_memory[cr_addr] = 0;
+  }
+#endif
+}
 
 void U2_Poll(void) {
   U2_RequestCore0NetPoll();

@@ -704,7 +704,6 @@ void U2_Net_ServicePoll(void) {
   u2_eth_trace_try_install();
 #endif
   u2_macraw_tx_drain();
-  U2_TryCompletePendingSocket0Send();
 #ifndef NDEBUG
   if (time_reached(u2_macraw_tx_stats_next)) {
     u2_macraw_tx_stats_next = make_timeout_time_ms(10000);

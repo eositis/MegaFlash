@@ -310,7 +310,7 @@ Contracts describe **intended** behavior as implemented today; rows marked **gap
 | `U2_Net_Init` | Core 0 (`U2_Init`) | CYW43 path compiled in | Registers callbacks; MACRAW ring reset; `AddSession(Uthernet2Session)` | — |
 | `U2_Net_OpenMacraw` | Core 1 via OPEN | `i` valid | Sets PCB_MACRAW; wraps STA `input` if socket 0 | Only socket 0 installs wrapper |
 | `U2_Net_SendMacraw` | Core 0 or 1 | MACRAW open, len ≤ 1518 | Core1: ring enqueue (**`tx_q_drop`** if full); Core0: **`u2_send_macraw_core0`**. Returns **0** / **-1** | — |
-| `U2_Net_ServicePoll` | Core 0 (`PollOnce` first) | — | Drain ring (≤8); **`U2_TryCompletePendingSocket0Send`**; **`[u2macraw]`** stats | Stops drain on **`linkoutput`** fail |
+| `U2_Net_ServicePoll` | Core 0 (`PollOnce` first) | — | Drain ring (≤8); **`[u2macraw]`** stats (10 s) | Stops drain on **`linkoutput`** fail (retry next poll) |
 | `U2_Net_Poll` | Core 0 only | — | `NetworkPump_PollOnce()` (includes **`U2_Net_ServicePoll`**) | Returns immediately on core ≠ 0 |
 | `u2_netif_input_wrapper` | lwIP (core 0) | §**10w** gate | Legacy op → lwIP only; MACRAW sock0 → ring only; else lwIP | — |
 | `u2_send_macraw_core0` | Core 0 | Initialized STA netif | pbuf + SA patch + **`linkoutput`**; returns **`bool`** | **`lo_err`** / **`pbuf_fail`** counters |

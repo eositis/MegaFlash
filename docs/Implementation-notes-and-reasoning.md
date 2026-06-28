@@ -2085,6 +2085,18 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 
 ---
 
+## 10za. P0-2 regression — duplicate MACRAW TX (telnet/wget broken, browser OK)
+
+**Symptom (user, post-§10z):** ip65 **telnet** dead (SYN retransmit, no ACK, late Pico RST). Contiki **wget** fails; **browser** still good. UART: duplicate **`MACRAW ptrs`** / **`tx len=42`** per single **`sock0 SEND`**. Pcap: SYN×N, never ACK.
+
+**Why:** **`U2_RequestCore0NetPoll()`** ran **before** **`send_data()`** on **`SN_CR_SEND`**, while **`U2_TryCompletePendingSocket0Send()`** in **`U2_Net_ServicePoll`** could run **`send_data()`** on core 0 while **`Sn_CR` still SEND** — **double (or triple) enqueue/transmit** of the same TX window. TCP handshakes and wget control frames corrupted; browser tolerates looser timing.
+
+**Fix:** Remove **`U2_TryCompletePendingSocket0Send`**; call **`U2_RequestCore0NetPoll()`** **after** **`send_data()`** (and after failed send to drain queue). Keep MACRAW ring + honest **`TX_RD`** on **-1**.
+
+**References:** `debug/megaflash-2.pcap`, UART log tail §P0-2 session; `pico/uthernet2.c`, `pico/uthernet2_net.cpp`.
+
+---
+
 ## 1ap. tcpdump vs UART: MACRAW ingress length vs host RECV (6502 commit path)
 
 **What:** Correlate **Ethernet framing** with **`tcpdump`** using UART — first at **lwIP → MACRAW enqueue** (historical **`MACRAW rx len=`**, removed), now at **W5100 RECV** after the host has updated **RX_RD** (what the **6502 / ip65 stack committed** as consumed).

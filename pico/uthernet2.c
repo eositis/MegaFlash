@@ -629,17 +629,19 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       break;
     case W5100_SN_CR_SEND:
       U2_MonSockSendRecv(i, 1);
-      U2_RequestCore0NetPoll();
-      if (send_data(i) != 0)
+      if (send_data(i) != 0) {
+        U2_RequestCore0NetPoll();
         return;
+      }
+      U2_RequestCore0NetPoll();
       break;
     case W5100_SN_CR_RECV: {
       U2_MonSockSendRecv(i, 0);
-      U2_RequestCore0NetPoll();
       /* W5100 semantics: host updates RX_RD to consumed length before RECV.
        * Do not force RX_RD->WR here; that drops unread tail data and breaks
        * shared-access partial reads (notably wget65). */
       U2_Net_RecvConfirm(i);
+      U2_RequestCore0NetPoll();
       break;
     }
     default:
@@ -705,23 +707,6 @@ void U2_RequestCore0NetPoll(void) {
 #else
 void U2_RequestCore0NetPoll(void) {}
 #endif
-
-void U2_TryCompletePendingSocket0Send(void) {
-#if PICO_CYW43_ARCH_POLL
-  if (get_core_num() != 0)
-    return;
-  for (int sock = 0; sock < W5100_NUM_SOCKETS; sock++) {
-    uint16_t cr_addr = (uint16_t)((0x04 + sock) << 8) + W5100_SN_CR;
-    if (u2_memory[cr_addr] != W5100_SN_CR_SEND)
-      continue;
-    if (U2_Net_GetStatus(sock) != W5100_SN_SR_SOCK_MACRAW)
-      continue;
-    if (send_data(sock) != 0)
-      continue;
-    u2_memory[cr_addr] = 0;
-  }
-#endif
-}
 
 void U2_Poll(void) {
   U2_RequestCore0NetPoll();

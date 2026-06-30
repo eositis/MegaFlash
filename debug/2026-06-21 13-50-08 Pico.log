@@ -420,3 +420,234 @@ Please Select:
 
 ---------- 2026-06-21 21:04:14 -0400: Disconnected ----------
 
+
+---------- 2026-06-23 22:01:43 -0400: Connected ----------
+
+
+
+#     #                          #######
+##   ##  ######   ####     ##    #        #         ##     ####   #    #
+# # # #  #       #    #   #  #   #        #        #  #   #       #    #
+#  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+#     #  #       #  ###  ######  #        #       ######       #  #    #
+#     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+#     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+Main Menu
+=========
+
+1) Device Information
+2) Upload ProDOS Image file to MegaFlash
+3) Download ProDOS Image file from MegaFlash
+4) Erase Flash Content
+
+Please Select:1
+
+Device Information
+==================
+
+Pico Board = Pico 2 RP2350
+Wifi Supported = Yes
+CPU Speed = 150MHz, SPI Speed = 75.0MHz
+MegaFlash Pico Firmware Version = V1.2.1-eo (DEBUG)
+Firmware build: 2026-06-21 22:36:52 UTC  (1782081412 Unix s)
+Pico SDK Version = 2.2.0
+Total Flash Capacity = 128MB
+Flash Chip #0 JEDEC ID = EF7020h
+Flash Chip #1 JEDEC ID = EF7020h
+
+Partition Information:
+Drive Type    Volume Name     Size (Blocks)
+  1   ProDOS  A2.DESKTOP      65535
+  2   ProDOS  VOL2            65535
+  3   ProDOS  DATAVOL         65535
+  4   ProDOS  DEVTOOLS        65535
+
+Press any key to continue...
+
+
+#     #                          #######
+##   ##  ######   ####     ##    #        #         ##     ####   #    #
+# # # #  #       #    #   #  #   #        #        #  #   #       #    #
+#  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+#     #  #       #  ###  ######  #        #       ######       #  #    #
+#     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+#     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+Main Menu
+=========
+
+1) Device Information
+2) Upload ProDOS Image file to MegaFlash
+3) Download ProDOS Image file from MegaFlash
+4) Erase Flash Content
+
+Please Select:2
+
+Upload ProDOS Image
+===================
+
+A ProDOS order disk image (.po/.hdv) can be uploaded to MegaFlash and
+written to a drive with XMODEM-CRC protocol.
+
+Partition Information:
+Drive Type    Volume Name     Size (Blocks)
+  1   ProDOS  A2.DESKTOP      65535
+  2   ProDOS  VOL2            65535
+  3   ProDOS  DATAVOL         65535
+  4   ProDOS  DEVTOOLS        65535
+
+Please enter drive number (1-4), Ctrl-C to abort:2
+
+Current:
+Drive  = 2
+Type   = ProDOS
+Volume = VOL2
+Size   = 65535 blocks
+
+WARNING: All data stored in the drive will be destroyed.
+Type CONFIRM to proceed, Ctrl-C to abort: confirm
+
+You are ready to upload ProDOS image file to drive 2.
+Please start upload using XModem-1k or XModem/CRC protocol
+within 90 seconds. Type Ctrl-C to abort.
+CCCCCCCCC
+
+
+#     #                          #######
+##   ##  ######   ####     ##    #        #         ##     ####   #    #
+# # # #  #       #    #   #  #   #        #        #  #   #       #    #
+#  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+#     #  #       #  ###  ######  #        #       ######       #  #    #
+#     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+#     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+Main Menu
+=========
+
+1) Device Information
+2) Upload ProDOS Image file to MegaFlash
+3) Download ProDOS Image file from MegaFlash
+4) Erase Flash Content
+
+Please Select:1
+
+Device Information
+==================
+
+Pico Board = Pico 2 RP2350
+Wifi Supported = Yes
+CPU Speed = 150MHz, SPI Speed = 75.0MHz
+MegaFlash Pico Firmware Version = V1.2.1-eo (DEBUG)
+Firmware build: 2026-06-21 22:36:52 UTC  (1782081412 Unix s)
+Pico SDK Version = 2.2.0
+Total Flash Capacity = 128MB
+Flash Chip #0 JEDEC ID = EF7020h
+Flash Chip #1 JEDEC ID = EF7020h
+
+Partition Information:
+Drive Type    Volume Name     Size (Blocks)
+  1   ProDOS  A2.DESKTOP      65535
+  2   ProDOS  BENCHED.32PO    65535
+  3   ProDOS  DATAVOL         65535
+  4   ProDOS  DEVTOOLS        65535
+
+Press any key to continue...
+
+---------- 2026-06-23 22:09:30 -0400: Disconnected ----------
+
+
+---------- 2026-06-23 23:15:29 -0400: Connected ----------
+
+Version: 7.95.49 (2271bb6 CY) CRC: b7a28ef3 Date: Mon 2021-11-29 22:50:27 PST Ucode Ver: 1043.2162 FWID 01-c51d9400
+cyw43 loaded ok, mac 88:a2:9e:48:22:7a
+[u2m] 14971 reset
+
+
+#     #                          #######
+##   ##  ######   ####     ##    #        #         ##     ####   #    #
+# # # #  #       #    #   #  #   #        #        #  #   #       #    #
+#  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+#     #  #       #  ###  ######  #        #       ######       #  #    #
+#     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+#     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+Main Menu
+=========
+
+1) Device Information
+2) Upload ProDOS Image file to MegaFlash
+3) Download ProDOS Image file from MegaFlash
+4) Erase Flash Content
+
+Please Select:2
+
+Upload ProDOS Image
+===================
+
+A ProDOS order disk image (.po/.hdv) can be uploaded to MegaFlash and
+written to a drive with XMODEM-CRC protocol.
+
+Partition Information:
+Drive Type    Volume Name     Size (Blocks)
+  1   ProDOS  A2.DESKTOP      65535
+  2   ProDOS  BENCHED.32PO    65535
+  3   ProDOS  DATAVOL         65535
+  4   ProDOS  DEVTOOLS        65535
+
+Please enter drive number (1-4), Ctrl-C to abort:2
+
+Current:
+Drive  = 2
+Type   = ProDOS
+Volume = BENCHED.32PO
+Size   = 65535 blocks
+
+WARNING: All data stored in the drive will be destroyed.
+Type CONFIRM to proceed, Ctrl-C to abort: confirm
+
+You are ready to upload ProDOS image file to drive 2.
+Please start upload using XModem-1k or XModem/CRC protocol
+within 90 seconds. Type Ctrl-C to abort.
+CCCCCCCCCC
+
+
+#     #                          #######
+##   ##  ######   ####     ##    #        #         ##     ####   #    #
+# # # #  #       #    #   #  #   #        #        #  #   #       #    #
+#  #  #  #####   #       #    #  #####    #       #    #   ####   ######
+#     #  #       #  ###  ######  #        #       ######       #  #    #
+#     #  #       #    #  #    #  #        #       #    #  #    #  #    #
+#     #  ######   ####   #    #  #        ######  #    #   ####   #    #
+
+Main Menu
+=========
+
+1) Device Information
+2) Upload ProDOS Image file to MegaFlash
+3) Download ProDOS Image file from MegaFlash
+4) Erase Flash Content
+
+Please Select:2
+
+Upload ProDOS Image
+===================
+
+A ProDOS order disk image (.po/.hdv) can be uploaded to MegaFlash and
+written to a drive with XMODEM-CRC protocol.
+
+Partition Information:
+Drive Type    Volume Name     Size (Blocks)
+  1   ProDOS  A2.DESKTOP      65535
+  2   ProDOS  BENCHED.32PO    65535
+  3   ProDOS  DATAVOL         65535
+  4   ProDOS  DEVTOOLS        65535
+
+Please enter drive number (1-4), Ctrl-C to abort:
+
+---------- 2026-06-23 23:25:07 -0400: Disconnected ----------
+
+
+
+---------- 2026-06-24 08:43:44 -0400: Logging Stopped ----------
+

@@ -2097,6 +2097,18 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 
 ---
 
+## 10ze. Rollback uncommitted §10zb–§10zd → HEAD §10za (2026-06-27)
+
+**Symptom:** After §10zb (RX reset on OPEN), §10zc (MACRAW RX staging), §10zd (TX reset on OPEN), user report — **telnet65 DHCP/DNS dead** (`tx len=1518` DNS frames, pcap ARP-only); Contiki hardcoded IP but **no DNS**. Stacked experiments regressed bring-up vs §10za validation (browser OK, partial telnet).
+
+**What we did:** **`git restore`** uncommitted changes on **`pico/uthernet2.c`**, **`uthernet2.h`**, **`uthernet2_net.cpp`**, docs → commit **`0a82a91`** (§10za). Rebuilt **`pico2_debug/megaflash.uf2`**. **Did not** revert committed **`2390372`** / **`1b540e9`** / **`0a82a91`** stack unless user requests next.
+
+**Takeaway:** §10zb–§10zd remain design notes only until re-landed **one at a time** with gates (ip65 DHCP → DNS → telnet SYN on pcap).
+
+**References:** SESSION_LOG 2026-06-27 rollback entry; git **`0a82a91`**.
+
+---
+
 ## 1ap. tcpdump vs UART: MACRAW ingress length vs host RECV (6502 commit path)
 
 **What:** Correlate **Ethernet framing** with **`tcpdump`** using UART — first at **lwIP → MACRAW enqueue** (historical **`MACRAW rx len=`**, removed), now at **W5100 RECV** after the host has updated **RX_RD** (what the **6502 / ip65 stack committed** as consumed).

@@ -68,3 +68,5 @@ r_nw.oe  =>
 https://youtu.be/NYHedg0-LMk
 
 ./bramble .../megaflash-pico2.uf2 -arch m33 -clock 150 -cores 2 -timeout 30 -trace-mc
+
+https://github.com/eositis/source/tree/main/BenchmarkeD/v2.1

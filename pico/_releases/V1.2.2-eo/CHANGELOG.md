@@ -1,4 +1,4 @@
-# @VERSION@
+# V1.2.2-eo
 
 **1.2 series:** Uthernet II emulation on Pico 2 W (RP2350). Use **`megaflash-pico2.uf2`** from this folder.
 

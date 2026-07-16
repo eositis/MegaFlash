@@ -21,6 +21,7 @@ void U2_MonPollFlush(void);
 /** Queued [u2] lines — do not printf from U2_HandleBusAccess; flush runs in U2_Poll. */
 void U2_MonQueueModeLine(uint8_t mr);
 void U2_MonDataReadTrace(uint16_t addr, uint8_t val, uint8_t mr);
+void U2_MonDataWriteTrace(uint16_t addr, uint8_t val, uint8_t mr);
 /** Single checkpoint line [u2] ck=n when U2_IP65_CHECKPOINT==n (CMake); queued, not printf on bus. */
 void U2_MonCheckpoint(int n);
 
@@ -47,6 +48,9 @@ void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, 
 void U2_MonNetMacrawTx(int sock, uint16_t len);
 void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr_full, uint16_t rd_masked,
                            uint16_t wr_masked);
+/** Diagnostic: host issued RECV repeatedly without advancing Sn_RX_RD (storm signature). Rate-limited. */
+void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1);
+void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1);
 
 #ifdef __cplusplus
 }

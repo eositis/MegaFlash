@@ -80,6 +80,7 @@
 #define W5100_SN_MR_UDP           0x02
 #define W5100_SN_MR_IPRAW         0x03
 #define W5100_SN_MR_MACRAW        0x04
+#define W5100_SN_MR_MF            0x40  /* MACRAW MAC Filter: accept only own-MAC (SHAR) + broadcast */
 
 #define W5100_SN_CR_OPEN          0x01
 #define W5100_SN_CR_LISTEN        0x02

@@ -486,6 +486,14 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
 #endif
   if (len >= 12)
     memcpy(eth + 6, netif->hwaddr, 6);
+  /* ARP sender-hardware-address normalization: ip65's own MAC is the WIZnet OUI (00:08:DC:..),
+   * so an ARP request/reply carries that inside the payload even though we rewrite the Ethernet
+   * SA to the STA MAC. The gateway then learns our IP against the WIZnet MAC and unicasts the ARP
+   * reply to a MAC the AP never delivers to this station -> host stuck in ARP retry, DNS never
+   * proceeds (see debug/megaflash-2.pcap; §1aa/§1ad). Point the ARP SHA at the STA MAC too.
+   * ethertype 0x0806 at eth[12:13]; ARP SHA is at payload offset 8 = frame offset 22. */
+  if (len >= 28 && eth[12] == 0x08 && eth[13] == 0x06)
+    memcpy(eth + 22, netif->hwaddr, 6);
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_tap("core0-post", eth, len);
 #endif
@@ -663,13 +671,19 @@ int U2_Net_ListenTcp(int i, uint16_t local_port) {
   return 0;
 }
 
-void U2_Net_SendUdp(int i, const uint8_t *data, uint16_t len, uint32_t dest_ip_net, uint16_t dest_port) {
-  if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_UDP || !sockets[i].pcb.udp || !data)
+void U2_Net_SendUdp(int i, const uint8_t *ring_base, uint16_t ring_size, uint16_t start_off,
+                    uint16_t len, uint32_t dest_ip_net, uint16_t dest_port) {
+  if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_UDP || !sockets[i].pcb.udp ||
+      !ring_base || ring_size == 0 || len == 0)
     return;
   cyw43_arch_lwip_begin();
+  /* PBUF_RAM gives a single contiguous payload; copy from the (possibly wrapping) TX ring. */
   struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
   if (p) {
-    memcpy(p->payload, data, len);
+    uint16_t mask = (uint16_t)(ring_size - 1);
+    uint8_t *dst = (uint8_t *)p->payload;
+    for (uint16_t j = 0; j < len; j++)
+      dst[j] = ring_base[(uint16_t)((start_off + j) & mask)];
     ip_addr_t addr;
     IP4_ADDR(&addr, (dest_ip_net >> 24) & 0xFF, (dest_ip_net >> 16) & 0xFF, (dest_ip_net >> 8) & 0xFF,
              dest_ip_net & 0xFF);
@@ -679,17 +693,30 @@ void U2_Net_SendUdp(int i, const uint8_t *data, uint16_t len, uint32_t dest_ip_n
   cyw43_arch_lwip_end();
 }
 
-void U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
-  if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_TCP || !data || len == 0)
-    return;
+int U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
+  if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_TCP || !data)
+    return -1;
+  if (len == 0)
+    return 0;
   struct tcp_pcb *pcb = sockets[i].tcp_connected ? sockets[i].tcp_connected : sockets[i].pcb.tcp;
   if (!pcb)
-    return;
+    return -1;
   cyw43_arch_lwip_begin();
-  err_t err = tcp_write(pcb, data, len, TCP_WRITE_FLAG_COPY);
-  if (err == ERR_OK)
-    tcp_output(pcb);
+  uint16_t avail = tcp_sndbuf(pcb);
+  uint16_t to_write = (len < avail) ? len : avail;
+  int accepted = 0;
+  if (to_write > 0) {
+    err_t err = tcp_write(pcb, data, to_write, TCP_WRITE_FLAG_COPY);
+    if (err == ERR_OK) {
+      accepted = (int)to_write;
+      tcp_output(pcb);
+    } else if (err != ERR_MEM) {
+      accepted = -1; /* fatal (e.g. not connected) */
+    }
+    /* ERR_MEM => accepted stays 0; remainder is left in the W5100 TX ring. */
+  }
   cyw43_arch_lwip_end();
+  return accepted;
 }
 
 void U2_Net_RecvConfirm(int i) { (void)i; }
@@ -774,17 +801,20 @@ int U2_Net_ListenTcp(int i, uint16_t local_port) {
   (void)local_port;
   return -1;
 }
-void U2_Net_SendUdp(int i, const uint8_t *data, uint16_t len, uint32_t dest_ip_net, uint16_t dest_port) {
+void U2_Net_SendUdp(int i, const uint8_t *ring_base, uint16_t ring_size, uint16_t start_off,
+                    uint16_t len, uint32_t dest_ip_net, uint16_t dest_port) {
   (void)i;
-  (void)data;
+  (void)ring_base;
+  (void)ring_size;
+  (void)start_off;
   (void)len;
   (void)dest_ip_net;
   (void)dest_port;
 }
-void U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
+int U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
   (void)i;
   (void)data;
-  (void)len;
+  return (int)len;
 }
 void U2_Net_RecvConfirm(int i) { (void)i; }
 uint8_t U2_Net_GetStatus(int i) {

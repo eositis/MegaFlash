@@ -483,6 +483,102 @@ This document records the thinking, root-cause analysis, design decisions, and d
 
 ---
 
+## 1bb. Re-land strict TCP TX accounting + UDP no-truncation on current API (2026-07)
+
+**What/why:** A data-flow review of the send path (mostly MACRAW in use, but TCP/UDP paths still exercised) flagged two defects that had regressed on the current simplified API. The strict TCP accounting from §1s/§10j had been reverted along with §10j–§10p (see §10l re-land note), so at HEAD `send_data()` again advanced `Sn_TX_RD` all the way to `Sn_TX_WR` regardless of lwIP acceptance, and the UDP path capped a datagram at a 2 KiB stack buffer while still draining the full window.
+
+**Root cause:**
+- **Item 2 (TCP):** `U2_Net_SendTcp()` returned `void` and always issued `tcp_write`/`tcp_output`; `send_data()` unconditionally set `Sn_TX_RD = Sn_TX_WR`. On `ERR_MEM`/`tcp_sndbuf` exhaustion the un-queued bytes were acknowledged to the emulated W5100 but never handed to lwIP → silent hole in the TCP stream (out-of-sequence / truncated transfer as the peer sees it).
+- **Item 3 (UDP):** `send_data()` copied into `uint8_t buf[2048]`, clamped `n` to 2048, then advanced `Sn_TX_RD` past the **whole** datagram → any datagram >2 KiB was silently tail-truncated.
+
+**What we did:**
+- `U2_Net_SendTcp()` now returns `int` (accepted bytes, `-1` on socket error), clamping the write to `tcp_sndbuf(pcb)`; on `ERR_MEM` it returns `0`. Header/stub updated to match.
+- `send_data()` tracks a `consumed` counter and advances `Sn_TX_RD` by `rd_full + consumed` (only accepted bytes). TCP loop stops on partial/zero/fatal accept, leaving the remainder in the **FIFO TX ring**; because the ring is FIFO and a compliant W5100 driver checks `Sn_TX_FSR` before writing, the remainder flushes **in order** on the host's next SEND (no loss, no reorder). Backpressure still returns `0` from `send_data()` so `Sn_CR` clears normally.
+- **Item 3:** `U2_Net_SendUdp()` signature changed to take ring params (`ring_base, ring_size, start_off, len, …`) and copies straight from the (wrapping) TX ring into the `PBUF_RAM` pbuf. This removes the 2 KiB truncation **and** needs no large intermediate buffer.
+
+**Dead end (reverted):** First cut of item 3 used a `static uint8_t udp_buf[8192]` (max single-socket TX region) to avoid stack pressure. That added 8 KiB to `.bss` and overflowed **RP2040 Debug** RAM by 8652 bytes at link. Replaced with the ring→pbuf copy (RAM-neutral). Chosen because `MEM_LIBC_MALLOC=1` in poll mode means pbufs come from the heap and the TX ring is power-of-two sized, so masked wrap-copy into the pbuf is clean.
+
+**Build status:** `MF_DEBUG_BUILD_NO_GIT_COMMIT=1 ./pico/build-debug-both.sh`. `pico2_debug` (RP2350 Debug) and `pico_release` (RP2040 Release) link OK. **RP2040 `pico_debug` fails to link with a pre-existing 460-byte RAM overflow** — confirmed identical at HEAD via `git stash`, so it is unrelated to this change (open issue: RP2040 Debug image is over-budget on RAM).
+
+**References:** `pico/uthernet2.c` (`send_data`), `pico/uthernet2_net.{h,cpp}` (`U2_Net_SendTcp`, `U2_Net_SendUdp`), `pico/lwipopts.h` (`TCP_SND_BUF`, `MEM_LIBC_MALLOC`).
+
+---
+
+## 1cc. ip65 "Device not found" DEFINITIVELY reproduced: RTR probe vs RP2350 reactive-FIFO throughput (2026-07-11)
+
+**What (symptom):** Stock cc65/ip65 (contiki + telnet65) reports **"Device not found"** on a physical Apple **IIc** with the RP2350 image, even though the UART trace shows the emulator returning the **correct** RTR bytes (`$0017→0x07`, `$0018→0xD0`). This is the long-standing §1c/§1d/§1f "correct RTR yet device-not-found" contradiction.
+
+**The actual detection code (authoritative):** Fetched `drivers/w5100.s` from cc65/ip65. `init` does, after `sta mode` (MR=0x03 → we log `mode=0x03`) and `set_addr($0017)`:
+
+```asm
+ lda #$07^$D0     ; A=$D7
+ eor data         ; A ^= read($0017)  -> RTR0, auto-inc to $0018
+ eor data         ; A ^= read($0018)  -> RTR1
+ beq :+           ; A==0 -> present; else sec/rts = "Device not found"
+```
+
+Two **back-to-back** `$C0C7` reads. It does **no** data-port writes before this (only MODE/ADDRHI/ADDRLO ports), so the debug DATA-**write** trace added earlier was a dead end. If it passes, the very next access is a read of **RMSR `$001A`** — absent from every failing trace, so the driver takes the `sec/rts` failure branch.
+
+**Reproduced at bus speed (Apple IIc monitor, machine code):** Two consecutive `LDA/LDX $C0C7` after `set_addr($0017)` returned **`08 08`** (not `07 D0`); the literal `EOR` check returned **`$D7`** (≠0) → detection would fail. `0x08` is **RCR at `$0019`** — a stale leftover (the pointer is momentarily `$0019` right after the addr-hi write, before the addr-lo write). Keyboard-paced monitor reads of the same registers return the correct `07, D0, 08`. So the failure appears **only** for machine-speed back-to-back reads. (Aside: my first test used the driver's slot-0 *template* addresses `$C084–$C087` by mistake — on a IIc those are the language-card soft switches, returning floating-bus garbage `7D`/`A0 A0`. Correct card I/O for this setup is `$C0C4–$C0C7`.)
+
+**Root cause:** On RP2350 the `a2bus` SM (SM1) fulfills a `$C0C7` read **entirely from the prefetched `rxf_putget` FIFO** (`mov osr, rxfifo[y]`); it never asks core 1 during the cycle. Core 1 (`busloop.c`) must therefore refresh that FIFO with the **auto-incremented next byte** *between* consecutive reads — a window of only ~one 6502 cycle (~585 RP2350 cycles at 150 MHz for reads 4 cycles apart). In the **Debug** build, the per-access monitor work done *before* the FIFO refresh — `U2_MonBus` (`U2_MON_LOG_BUS`), the `read_value()` checkpoints, and `U2_MonDataReadTrace` — starves that window, so SM1 re-presents a **stale** byte. The firmware trace still logs correct values because `read_value()` computes them correctly; only the byte latched **on the bus** is stale. This is exactly the failure the existing `a2bus_rp2350.pio` comment anticipated ("ip65 RTR XOR fails on-bus while a later C dump looks correct"), and the same class as §1d/§1f — but here proven to be a **throughput/Heisenbug**, not a store-visibility bug. Note ip65's data-movement (`mov_data`, `poll`) also uses tight consecutive `$C0C7` accesses, so this must be fast enough for ip65 to work **at all**, not just to pass detection.
+
+**What we did (this step):** Built fresh **Release** firmware (`./build-both.sh`, ts 1783795258 = 2026-07-11 18:40:58 UTC) → `pico2_release/megaflash.uf2`. In Release, `UTHERNET2_DEBUG=0` removes all per-access monitor work from `read_value()`/`U2_HandleBusAccess`, so the busloop should keep the FIFO current. Asked the user to flash it and retry telnet65/contiki as the decisive test.
+
+**Open / next:**
+- If Release connects → confirmed debug-overhead Heisenbug. Then trim the Debug hot path: refresh the SM1 FIFO **first** (compute read byte + `U2_PeekDataPort` next byte, `UpdateMegaFlashRegisters(1,…)`), and defer `U2_MonBus`/trace pushes to *after* the FIFO update so tracing no longer perturbs bus timing.
+- If Release still fails at -O2 → the reactive-FIFO scheme is structurally too tight; fix so SM1 does not depend on a per-read core-1 refresh (e.g. compute/prefetch the auto-increment "next byte" without the full monitor path, or move DATA-port auto-increment closer to the PIO).
+
+**References:** cc65/ip65 `drivers/w5100.s` (init RTR probe); `pico/busloop.c` (U2 branch, `registers.r[7]` prime + IRQ0 wait + `UpdateMegaFlashRegisters(1,…)`), `pico/a2bus_rp2350.pio` (`mov osr, rxfifo[y]`), `pico/a2bus.h` (`UpdateMegaFlashRegisters`), `pico/uthernet2.c` (`read_value`, `U2_HandleBusAccess`, `U2_MON_LOG_BUS`); §1c §1d §1f §1w.
+
+**Outcome:** Confirmed — user flashed the release image and **card detection now works** (telnet65 sustained a ~10 min stream once). The debug per-read `critical_section` (`u2_mon_push`) armed by `U2_IP65_TRACE_DATA` exactly at MR=0x03 was the timing culprit; a debug build for ip65 must set `U2_IP65_TRACE_DATA=0` (net-layer socket/MACRAW traces don't touch the bus read path and are safe to keep).
+
+---
+
+## 1cd. Intermittent ip65 DNS = ARP sender-hardware-address mismatch + unfiltered MACRAW RX (2026-07-11)
+
+**What (symptom):** With detection fixed (§1cc), telnet65/Contiki sessions are **intermittent** — one ~10 min session worked, but usually DNS fails. `debug/megaflash-2.pcap` contains only **4 outbound ARP requests** (`who-has 192.168.0.1 tell 192.168.0.234`, Eth src = STA MAC `88:a2:9e:48:22:7a`) and **no replies**: ip65 is stuck in ARP retry for the gateway/DNS server, so DNS never starts. (Tooling note: this session, files under `~/Documents` intermittently returned 0 bytes to non-`tcpdump` processes — macOS TCC/lock quirk; `tcpdump -r` decoded fine.)
+
+**Root cause 1 — ARP SHA mismatch (recurrence of §1aa):** `u2_send_macraw_core0()` rewrote only the **Ethernet** source (`memcpy(eth+6, netif->hwaddr, 6)`) and DHCP `chaddr`; the **ARP payload sender-hardware-address** was left untouched. ip65's own MAC is the WIZnet OUI `00:08:DC:A2:A2:A2` (`w5100.s` `mac`), so every ARP carried SHA=`00:08:DC:..` while the Ethernet SA was the STA MAC. The gateway records `192.168.0.234 → 00:08:DC:..` and unicasts the ARP reply (L2) to that MAC, which the AP never delivers to our associated station (`88:a2:9e:..`) → reply lost. Intermittent because success depends on the gateway's ARP-cache state / whether it happens to reply to the frame source vs the ARP SHA. The §1ad "ARP SHA normalization" had been lost in a later rollback (§1z).
+
+**Root cause 2 — MACRAW MAC filter ignored:** ip65 opens socket 0 with `Sn_MR=0x44` (MACRAW **+ MF**, from `w5100.s` `lda #$44`). A real W5100 with MF delivers only frames to its own MAC (SHAR) or broadcast. We ignored MF and copied **every** frame the STA netif sees (broadcast + multicast + our unicast) into the small RX ring via `u2_netif_input_wrapper` → `u2_push_rx_macraw`. On a busy LAN this floods the ring, so a late unicast ARP reply / DNS response hits "no room" and is dropped while the 1 MHz host drains slowly.
+
+**What we did:**
+- **Fix 1:** In `u2_send_macraw_core0()` (`pico/uthernet2_net.cpp`), after the Ethernet SA rewrite, normalize the ARP SHA too: `if (len>=28 && eth[12]==0x08 && eth[13]==0x06) memcpy(eth+22, netif->hwaddr, 6);` (ethertype 0x0806; ARP SHA at frame offset 22 = payload offset 8). Now the gateway learns our IP against the STA MAC and replies to a MAC the AP delivers.
+- **Fix 2:** Added `W5100_SN_MR_MF 0x40` (`pico/w5100_regs.h`) and a MAC filter at the top of `u2_push_rx_macraw()` (`pico/uthernet2.c`): when the socket's `Sn_MR` MF bit is set, accept only dest MAC == `SHAR` (`u2_memory[W5100_SHAR0..]`) or broadcast; otherwise drop **silently** (normal hardware behavior, no monitor spam). SHAR is aligned to the STA MAC in `U2_Net_OpenMacraw`, so our own unicast (ARP reply, DNS, TCP/UDP) is accepted; ambient multicast/other-unicast is dropped, matching real U2 and freeing ring space.
+
+**Why these are correct (not app workarounds):** Both restore W5100/real-Uthernet-II behavior the app assumes — a card whose L2 identity is consistent (SHA==SA) and that honors the MF bit it was configured with. Per the U2-emulation rule, this is closing an emulation gap, not patching ip65.
+
+**Didn't do / open:** Did not pin `SHAR` to the STA MAC at write time (would remove all TX rewrites for ARP/DHCP/eth-SA in one place, but is more invasive and cross-layer; kept the minimal proven rewrite approach). If DNS is still intermittent after this, build a diagnostic debug with `U2_IP65_TRACE_DATA=0` (detection stays working) and watch `[u2m]` `MACRAW rx` / `rxdrop NO_ROOM` / socket lines to see whether the ARP reply now arrives and whether the ring still overflows; then consider cyw43 POLL cadence (§1r) or `U2_MACRAW_COMPAT_DROP_OLDEST=1`.
+
+**Build:** `./build-both.sh` (ts ~2026-07-11 19:41 UTC) → `pico2_release/megaflash.uf2` + `pico_release/megaflash.uf2`, both link OK.
+
+**References:** `debug/megaflash-2.pcap`; `pico/uthernet2_net.cpp` (`u2_send_macraw_core0`, `u2_netif_input_wrapper`, `U2_Net_OpenMacraw`), `pico/uthernet2.c` (`u2_push_rx_macraw`), `pico/w5100_regs.h` (`W5100_SN_MR_MF`, `W5100_SHAR0`); cc65/ip65 `drivers/w5100.s` (`mac`, `Sn_MR=$44`); §1aa §1ad §1j §1cc.
+
+---
+
+## 1ce. "Socket receive noise" = RX ring pointers not reset on OPEN (Contiki DNS/connect fail) (2026-07-12)
+
+**What (symptom):** With DNS fixed (§1cd), Contiki "completely fails to pass the DNS query" and telnet "tries/fails to open a connection," and the socket receive is described as **very noisy**. UART from `pico2_debug` (build ts 2026-07-12 00:34) shows the story: NTP succeeds; a first `sock0 OPEN mr=0x44` (telnet, at 39056186 µs) drives a normal `SEND / MACRAW tx / MACRAW rx / RECV` cadence. Then a **second** `sock0 OPEN mr=0x44` (Contiki, at 135799129 µs) is immediately followed by an **unbounded `sock0 RECV` storm** — thousands of `RECV`, ~8 ms apart, sustained ~38 s — with only a handful of real inbound `MACRAW rx len=60` and, crucially, **no `MACRAW rx no_room`** anywhere.
+
+**What it rules out:** No `no_room` during the storm ⇒ the RX ring is **not** overflowing (hypothesis A / §1cd Fix 2 pressure is not the failure here). The storm is the host side spinning, not inbound flood.
+
+**Root cause — OPEN never reset the emulated RX ring, so `Sn_RX_RSR` never returned to 0.** ip65's `poll()` (cc65 `w5100.s`) loops: if `Sn_CR==0` and `Sn_RX_RSR!=0`, read a MACRAW frame (2-byte length prefix + payload), advance `Sn_RX_RD`, issue `RECV`; else report "no data." A real W5100 **initializes the socket's RX/TX ring pointers on the OPEN command**, so a freshly opened socket has `RSR=0`. Our emulation never did this. The first OPEN after a chip reset was fine only because `sn_rx_wr` and the host `Sn_RX_RD` happened to be 0. When Contiki opened MACRAW socket 0 **after** the telnet session, `sn_rx_wr` was still at telnet's leftover offset, so `Sn_RX_RSR = wr − rd ≠ 0`. ip65 then "receives" a garbage frame, advances `Sn_RX_RD` by a **bogus 2-byte length header** read from stale ring bytes, and `RSR = wr − rd` never converges to 0 (it wraps) → an infinite RECV loop → the "noise," and DNS/connect never make progress. (The first-vs-second-OPEN asymmetry in the log is the tell.)
+
+**What we did:** Added `u2_reset_socket_rings(int i)` in `pico/uthernet2.c` that zeroes the producer (`sn_rx_wr` via `u2_rx_wr_store`) and the host-facing pointer registers (`Sn_RX_RD0/1`, `Sn_TX_RD0/1`, `Sn_TX_WR0/1` in `u2_memory`) so the socket presents `RSR=0` / full `FSR`. Called it at the **top of the `W5100_SN_CR_OPEN` handler** (before the protocol switch) so it runs for UDP/TCP/MACRAW alike — matching hardware, which resets pointers on OPEN regardless of protocol. ip65 re-reads `Sn_TX_WR/RD` after OPEN, so zeroing TX is safe (and correct).
+
+**Why this is correct (not an app workaround):** A real W5100 gives a freshly OPENed socket an empty RX buffer; the emulation must too. This closes an emulation gap (stale ring across socket reuse), per the U2-emulation rule.
+
+**History / why the reset is back on OPEN:** §10p had a `u2_socket_reset_rx` that zeroed `sn_rx_wr` + `Sn_RX_RD` on OPEN; §10q then moved it to **CONNECT/CLOSE only**, fearing an "OPEN-time RX_RD reset raced Contiki init ordering"; §10r ultimately `git restore`d the whole §10j–§10p bundle during the detection-bringup crisis, deleting the reset entirely. That crisis was later proven to be the **§1cc RTR Heisenbug** (debug per-read `critical_section` timing), *not* the ring reset. The UART storm here is direct evidence that OPEN **must** reset the ring, and MACRAW OPEN (no CONNECT) means CONNECT-only reset would never fire — so the reset belongs on OPEN. The old "race" concern doesn't apply to ip65: `w5100.s` OPEN writes `Sn_MR`/`Sn_PORT`, issues `Sn_CR=OPEN`, waits `Sn_CR==0`, and does not pre-seed `Sn_RX_RD`.
+
+**Didn't do / open:** This fixes the Contiki RECV storm specifically. The **inbound-only TCP loss** from the §1cd wire-capture analysis (server→Apple retransmits: ~6.5% telnet, worse for HTTP/wget) is a separate issue — leading suspects (B) cyw43 RX poll cadence and (C) sustained tight-`$C0C7`-read corruption (RP2350 FIFO refresh race, §1f class) on long data-read loops. Re-evaluate after this build once the socket isn't spinning on phantom RSR.
+
+**Build:** `make -C pico2_debug` (build-debug-both.sh still fails at the pre-existing RP2040 456-byte overflow) → `pico2_debug/megaflash.uf2`, ts 1783821111 (2026-07-12 01:51 UTC).
+
+**References:** `pico/uthernet2.c` (`u2_reset_socket_rings`, `write_socket_register` OPEN case, `u2_rx_used_bytes`, `read_rx_rd_coherent`, `u2_push_rx_macraw`); `pico/uthernet2_net.cpp` (`U2_Net_OpenMacraw`, `U2_Net_RecvConfirm`); `pico/w5100_regs.h` (`W5100_SN_RX_RD0/1`, `W5100_SN_TX_RD0/1`, `W5100_SN_TX_WR0/1`); cc65/ip65 `drivers/w5100.s` (`poll`); §1cc §1cd §1f.
+
+---
+
 ## 1t. Add temporary UART counters for transfer-error triage
 
 **Requirement:** During Pico 2 W validation, expose lightweight runtime counters to confirm whether observed bad data / retries correlate with TCP enqueue backpressure (`tcp_write` reject) and/or deferred MACRAW queue pressure.
@@ -2128,6 +2224,106 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 
 ---
 
+## 1cf. MACRAW `sock0 RECV` storm (Contiki wget) + telnet $89 — cross-core `Sn_RX_RD` tear & ring full/empty ambiguity
+
+**Symptom:** During a Contiki **wget** download, the UART showed an unbounded **`[u2m] sockN RECV`** storm (thousands of back-to-back RECVs, ~4.46 µs apart) with only the occasional **`net sock0 MACRAW rx len=…`** and, once the ring filled, **`MACRAW rx no-room offered=… accepted=0 free=183 ring=4096`**. Telnet65 failed to connect with **error $89** and streaming sessions had occasional hiccups. The browser worked because it never sustained enough RX to cross the failure window.
+
+**Root cause 1 — cross-core tear on `Sn_RX_RD`.** The 6502/ip65 driver commits the consumer pointer as **two byte stores on core 1**: hi at `Sn_RX_RD0` (`$x28`) then lo at `Sn_RX_RD1` (`$x29`). Core 0 (`u2_push_rx*` free-space math) read those two `u2_memory` bytes back. The previous `read_rx_rd_coherent()` only defended against a stale **high** byte; it did **not** prevent reading **`new_hi:old_lo`** when the pointer crossed a 256-byte boundary (e.g. host going `0x00FE→0x0140`, core 0 samples `0x01FE`). That torn value is *ahead* of the true consumer, so core 0 over-estimated free space and **overwrote unread ring bytes**. The host then read a **corrupted 2-byte MACRAW length header**, advanced `Sn_RX_RD` by a garbage amount, so `Sn_RX_RSR` (derived from `wr−rd`) **never returned to 0** → ip65 kept issuing RECV forever (the storm), and fresh frames eventually hit `no-room`. The same tear intermittently clipped a TCP segment/SYN-ACK, which is why telnet connect returned $89 and streams hiccuped.
+
+**Root cause 2 — ring full/empty ambiguity.** RSR/occupancy is computed from `wr_off − rd_off`. If a push filled the ring exactly (`used == size`, i.e. `wr_off == rd_off`), that state is **indistinguishable from empty**, so a completely full ring reads back as **empty** and the data is silently dropped. This latently corrupts bulk RX independent of the tear.
+
+**Fix (`pico/uthernet2.c`):**
+1. Added an **atomic shadow** `uint16_t sn_rx_rd` to `u2_socket_t`. It is published with `__atomic_store_n(..., __ATOMIC_RELEASE)` in `write_socket_register()` **only when the low byte (`Sn_RX_RD1`) is written** — the point at which the host's 16-bit pointer is complete and self-consistent. Core 0 reads it via `u2_rx_rd_load()` (`__ATOMIC_ACQUIRE`) inside `u2_rx_used_bytes()`. `read_rx_rd_coherent()` was removed. The shadow is initialised/kept coherent in `u2_reset`, `u2_reset_socket_rings`, and `u2_socket_discard_rx`.
+2. **Reserve one ring byte** in every push path so `used` can never equal `size`: MACRAW too-big guard `total >= size`; all accept checks `free_bytes <= total`; TCP clamps to `usable = free_bytes − 1` and rejects when `free_bytes <= 1`.
+
+**Why the shadow (not a lock or seqlock):** core 1 is the latency-critical bus servicer; a lock/critical-section there risks the RP2350 PIO prefetch Heisenbug (see detection notes). A single aligned 16-bit atomic store on the completing (low) byte gives core 0 an always-complete value with no core-1 stall.
+
+**Build/validation:** Rebuilt `pico2_debug/megaflash.uf2` (RP2350, `./build-debug.sh`). Expectation: `sock0 RECV` converges (no storm) once RSR drains, `no-room` disappears under sustained wget, telnet connects (no $89) and streams without the tear-induced hiccups.
+
+**References:** `pico/uthernet2.c` (`sn_rx_rd`, `u2_rx_rd_load`, `u2_rx_used_bytes`, `write_socket_register` `W5100_SN_RX_RD1` case, `u2_push_rx`/`u2_push_rx_macraw` reserve-byte checks, `u2_socket_discard_rx`, `u2_reset*`); builds on §10l RX pointer geometry.
+
+---
+
+## 1cg. Telnet65 MACRAW TX oversize — `Sn_TX_FSR` advertised full 4 KiB, SEND truncated to 1518
+
+**Symptom (post-§1cf UART, firmware `2026-07-12 01:51:51 UTC`):** Contiki browse/wget no longer RECV-storms (`no-room` absent). Telnet65 still dies after ARP/DNS: MACRAW SEND lines show `ptrs len=1518` with RD/WR spans that decode to **~4 KiB** pending (e.g. `rd=0x024F wr=0x022C` → ~4061 B), then mute empty SENDs and idle RX only.
+
+**Root cause:** Contiki/ip65 issues **one Ethernet frame per SEND** and gates writes on `Sn_TX_FSR >= len`. We reported FSR up to the full **4 KiB** TX ring. A large/corrupt host length (~4K) fills the ring; `send_data()` capped the CYW43 copy at **1518** but still advanced `TX_RD` by the **full** RD→WR span. The host believed the whole buffer left; the wire carried a truncated frame → TCP death. Contiki wget never hit this path (max TX ~313 B in the same capture).
+
+**Fix (`pico/uthernet2.c`):** Cap reported MACRAW `Sn_TX_FSR` at **1518** so the host cannot queue more than one MTU-sized frame into the TX ring. `send_data` MACRAW now logs the **true** RD→WR span on the ptrs line (UART prints `OVERSIZE` when `len>1518`); still MTU-caps the link copy and drains the full window if oversize somehow occurs.
+
+**What we did not do:** Treat Contiki “out of mem” as a Pico RX bug in this capture (no `no-room`; likely 6502 heap / separate from telnet TX). Did not change UDP/TCP FSR (only MACRAW).
+
+**References:** `get_tx_fsr_byte`, `send_data` MACRAW branch; `U2_Net_SendMacraw` already rejects `len>1518`; monitor `U2M_NET_MACTX_PTRS`.
+
+---
+
+## 1ch. RECV storm returned under Contiki — `Sn_RX_RD` publish-on-low-byte was byte-order-dependent (2026-07-12)
+
+**Symptom (UART `Serial Saved Output.txt` + `sensoroni_onion_1017.pcap`, §1cg build):** Browsing worked but was lossy, then "broke" into the classic **`sock0 RECV` storm** (~8900 back-to-back RECVs) with `MACRAW rx no-room … free=36 ring=4096` — `free` **stuck constant**, i.e. the consumer pointer frozen while the host RECV-loops forever. `pcap` corroborated: the HTTP server retransmitted the same 730 B segments many times because the Apple never ACKed the missing region (our RX ring dropped it). Telnet "couldn't get an IP" and later emitted MACRAW SENDs with wild host-written `Sn_TX_WR` (e.g. `wr=0xF012`) = 6502 stack going off the rails after RX never delivered clean DHCP/ARP.
+
+**Root cause — §1cf's fix was byte-order-dependent.** §1cf published the atomic `sn_rx_rd` shadow **on the Sn_RX_RD low-byte write**, on the assumption the driver writes RX_RD **hi (`$x28`) then lo (`$x29`)** — true for ip65's `w5100.s`. **Contiki's W5100 MACRAW driver writes lo-then-hi.** So on the low-byte write we captured `{old_hi : new_lo}` and then **never re-published** when the high byte landed. Whenever RX_RD crossed a 256-byte boundary (e.g. `0x00FE → 0x0140`) the shadow lagged the true consumer by 256 for that step, so `used = wr − rd_shadow` was **over-reported** → `Sn_RX_RSR` never returned to 0 → the host read phantom/stale ring bytes, advanced RX_RD by a garbage length, and RECV-looped forever with `free` pinned small. (Same end state as pre-§1cf, reached from the opposite byte order.)
+
+**Fix (`pico/uthernet2.c`) — publish at the RECV command, not on the byte write.**
+1. Removed the `W5100_SN_RX_RD1`-write publish (the byte-order-dependent tear source).
+2. In the `Sn_CR = RECV` handler, publish `sn_rx_rd` from the now-complete `u2_memory` `Sn_RX_RD0/1` pair. This is the **hardware-accurate** sync point (a real W5100 only recomputes `Sn_RX_RSR` on RECV), runs on **core 1** (both bytes final, no cross-core read), and is **independent of hi/lo write order**. The published value is always a genuinely committed RD: never *ahead* of reality (so core 0 can't overwrite unread bytes) and never *staled-low across a boundary* (so RSR converges to 0 and the storm cannot form). Between RECVs the producer may use a slightly-stale (never-ahead) RD, which at worst drops an incoming frame — safe, never corrupting.
+
+**What we did not do:** chase the telnet `Sn_TX_WR=0xF012` as a TX tear — `send_data()` runs on core 1 synchronously with the host's TX_WR store, so those are the host's own values (downstream of the RX failure). Left the §1cg MACRAW TX FSR cap and oversize logging in place. Did not treat browsing packet loss as "fix Contiki": the loss is our RX ring dropping bursts while stuck; the fix is convergence, not app changes.
+
+**References:** `pico/uthernet2.c` `write_socket_register` (`W5100_SN_CR_RECV` publish; removed `W5100_SN_RX_RD1` publish), `u2_rx_used_bytes`, `u2_rx_rd_load`, `sn_rx_rd`; supersedes the §1cf publish-on-low-byte scheme (shadow init in `u2_reset*` / `u2_reset_socket_rings` unchanged).
+
+---
+
+## 1ci. §1ch confirmed (storm gone); telnet DNS fails on wild `Sn_TX_WR` — reverted FSR cap + drop desynced TX (2026-07-12)
+
+**Evidence (`Serial Saved Output.txt` + `sensoroni_onion_1019.pcap`, §1ch build):**
+- **§1ch works:** 0 `no-room`, only 242 `sock0 RECV` (proportional to 136 `MACRAW rx`) — **no storm**. Contiki browsing healthier (user: "slightly better"). pcap shows real HTTP GET/200 to `66.59.109.26:80` and successful DHCP (`192.168.0.234`). *The banner still read `2026-07-12 01:51:51 UTC` only because `build-debug.sh` rebuilds without reconfiguring, so `FIRMWARE_BUILD_TIMESTAMP` was stale — the behavior proves the §1ch binary was flashed.*
+- **Telnet DNS fails:** **zero port-53 packets in the whole pcap** — the DNS query never egresses as a valid frame. Serial telnet session emits repeated `MACRAW ptrs … OVERSIZE` with **wild host `Sn_TX_WR`** (`wr=0xEF2A`, `0xEF18`, `0xEE62`, non-monotonic). `send_data` interpreted `wr<rd` as a full-ring wrap → bogus multi-KB `data_len` → we copied **1518 B of stale ring** to the wire = a corrupt Ethernet frame the DNS server silently drops.
+
+**Two defects addressed:**
+1. **Lying about `Sn_TX_FSR` (§1cg).** The MACRAW FSR cap at 1518 was not W5100-accurate. The wild `Sn_TX_WR` high bytes `0xEE/0xEF` line up with `1518 = 0x05EE`, implicating the cap in the telnet host's TX pointer math. **Reverted** `get_tx_fsr_byte` to report true free space.
+2. **Emitting garbage on the wire.** On a `data_len > 1518` desync `send_data` now **drops** the frame (logs `MACRAW tx len=0` next to the `OVERSIZE` ptrs line) instead of blasting stale ring bytes, while still retiring the full host TX window so pointers re-sync. Never corrupt the link.
+
+**Still open:** the *root cause* of the telnet host writing non-monotonic `Sn_TX_WR` is not yet pinned (send_data reads TX_WR on core 1 synchronously with the host's store, so it is not a cross-core tear — the host genuinely writes these values). Next capture (FSR uncapped, no wire garbage) will show whether the host's TX pointers normalize once we stop lying about FSR; if not, add host-side `Sn_TX_FSR`/`Sn_TX_RD` read tracing to see the host's decision inputs. Not treating this as "fix telnet65": obligation is W5100-accurate registers.
+
+**References:** `get_tx_fsr_byte` (cap removed), `send_data` MACRAW branch (desync drop), monitor `U2M_NET_MACTX`/`U2M_NET_MACTX_PTRS`.
+
+---
+
+## 1cj. RECV storm root cause: host-facing `Sn_RX_RSR` must be LIVE, not shadow-at-RECV (2026-07-12)
+
+**Symptom (`sensoroni_onion_1020.pcap` + serial, §1ci build):** telnet DNS now resolves (FSR revert worked) and a couple of `GET /` pages complete, but Contiki connections **time out** and launching Contiki re-triggers the `sock0 RECV` storm (`free=36` stuck, then `no-room`). pcap smoking gun: port 1028 sends SYN → receives SYN-ACK → **never sends the ACK**; the server retransmits SYN-ACK with exponential backoff while the Apple spins RECV (~8 µs apart) and the RX ring fills. The storm starts *during* RX, **before** the ring is full — so ring-full is a consequence, not the trigger.
+
+**Root cause — a regression introduced by §1ch.** §1ch (correctly) moved the core-0 `sn_rx_rd` shadow publish to the **RECV command** to kill the byte-order tear. But `Sn_RX_RSR` (the host-facing occupancy register) was *also* computed from that shadow. So between RECV commands `Sn_RX_RSR` was **frozen**. Contiki's W5100 MACRAW driver reads several frames per RECV batch and **re-reads `Sn_RX_RSR` between frame reads**; with RSR frozen high, it kept believing data was available after it had already drained up to `Sn_RX_WR`, so it **read past `wr` into stale ring bytes**, mis-parsed a 2-byte length header, and either advanced `Sn_RX_RD` by garbage or by 0 — freezing the consumer → unbounded RECV storm. One-frame-per-RECV paths (light browsing) happened to keep shadow≈live, which is why it "worked until it broke" under load.
+
+**Fix (`pico/uthernet2.c`) — split the two consumers of `rd`:**
+- **Host-facing RSR (core 1):** new `u2_rx_used_bytes_live()` reads the **live** `Sn_RX_RD` straight from `u2_memory`. This is coherent (core 1 both writes `Sn_RX_RD` and reads `Sn_RX_RSR`) and W5100-accurate — RSR shrinks immediately as the host advances `Sn_RX_RD`, so the host never reads past `Sn_RX_WR`. `get_rx_rsr()` now calls it.
+- **Producer free-space (core 0):** `u2_push_rx*` keep using the tear-free atomic shadow (`u2_rx_used_bytes()`), which is always ≤ live rd ⇒ conservative ⇒ can never overwrite unread data. §1ch's RECV-time publish and §1cf's init/reset coherence are retained for this path.
+
+**Diagnostic added (§1cj):** `U2_MonRecvStall` (`[u2m] … sock0 RECV STALL rsr=… rd=… wr_off=… hdr=…`) — rate-limited dump when the host issues RECV with `RSR>0` but `Sn_RX_RD` unchanged. Left in the debug build to confirm the storm is gone (should never fire now) and to catch any residual freeze with the exact header bytes.
+
+**Why this is the W5100 model:** on real hardware `Sn_RX_RSR = Sn_RX_WR − Sn_RX_RD` tracks the pointers continuously; writing `Sn_RX_RD` reduces RSR right away. Emulating RSR as a per-RECV snapshot diverged from the chip and is what a slow multi-frame software stack (Contiki) exposed.
+
+**References:** `u2_rx_used_bytes_live` (new), `get_rx_rsr`, `u2_rx_used_bytes` (producer/shadow, unchanged), `write_socket_register` RECV handler (shadow publish + stall diag), `u2_monitor.c/.h` `U2_MonRecvStall`.
+
+---
+
+## 1ck→1cl. RECV wedge self-heal must key on the *header*, not on a frozen `Sn_RX_RD` (2026-07-12)
+
+**Context.** After §1cj (live RSR), a §1ck self-heal was added: if the host issues RECV while `Sn_RX_RD` is *exactly unchanged* (`rd == last_rd`) and the 2-byte length header at `rd` is *impossible* (`framesize == 0` or `> Sn_RX_RSR`), resync `Sn_RX_RD` to the producer `Sn_RX_WR` and let the host recover (TCP retransmits the discarded tail).
+
+**Symptom (`sensoroni_onion_1022.pcap` + serial, §1ck build, banner `20:16:30 UTC`).** Telnet connect + interactive worked cleanly (§1cj/§1ci held). Then a bulk transfer ("send me a ton of data") arrived as ~590-byte frames, the 4 KiB MACRAW ring ran near-full (`no-room offered=590 free=45`, later `free=17`), the host entered a dense RECV burst (~8 µs apart — far too fast to actually read 590-byte frames), and at t≈131 s the **6502 telnet stopped entirely** (no further RECV/SEND). The ring stayed stuck full (`free=17`) while the server retransmitted into a wall every ~3 s (exponential backoff) — the "reconnect swamped by `sock0 RECV`" state. Crucially: **neither `RECV STALL` nor `RECV RESYNC` ever fired.**
+
+**Root cause of the *missed* self-heal.** The §1ck guard required `Sn_RX_RD` to be **exactly frozen** across consecutive RECVs. Under bulk RX the host's `Sn_RX_RD` does not freeze — it **creeps**: it reads a bogus length, advances by the wrong (usually small) amount, and parks on interior frame bytes rather than a boundary. `rd != last_rd` on every RECV ⇒ the freeze counter reset every time ⇒ the self-heal (and the diagnostic) never triggered, and the storm ran unbounded until the mis-reads corrupted/hung the 6502.
+
+**Fix (`pico/uthernet2.c`, RECV handler).** Drive detection off the **header** itself, which is invariant to freeze-vs-creep. A real single-chip W5100 always presents `framesize = frame_len + 2` (≥ 62 for a padded Ethernet frame, always ≤ `Sn_RX_RSR`). We now count **consecutive impossible-header RECVs** (`framesize < 16 || framesize > rsr`, with `rsr > 0`); after 3 in a row we resync `Sn_RX_RD → Sn_RX_WR`, publish the shadow, and emit `RECV RESYNC`. Genuine draining always reads at a frame boundary → header valid → counter stays 0, so the guard cannot fire during normal flow. Removed the `last_rd`/`stall` (frozen-only) state; kept `U2_MonRecvStall` as the onset diagnostic (first hit + every 1024).
+
+**What we did *not* do.** Did not enlarge the MACRAW ring or add TCP-window throttling — the ring is deliberately W5100-sized (4 KiB); bulk overflow + drop + retransmit is correct chip behavior. The defect was that an off-boundary `Sn_RX_RD` wedged permanently instead of self-healing. Did not try to *prevent* the rare bulk-RX boundary desync (root still under investigation — likely large-frame ring-wrap interaction); the header-keyed resync is the robust safety net regardless of how `rd` drifted.
+
+**References:** `pico/uthernet2.c` RECV handler impossible-header block (`bad[]` counter, `U2_MonRecvResync`), `u2_rx_wr_load`, `u2_rx_used_bytes_live`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -2141,6 +2337,10 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 | **`async_context` PANIC at `ck=5`** | §1g, `main.c`, `u2_monitor.h` | **`U2_MonPollFlush`** only on **core 0** — not from **`U2_Poll`** on core 1 |
 | MACRAW RX full (W5100 parity) | §1au, `uthernet2.c` `u2_push_rx_macraw` | If **used+(2+len) > size**, new frame **not written**; **no** implicit **RX_RD** flush. (Older doc rows §**1ao**/§**1aq** refer to optional staging / **`into_ring`** paths not present in minimal tree.) |
 | MACRAW TX `Sn_TX_RD` vs queue / `pbuf` | §**1ax**, `uthernet2_net.cpp`, `uthernet2.c` `send_data` | **`U2_Net_SendMacraw`** **`0`/`-1`**; advance **`TX_RD`** only on accept; drain **re-queue** on **`u2_send_macraw_core0`** fail |
+| MACRAW TX FSR / oversize SEND | §**1cg**→**1ci**, `uthernet2.c` `get_tx_fsr_byte`, `send_data` | §1cg FSR cap **reverted** (report true free — W5100-accurate). Oversize/desync (`data_len>1518`) → **drop** frame (`MACRAW tx len=0` + `OVERSIZE` ptrs), never emit stale-ring garbage; still retire host TX window |
+| `Sn_RX_RD` shadow publish point | §**1ch**, `uthernet2.c` `write_socket_register` | Publish `sn_rx_rd` **at `Sn_CR=RECV`** (both bytes final, core 1, order-independent) — **not** on low-byte write (§1cf tore lo-then-hi Contiki writes across 256 B → RECV storm) |
+| `Sn_RX_RSR` host-facing vs producer | §**1cj**, `uthernet2.c` `u2_rx_used_bytes_live` / `u2_rx_used_bytes` | Host RSR (`get_rx_rsr`, core 1) = **LIVE** `Sn_RX_RD` from `u2_memory` (shrinks as host drains). Core-0 producer free-space = **shadow** (tear-free, ≤ live ⇒ no overwrite). Shadow-at-RECV froze RSR → Contiki read past `wr` → storm |
+| RECV wedge self-heal (freeze **or** creep) | §**1ck→1cl**, `uthernet2.c` RECV handler `bad[]` + `U2_MonRecvResync` | Detect wedge by **impossible header** (`framesize<16 || >rsr`), not by frozen `rd`. Under bulk RX `Sn_RX_RD` **creeps** off-boundary so the old `rd==last_rd` guard never fired → storm ran until 6502 crashed. 3 consecutive impossible-header RECVs ⇒ resync `Sn_RX_RD→Sn_RX_WR` |
 | ADTProETH timeout vs captures | §**1aw** | **`rx_noroom`** = §**1au** **drops** (W5100-sized RX full); not fixed by bigger fake buffer; **`tcpdump`** UDP/6502 OK; UART **460800** |
 | UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
 | UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from CMake **`–DFIRMWARE_BUILD_TIMESTAMP`**). **`./build-debug.sh`** refreshes those vars each configure so the UF2 matches the UART line; **`cmake --build` alone** can leave a stale **`build_id.h`**. This stamp is **configure-time wall clock**, not the git commit author date — correlate binaries with the **build script run**, not only **`git log`**. |
@@ -2190,6 +2390,7 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 | `wget65` priority fixes | §10h, `uthernet2.c`, `ip65/apps/w5100.c` | SN_CR=RECV no longer forces `RX_RD->WR`; TCP SEND drains entire queued TX data in chunks (not single 2 KiB cap) |
 | TCP RX backpressure | §10i, §**10j**, §**10n**, `uthernet2_net.h`, `uthernet2.c`, `uthernet2_net.cpp` | §10i: `tcp_recved` only for accepted bytes; **§10j re-landed:** TCP ring **all-or-nothing**; **`ERR_MEM`** + **`refused_data`**; **`U2_Net_RecvConfirm`** flag + core-0 retry |
 | TCP TX backpressure | §**10j**, §**10n**, `uthernet2.c`, `uthernet2_net.cpp` | **§10j re-landed:** **`U2_Net_SendTcp`** returns accepted bytes; **`Sn_TX_RD`** advances only on success; **`U2_TryCompletePendingSends`** (**TCP ESTABLISHED** only) |
+| TCP TX accounting + UDP no-truncation (2026-07) | §**1bb**, `uthernet2.c` `send_data`, `uthernet2_net.{h,cpp}` | Re-land on current API: **`U2_Net_SendTcp`**→`int` clamps to **`tcp_sndbuf`**; **`send_data`** advances **`Sn_TX_RD`** by **accepted bytes** (remainder stays in FIFO ring, flushes in order next SEND). **`U2_Net_SendUdp`** copies from TX ring into pbuf (no 2 KiB truncation, no big buffer). RP2040 **Debug** pre-existing **460 B** RAM overflow (unrelated) |
 | U2 core-0 poll cadence | §**10u** (Phase 1), `ipc.h`, `main.c`, `uthernet2.c` | **`IPCCMD_NET_WAKE`** 1/ms from core 1; **`core0Loop`** FIFO **5 ms**; §10l otherwise unchanged |
 | Contiki wget / TCP | §**10l** only (`7adb4ee`), `uthernet2.c` | RX ring geometry; §10j–§10p **reverted** — re-land incrementally |
 | MegaFlash native NTP/DHCP vs U2 | ~~§**10m**~~ §**10n**, `network_pump.cpp`, `uthernet2_net.cpp` | **Reverted:** no **`IsLegacyOperationActive`** / **`U2_Net_ServicePoll`** |
@@ -2202,6 +2403,7 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 | P0-3 RX cross-core | §1al, `uthernet2.c`, `Uthernet-II-stack-architecture-and-todos.md` | `_Atomic` `sn_rx_rd`/`sn_rx_wr`; single **release** publish of `sn_rx_wr` after each UDP/TCP/MACRAW enqueue; **acquire** loads in `get_rx_rsr`; **UDP/TCP** one reload if ring appears full / TCP starved |
 | Inbound parity implementation (2026-05) | §1az, `uthernet2.c`, `u2_monitor.{h,c}`, `CMakeLists.txt`, `build-debug-both.sh` | W5100 drop-new MACRAW when full; **`sn_rx_wr`** remap on **`RMSR`** (not zero); **`Sn_TX_FSR`** safe when **`transmit_size==0`**; optional **`U2_MACRAW_COMPAT_DROP_OLDEST`**; **`U2_MonNetRxDrop`** rate-limited; atomic **`sn_rx_wr`** + sizing helper + `[u2m]` RX-drop telemetry |
 | U2 stack architecture + TODO / validation | `docs/Uthernet-II-stack-architecture-and-todos.md` | Mermaid diagrams, contract table, P0–P2 issues, validation checklists for stabilization work |
+| Apple IIc logo renders (HGR/DHGR/DLGR) | §24, `pico/assets/apple2-logo/` | Quantized previews + HGR `$2000` dump; DHGR uses 140×192 color cells → 560×192 |
 
 ---
 
@@ -2740,5 +2942,26 @@ This is intentionally conservative: the common case remains unchanged, but the c
 **What we did not do:** Integrate this test into `megaflash` runtime or the Applesoft validator; no change to default `SPI_SPEED_FINAL` based on JEDEC (policy remains: operator/hardware fix or future adaptive tuning).
 
 **References:** `MegaFlash/datasheets/W25Q512JV SPI RevB 06252019 KMS.pdf`, `MegaFlash/datasheets/AlliacheFlashDatasheet.pdf` (Alliance **AS25F3512MQ**), `pico/flash.c` (`InitSpi`, `SPI_SPEED_FINAL`, `tsReadOneBlock`, `tsWriteOneBlockWithoutErase`, `ReadFromFlashByDMA`, `BITINVERSION`), `pico/mediaaccess.c` (`WriteBlockForImageTransfer`), `pico/flash_si_test/main.c`, `pico/flash_si_test/xmodem_like.c`, `pico/flash_si_test/flash_si_softspi.c`, `pico/flash_si_test/flash_si_pins.c`, `pico/dmamemops.c`, `pico/CMakeLists.txt` (`MEGAFLASH_BUILD_FLASH_SI_TEST`).
+
+---
+
+## 24. MegaFlash logo → Apple IIc HGR / DHGR / DLGR assets (2026-07-12)
+
+**What:** Render the attached MegaFlash logo for Apple IIc display modes: **Hi-Res (280×192, 6 artifact colors)**, **Double Hi-Res (560×192 / 140×192 color cells, 16 colors)**, and **Double Low-Res (80×48, 16 colors)**.
+
+**Why:** Modern vector/PNG art must be remapped to real IIc constraints. HGR cannot freely mix Green/Violet with Orange/Blue in the same 7-pixel byte (high bit selects the set). DHGR’s useful color width is **140** cells, not 560 independent chroma samples. DLGR at 80×48 needs aggressive simplification so the badge silhouette remains readable.
+
+**What we did:**
+- Keyed out the near-white studio backdrop, fitted the badge on black, then quantized with Bayer dither where gradients matter.
+- HGR: per-byte palette-set choice (GV vs OB), plus an approximate **8192-byte** screen dump (`megaflash_hgr.bin`) for `$2000`.
+- DHGR: quantize at **140×192**, nearest-neighbor stretch to **560×192** for previews; keep a `.idx` color-cell map.
+- DLGR: BOX downsample to **80×48**, 16-color quantize; packed nibbles + `.idx` for a future poke routine.
+- Assets and regenerator live in `pico/assets/apple2-logo/` (`render_apple2_logo.py`, `README.md`).
+
+**What we did not do:** Full DHGR main/aux interleaved memory image; hand-pixel art pass for DLGR; load/display path on a connected emulator (none connected during this session).
+
+**Takeaway:** Previews are authoritative for “how it looks under each palette.” Binary HGR is loadable; DLGR/DHGR still need a small 6502 blitter for soft-switch + memory layout.
+
+**References:** `pico/assets/apple2-logo/`, `render_apple2_logo.py`, `megaflash_apple2_modes_sheet.png`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

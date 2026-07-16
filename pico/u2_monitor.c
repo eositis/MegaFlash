@@ -36,8 +36,11 @@ enum {
   U2M_NET_RXDROP,
   U2M_NET_MACTX,
   U2M_NET_MACTX_PTRS,
+  U2M_RECV_STALL,
+  U2M_RECV_RESYNC,
   U2M_MODE_LINE,
   U2M_DATA_READ_TRACE,
+  U2M_DATA_WRITE_TRACE,
   U2M_CHECKPOINT,
 };
 
@@ -158,7 +161,17 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
     printf("[u2m] %lu net sock%d MACRAW tx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
     break;
   case U2M_NET_MACTX_PTRS:
-    printf("[u2m] %lu net sock%d MACRAW ptrs len=%u rd=0x%04X wr=0x%04X rdm=0x%02X wrm=0x%02X\n",
+    printf("[u2m] %lu net sock%d MACRAW ptrs len=%u%s rd=0x%04X wr=0x%04X rdm=0x%02X wrm=0x%02X\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (e->w0 > 1518u) ? " OVERSIZE" : "",
+           (unsigned)e->w1 & 0xFFFFu, (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_STALL:
+    printf("[u2m] %lu sock%d RECV STALL rsr=%u rd=0x%04X rd_off=0x%04X hdr=%02X%02X (host RX_RD frozen)\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
+           (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_RESYNC:
+    printf("[u2m] %lu sock%d RECV RESYNC rsr=%u rd=0x%04X -> wr=0x%04X hdr=%02X%02X (wedge cleared, tail discarded)\n",
            (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
            (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
     break;
@@ -167,6 +180,10 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
     break;
   case U2M_DATA_READ_TRACE:
     printf("[u2] DATA read addr=0x%04X -> 0x%02X (MR=0x%02X)\n", (unsigned)e->w2, (unsigned)e->a2,
+           (unsigned)e->a1);
+    break;
+  case U2M_DATA_WRITE_TRACE:
+    printf("[u2] DATA write addr=0x%04X <- 0x%02X (MR=0x%02X)\n", (unsigned)e->w2, (unsigned)e->a2,
            (unsigned)e->a1);
     break;
   case U2M_CHECKPOINT:
@@ -232,6 +249,12 @@ void U2_MonQueueModeLine(uint8_t mr) {
 void U2_MonDataReadTrace(uint16_t addr, uint8_t val, uint8_t mr) {
   u2_mon_evt_t ev = {
       .t_us = time_us_32(), .op = U2M_DATA_READ_TRACE, .a1 = mr, .a2 = val, .w2 = (uint32_t)addr};
+  u2_mon_push(&ev);
+}
+
+void U2_MonDataWriteTrace(uint16_t addr, uint8_t val, uint8_t mr) {
+  u2_mon_evt_t ev = {
+      .t_us = time_us_32(), .op = U2M_DATA_WRITE_TRACE, .a1 = mr, .a2 = val, .w2 = (uint32_t)addr};
   u2_mon_push(&ev);
 }
 
@@ -370,6 +393,30 @@ void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr
   u2_mon_push(&ev);
 }
 
+void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_STALL,
+                     .a0 = (uint8_t)sock,
+                     .a1 = h0,
+                     .a2 = h1,
+                     .w0 = rsr,
+                     .w1 = rd_full,
+                     .w2 = wr_off};
+  u2_mon_push(&ev);
+}
+
+void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_RESYNC,
+                     .a0 = (uint8_t)sock,
+                     .a1 = h0,
+                     .a2 = h1,
+                     .w0 = rsr,
+                     .w1 = rd_full,
+                     .w2 = wr_full};
+  u2_mon_push(&ev);
+}
+
 #else /* !U2_ACTIVITY_MONITOR */
 
 #include <stddef.h>
@@ -455,9 +502,30 @@ void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr
   (void)rd_masked;
   (void)wr_masked;
 }
+void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1) {
+  (void)sock;
+  (void)rsr;
+  (void)rd_full;
+  (void)wr_off;
+  (void)h0;
+  (void)h1;
+}
+void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1) {
+  (void)sock;
+  (void)rsr;
+  (void)rd_full;
+  (void)wr_full;
+  (void)h0;
+  (void)h1;
+}
 
 void U2_MonQueueModeLine(uint8_t mr) { (void)mr; }
 void U2_MonDataReadTrace(uint16_t addr, uint8_t val, uint8_t mr) {
+  (void)addr;
+  (void)val;
+  (void)mr;
+}
+void U2_MonDataWriteTrace(uint16_t addr, uint8_t val, uint8_t mr) {
   (void)addr;
   (void)val;
   (void)mr;

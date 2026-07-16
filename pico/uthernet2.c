@@ -60,6 +60,12 @@ typedef struct {
   uint16_t register_address;
   /* RX producer: monotonic byte counter; mask only for ring indexing (§10l). */
   uint16_t sn_rx_wr;
+  /* Atomic, always-complete shadow of the host-visible Sn_RX_RD (consumer pointer).
+   * The 6502 driver updates Sn_RX_RD as two byte stores (hi @ $x28, then lo @ $x29) on core 1;
+   * core 0 must never observe the half-updated new_hi:old_lo value or it will over-estimate the
+   * consumed region and overwrite unread ring bytes. We publish this shadow atomically when the
+   * host completes the low byte (see write_socket_register) and core 0 reads it here (§1cf). */
+  uint16_t sn_rx_rd;
 } u2_socket_t;
 
 static u2_socket_t u2_sockets[W5100_NUM_SOCKETS];
@@ -93,26 +99,68 @@ static inline void u2_rx_wr_store(u2_socket_t *s, uint16_t wr) {
   __atomic_store_n(&s->sn_rx_wr, wr, __ATOMIC_RELEASE);
 }
 
-/* Host writes Sn_RX_RD0/1 as two 8-bit stores on core 1; core 0 may read mid-update. */
-static uint16_t read_rx_rd_coherent(const u2_socket_t *s) {
-  const uint8_t *p = &u2_memory[s->register_address + W5100_SN_RX_RD0];
-  uint8_t hi1 = p[0];
-  uint8_t lo = p[1];
-  uint8_t hi2 = p[0];
-  if (hi1 == hi2)
-    return (uint16_t)((hi1 << 8) | lo);
-  return (uint16_t)((hi2 << 8) | lo);
+/* Reset a socket's RX/TX ring pointers to a coherent empty state (RSR=0, FSR=full).
+ * A real W5100 initializes the socket's internal pointers on the OPEN command, so the driver
+ * sees Sn_RX_RSR=0 on a freshly opened socket. We had never done this: the FIRST OPEN after a
+ * chip reset was fine (pointers already 0), but a SECOND OPEN that reused a socket (e.g. Contiki
+ * opening MACRAW socket 0 after a prior telnet session) left sn_rx_wr at the previous session's
+ * offset. Sn_RX_RSR = wr - rd was then non-zero, so ip65's poll() "received" a garbage frame,
+ * advanced Sn_RX_RD by a bogus length header, and RSR never converged to 0 -> an unbounded
+ * "sock0 RECV" storm and no DNS/connection progress. Zeroing both producer and consumer on OPEN
+ * matches hardware and stops the storm. */
+static void u2_reset_socket_rings(int i) {
+  u2_socket_t *s = &u2_sockets[i];
+  uint16_t reg = s->register_address;
+  u2_rx_wr_store(s, 0);
+  __atomic_store_n(&s->sn_rx_rd, 0, __ATOMIC_RELEASE);
+  u2_memory[reg + W5100_SN_RX_RD0] = 0;
+  u2_memory[reg + W5100_SN_RX_RD1] = 0;
+  u2_memory[reg + W5100_SN_TX_RD0] = 0;
+  u2_memory[reg + W5100_SN_TX_RD1] = 0;
+  u2_memory[reg + W5100_SN_TX_WR0] = 0;
+  u2_memory[reg + W5100_SN_TX_WR1] = 0;
+}
+
+static inline uint16_t u2_rx_rd_load(const u2_socket_t *s) {
+  return __atomic_load_n(&s->sn_rx_rd, __ATOMIC_ACQUIRE);
 }
 
 /* Unread bytes in emulated RX ring. ip65 keeps Sn_RX_RD as a physical W5100 address;
- * mask extracts ring offset when receive_base is size-aligned (RMSR layout). */
+ * mask extracts ring offset when receive_base is size-aligned (RMSR layout).
+ * rd is read from the atomic shadow (never the raw u2_memory byte pair) to avoid the
+ * cross-core new_hi:old_lo tear that let core 0 overwrite unread bytes (§1cf). */
 static uint16_t u2_rx_used_bytes(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t size = s->receive_size;
   if (size == 0)
     return 0;
   uint16_t mask = size - 1;
-  uint16_t rd_off = (uint16_t)(read_rx_rd_coherent(s) & mask);
+  uint16_t rd_off = (uint16_t)(u2_rx_rd_load(s) & mask);
+  uint16_t wr_off = (uint16_t)(u2_rx_wr_load(s) & mask);
+  int d = (int)wr_off - (int)rd_off;
+  if (d < 0)
+    d += (int)size;
+  return (uint16_t)d;
+}
+
+/* Host-facing occupancy (Sn_RX_RSR). MUST read the LIVE Sn_RX_RD from u2_memory, not the core-0
+ * shadow: this runs on core 1 (the same core that writes Sn_RX_RD), so it is coherent, and it lets
+ * RSR shrink AS the host advances Sn_RX_RD between frame reads. §1ch published the shadow only at
+ * the RECV command, so a driver that reads several frames per RECV (Contiki under load) saw RSR
+ * stay high while it drained, kept reading PAST Sn_RX_WR into stale ring bytes, mis-parsed a length
+ * header, and stalled Sn_RX_RD → the unbounded "sock0 RECV" storm (§1cj). Core 0's producer free-
+ * space math still uses the tear-free shadow (u2_rx_used_bytes) so it can never overwrite unread
+ * data (shadow ≤ live rd ⇒ conservative). */
+static uint16_t u2_rx_used_bytes_live(int i) {
+  const u2_socket_t *s = &u2_sockets[i];
+  uint16_t size = s->receive_size;
+  if (size == 0)
+    return 0;
+  uint16_t mask = size - 1;
+  uint16_t ra = s->register_address;
+  uint16_t rd = (uint16_t)(((uint16_t)u2_memory[ra + W5100_SN_RX_RD0] << 8)
+                           | u2_memory[ra + W5100_SN_RX_RD1]);
+  uint16_t rd_off = (uint16_t)(rd & mask);
   uint16_t wr_off = (uint16_t)(u2_rx_wr_load(s) & mask);
   int d = (int)wr_off - (int)rd_off;
   if (d < 0)
@@ -176,6 +224,7 @@ static void u2_reset(void) {
     u2_sockets[i].receive_size = 0;
     u2_sockets[i].register_address = (uint16_t)(W5100_S0_BASE + (i << 8));
     u2_sockets[i].sn_rx_wr = 0;
+    u2_sockets[i].sn_rx_rd = 0;
   }
   /* RTR/RCR: ip65 w5100.s probes $0017/$0018 with XOR; must match or init returns SEC → "Device not found". */
   u2_memory[W5100_RTR0] = 0x07;
@@ -235,13 +284,18 @@ static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
   uint16_t ts = u2_sockets[i].transmit_size;
   if (ts == 0)
     return 0;
+  /* Report the TRUE free TX space (W5100-accurate). §1cg previously capped MACRAW FSR at 1518
+   * to stop >MTU queueing, but that made us lie about the register: a host that derives its
+   * Sn_TX_WR from FSR then computed garbage pointers (telnet65: wild Sn_TX_WR high bytes 0xEE/
+   * 0xEF ≈ 1518=0x05EE) and DNS never egressed (§1ci). Oversize is now handled defensively in
+   * send_data (drop the desynced frame instead of lying about FSR). */
   uint16_t free_size = ts - get_tx_data_size(i);
   return get_byte((uint16_t)free_size, shift);
 }
 
-/* W5100 RX occupancy: RSR = unread bytes in ring (§10l). */
+/* W5100 RX occupancy: RSR = unread bytes in ring (§10l). Host-facing ⇒ LIVE rd (§1cj). */
 static uint16_t get_rx_rsr(int i) {
-  return u2_rx_used_bytes(i);
+  return u2_rx_used_bytes_live(i);
 }
 
 static uint8_t get_rx_rsr_byte(int i, unsigned shift) {
@@ -374,24 +428,27 @@ static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int 
   uint16_t total = len;
   if (is_udp) {
     total += 8;  /* 4 + 2 + 2 */
-    if (free_bytes < total) {
+    if (free_bytes <= total) {
       used = u2_rx_used_bytes(socket_i);
       free_bytes = size - used;
-      if (free_bytes < total) {
+      if (free_bytes <= total) {
         U2_MonNetRxDrop(socket_i, U2_RX_PROTO_UDP, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
         return 0;  /* UDP datagram is atomic */
       }
     }
   } else {
-    if (free_bytes == 0) {
+    /* Reserve one byte (see MACRAW note in u2_push_rx_macraw): keep >=1 byte free so used
+     * never reaches size, which would read back as an empty ring. */
+    if (free_bytes <= 1) {
       used = u2_rx_used_bytes(socket_i);
       free_bytes = size - used;
-      if (free_bytes == 0) {
+      if (free_bytes <= 1) {
         U2_MonNetRxDrop(socket_i, U2_RX_PROTO_TCP, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
         return 0;
       }
     }
-    if (accept_len > free_bytes) accept_len = free_bytes;
+    uint16_t usable = (uint16_t)(free_bytes - 1);
+    if (accept_len > usable) accept_len = usable;
     total = accept_len;
     if (accept_len < len)
       U2_MonNetRxDrop(socket_i, U2_RX_PROTO_TCP, U2_RX_DROP_PARTIAL, len, accept_len, free_bytes, size);
@@ -434,12 +491,28 @@ static void u2_socket_discard_rx(int socket_i) {
   uint16_t ra = s->register_address;
   u2_memory[ra + W5100_SN_RX_RD0] = (uint8_t)(physical_rd >> 8);
   u2_memory[ra + W5100_SN_RX_RD1] = (uint8_t)(physical_rd & 0xFF);
+  __atomic_store_n(&s->sn_rx_rd, physical_rd, __ATOMIC_RELEASE); /* keep core-0 shadow coherent (§1cf) */
 }
 
 /* Push MACRAW frame: 2-byte length (big-endian) then frame data. */
 static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS || !data) return;
   u2_socket_t *s = &u2_sockets[socket_i];
+  /* Honor the MACRAW MAC Filter (Sn_MR MF bit): a real W5100 in MACRAW+MF mode delivers only
+   * frames addressed to its own MAC (SHAR) or broadcast. ip65/Contiki open socket 0 with
+   * Sn_MR=0x44 and rely on this. Without it we copy every frame the STA sees (broadcast +
+   * multicast + our unicast) into the small RX ring, which floods it with ambient traffic and
+   * intermittently drops the unicast ARP reply / DNS response the host is waiting on. Dropping
+   * filtered frames is normal hardware behavior (not an error), so do it silently. */
+  if ((u2_memory[s->register_address + W5100_SN_MR] & W5100_SN_MR_MF) && len >= 6) {
+    const uint8_t *dm = data; /* Ethernet destination MAC = first 6 bytes of the raw frame */
+    int is_broadcast = (dm[0] & dm[1] & dm[2] & dm[3] & dm[4] & dm[5]) == 0xFF;
+    int is_ours = dm[0] == u2_memory[W5100_SHAR0 + 0] && dm[1] == u2_memory[W5100_SHAR0 + 1] &&
+                  dm[2] == u2_memory[W5100_SHAR0 + 2] && dm[3] == u2_memory[W5100_SHAR0 + 3] &&
+                  dm[4] == u2_memory[W5100_SHAR0 + 4] && dm[5] == u2_memory[W5100_SHAR0 + 5];
+    if (!is_broadcast && !is_ours)
+      return;
+  }
   uint16_t size = s->receive_size;
   if (size == 0) return;
   uint16_t mask = size - 1;
@@ -447,22 +520,25 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   uint16_t total = (uint16_t)(2 + len);
   uint16_t used = u2_rx_used_bytes(socket_i);
   uint16_t free_bytes = size - used;
-  if (total > size) {
+  /* Reserve one byte: never let used reach size. wr_off==rd_off is otherwise ambiguous
+   * (empty vs full) since RSR is derived from wr-rd, and "full" would read back as empty,
+   * silently discarding a full ring during bulk RX (§1cf). Hence the >=/<= comparisons. */
+  if (total >= size) {
     U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_FRAME_TOO_BIG, len, 0, free_bytes, size);
     return;
   }
-  if (free_bytes < total) {
+  if (free_bytes <= total) {
 #if U2_MACRAW_COMPAT_DROP_OLDEST
     /* Compatibility: flush unread once so DHCP/ARP bursts can progress (enable via -DU2_MACRAW_COMPAT_DROP_OLDEST=1). */
     u2_socket_discard_rx(socket_i);
     used = u2_rx_used_bytes(socket_i);
     free_bytes = size - used;
 #endif
-    if (free_bytes < total) {
+    if (free_bytes <= total) {
       used = u2_rx_used_bytes(socket_i);
       free_bytes = size - used;
     }
-    if (free_bytes < total) {
+    if (free_bytes <= total) {
       U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
       return;
     }
@@ -497,6 +573,7 @@ static int send_data(int i) {
   if (data_len < 0) data_len += buf_size;
   if (data_len == 0) return 0;
   uint16_t base = s->transmit_base;
+  uint16_t consumed = (uint16_t)data_len; /* bytes to advance Sn_TX_RD past */
   uint8_t status = U2_Net_GetStatus(i);
   if (status == W5100_SN_SR_SOCK_UDP) {
     uint32_t dip = (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR0] << 24
@@ -505,17 +582,15 @@ static int send_data(int i) {
                   | (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR3];
     uint16_t dport = (uint16_t)u2_memory[s->register_address + W5100_SN_DPORT0] << 8
                   | (uint16_t)u2_memory[s->register_address + W5100_SN_DPORT1];
-    /* Copy payload out (may wrap) */
-    uint8_t buf[2048];
-    int n = data_len;
-    if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
-    for (int j = 0; j < n; j++)
-      buf[j] = u2_memory[base + ((rd + j) & mask)];
-    U2_MonNetUdpSend(i, dip, dport, (uint16_t)n);
-    U2_Net_SendUdp(i, buf, (uint16_t)n, dip, dport);
+    /* Item 3: send the whole datagram with no truncation and no large scratch buffer.
+     * The net layer copies straight from the (possibly wrapping) TX ring into the pbuf. */
+    U2_MonNetUdpSend(i, dip, dport, (uint16_t)data_len);
+    U2_Net_SendUdp(i, &u2_memory[base], buf_size, rd, (uint16_t)data_len, dip, dport);
+    consumed = (uint16_t)data_len; /* UDP datagram is atomic: always drain fully */
   } else if (status == W5100_SN_SR_ESTABLISHED) {
-    /* Shared-access clients (e.g. wget65) can queue >2 KiB before SEND.
-     * Send in chunks so one SEND command drains the full TX window. */
+    /* Shared-access clients (e.g. wget65) can queue >2 KiB before SEND. Send in chunks and
+     * respect lwIP backpressure: advance TX_RD only by bytes lwIP accepted. Any remainder
+     * stays in the FIFO TX ring and flushes in order on the host's next SEND (no loss). */
     uint8_t buf[1024];
     int remaining = data_len;
     int pos = 0;
@@ -525,31 +600,55 @@ static int send_data(int i) {
       if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
       for (int j = 0; j < n; j++)
         buf[j] = u2_memory[base + ((rd + pos + j) & mask)];
-      U2_Net_SendTcp(i, buf, (uint16_t)n);
-      pos += n;
-      remaining -= n;
+      int acc = U2_Net_SendTcp(i, buf, (uint16_t)n);
+      if (acc < 0)
+        break; /* fatal socket error: stop, keep remainder in ring */
+      pos += acc;
+      remaining -= acc;
+      if (acc < n)
+        break; /* lwIP send buffer full: leave remainder queued */
     }
+    consumed = (uint16_t)pos;
   } else if (status == W5100_SN_SR_SOCK_MACRAW) {
     uint8_t buf[1518];
-    int n = data_len;
-    if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
-    U2_MonNetMacrawTxPtrs(i, (uint16_t)n, rd_full, wr_full, rd, wr);
-    for (int j = 0; j < n; j++)
-      buf[j] = u2_memory[base + ((rd + j) & mask)];
-    U2_MonNetMacrawTx(i, (uint16_t)n);
-    if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0)
-      return -1;
+    /* Log the true RD→WR span so oversize/desync is visible on UART (OVERSIZE tag if >1518). */
+    U2_MonNetMacrawTxPtrs(i, (uint16_t)data_len, rd_full, wr_full, rd, wr);
+    if (data_len > (int)sizeof(buf)) {
+      /* data_len > one max Ethernet frame ⇒ host TX_WR/TX_RD desync (garbage Sn_TX_WR, e.g.
+       * 0xEFxx). A real single MACRAW frame is ≤1518. Do NOT blast stale ring bytes onto the
+       * wire — that emits a corrupt Ethernet frame that peers/switches drop (why the DNS server
+       * never replied, §1ci). Drop this frame but still retire the full host TX window so the
+       * pointers re-sync and Sn_TX_FSR recovers. */
+      U2_MonNetMacrawTx(i, 0); /* len=0 paired with an OVERSIZE ptrs line == desync drop */
+      consumed = (uint16_t)data_len;
+    } else {
+      int n = data_len;
+      for (int j = 0; j < n; j++)
+        buf[j] = u2_memory[base + ((rd + j) & mask)];
+      U2_MonNetMacrawTx(i, (uint16_t)n);
+      if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0)
+        return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
+      consumed = (uint16_t)data_len;
+    }
   }
-  /* Advance TX_RD to TX_WR */
-  /* Keep full host-visible pointer progression; only ring indexing is masked. */
-  u2_memory[s->register_address + W5100_SN_TX_RD0] = (uint8_t)(wr_full >> 8);
-  u2_memory[s->register_address + W5100_SN_TX_RD1] = (uint8_t)wr_full;
+  /* Advance TX_RD by the bytes actually consumed (full host-visible pointer progression;
+   * only ring indexing is masked). */
+  uint16_t new_rd = (uint16_t)(rd_full + consumed);
+  u2_memory[s->register_address + W5100_SN_TX_RD0] = (uint8_t)(new_rd >> 8);
+  u2_memory[s->register_address + W5100_SN_TX_RD1] = (uint8_t)new_rd;
   return 0;
 }
 
 static void write_socket_register(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
   uint16_t loc = address & 0xFF;
+  /* NOTE: Sn_RX_RD byte writes deliberately do NOT publish the core-0 shadow. On a real W5100
+   * the host's Sn_RX_RD update only takes effect (Sn_RX_RSR is recomputed) when the RECV command
+   * is issued; the shadow is therefore published in the RECV handler below, where both RX_RD bytes
+   * are final. Publishing on the low-byte write (§1cf) assumed the driver writes RX_RD hi-then-lo
+   * (ip65); Contiki writes lo-then-hi, so publishing on the low byte captured {old_hi:new_lo} and
+   * never re-published the high byte — across a 256-byte boundary the shadow lagged by 256 and
+   * over-reported Sn_RX_RSR, resurrecting the unbounded "sock0 RECV" storm (§1ch). */
   if (loc == W5100_SN_CR) {
     int i = (address >> 8) - 0x04;
     switch (value) {
@@ -557,6 +656,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       uint8_t mr = u2_memory[(address & 0xFF00) + W5100_SN_MR];
       uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      /* Hardware resets the socket's ring pointers on OPEN; do the same so a reused socket
+       * starts with Sn_RX_RSR=0 (see u2_reset_socket_rings — fixes the Contiki RECV storm). */
+      u2_reset_socket_rings(i);
       switch (mr & W5100_SN_MR_PROTO_MASK) {
       case W5100_SN_MR_UDP: {
         int ok = (U2_Net_OpenUdp(i, port) == 0);
@@ -640,6 +742,72 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       /* W5100 semantics: host updates RX_RD to consumed length before RECV.
        * Do not force RX_RD->WR here; that drops unread tail data and breaks
        * shared-access partial reads (notably wget65). */
+      /* Publish the host's committed Sn_RX_RD to the core-0 shadow HERE — the authoritative,
+       * driver-order-independent sync point (§1ch). Both RX_RD bytes are final at RECV, so
+       * core 0's free-space math and Sn_RX_RSR never see a torn/boundary-crossed pointer
+       * whether the driver wrote hi-then-lo (ip65) or lo-then-hi (Contiki). The published
+       * value is always a real committed RD (never ahead of reality → never overwrites
+       * unread bytes; never staled-low across a boundary → RSR converges to 0, no storm). */
+      {
+        uint16_t ra = u2_sockets[i].register_address;
+        uint16_t rd = (uint16_t)(((uint16_t)u2_memory[ra + W5100_SN_RX_RD0] << 8)
+                                 | u2_memory[ra + W5100_SN_RX_RD1]);
+        __atomic_store_n(&u2_sockets[i].sn_rx_rd, rd, __ATOMIC_RELEASE);
+        /* MACRAW RX wedge detect + recovery (§1ck). A single-chip W5100 can never present a frame
+         * whose 2-byte length header is 0x0000 (min header = frame_len + 2 ≥ 16) or larger than
+         * Sn_RX_RSR. In our dual-core model the host's Sn_RX_RD can very occasionally land off a
+         * frame boundary under bulk RX (large frames wrapping the 4 KiB ring): it then reads a bogus
+         * length, advances Sn_RX_RD by the wrong amount, and eventually parks on interior zero
+         * padding → length 0 → Sn_RX_RD frozen → the host spins RECV forever ("sock0 RECV" storm,
+         * only cured by an app restart). Because such a header is IMPOSSIBLE on real hardware, we
+         * treat a persistent frozen-rd + impossible-header as a desync and restore the single-chip
+         * invariant: resync Sn_RX_RD to the producer write pointer (discard the unreachable tail).
+         * Sn_RX_RSR then collapses to 0, the next frame lands on a clean boundary, and the host
+         * recovers on its own (its TCP retransmits any dropped payload). Guarded on an impossible
+         * header + a few consecutive stalled RECVs so it never fires during normal draining. */
+        {
+          /* §1ck relied on Sn_RX_RD being *exactly* frozen to detect the wedge. Under bulk RX the
+           * host's Sn_RX_RD instead *creeps* — it reads a bogus length, advances by the wrong (often
+           * small) amount, and parks on interior bytes rather than a frame boundary. So rd is never
+           * equal on two consecutive RECVs and the old freeze test never fired, letting the storm run
+           * until the 6502 crashed (§1cl). Key the detector on the *header* instead: a real single-
+           * chip W5100 always presents a length = frame_len + 2 (≥ 62 for a padded Ethernet frame, and
+           * always ≤ Sn_RX_RSR). A header outside that range means Sn_RX_RD is off a frame boundary,
+           * whether it froze or crept. After a few consecutive impossible-header RECVs we restore the
+           * single-chip invariant by resyncing Sn_RX_RD to the producer write pointer; Sn_RX_RSR then
+           * collapses to 0, the next frame lands clean, and the host recovers (TCP retransmits the
+           * discarded tail). Genuine draining always reads at a boundary, so bad stays 0. */
+          static uint16_t bad[W5100_NUM_SOCKETS];
+          uint16_t sz = u2_sockets[i].receive_size;
+          if (sz) {
+            uint16_t m = sz - 1;
+            uint16_t rsr = u2_rx_used_bytes_live(i);
+            uint16_t off = (uint16_t)(rd & m);
+            uint16_t rb = u2_sockets[i].receive_base;
+            uint8_t h0 = u2_memory[rb + off];
+            uint8_t h1 = u2_memory[rb + ((off + 1u) & m)];
+            uint16_t framesize = (uint16_t)(((uint16_t)h0 << 8) | h1);
+            int impossible = (rsr > 0) && (framesize < 16u || framesize > rsr);
+            if (impossible) {
+              bad[i]++;
+#if UTHERNET2_DEBUG
+              if (bad[i] == 1u || (bad[i] & 0x3FFu) == 0u)
+                U2_MonRecvStall(i, rsr, rd, off, h0, h1);
+#endif
+              if (bad[i] >= 3u) {
+                uint16_t wr = u2_rx_wr_load(&u2_sockets[i]);
+                u2_memory[ra + W5100_SN_RX_RD0] = (uint8_t)(wr >> 8);
+                u2_memory[ra + W5100_SN_RX_RD1] = (uint8_t)wr;
+                __atomic_store_n(&u2_sockets[i].sn_rx_rd, wr, __ATOMIC_RELEASE);
+                U2_MonRecvResync(i, rsr, rd, wr, h0, h1);
+                bad[i] = 0;
+              }
+            } else {
+              bad[i] = 0;
+            }
+          }
+        }
+      }
       U2_Net_RecvConfirm(i);
       U2_RequestCore0NetPoll();
       break;
@@ -666,7 +834,16 @@ static void U2_BUS_RAM(write_value_at)(uint16_t address, uint8_t value) {
 }
 
 static void U2_BUS_RAM(write_value)(uint8_t value) {
-  write_value_at(u2_data_address, value);
+  uint16_t wr_addr = u2_data_address;
+  write_value_at(wr_addr, value);
+#if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
+  /* Shares the 48-op budget armed on MR=0x03 so a capture shows the driver's detection
+   * writes (invisible before) interleaved with the DATA reads. */
+  if (u2_ip65_data_trace_left > 0) {
+    U2_MonDataWriteTrace(wr_addr, value, u2_mode_register);
+    u2_ip65_data_trace_left--;
+  }
+#endif
   auto_increment();
 }
 

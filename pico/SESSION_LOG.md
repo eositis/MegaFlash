@@ -113,5 +113,8 @@
 - **Debug builds + git:** **`pico/build-env.sh`** **`mf_debug_build_git_commit`** — after **`build-debug.sh`** / **`build-debug-both.sh`** succeed, **`git commit --allow-empty`** at repo root (marker + **`U2_*`** / timestamps for **`-both`**); skip with **`MF_DEBUG_BUILD_NO_GIT_COMMIT=1`**. **`docs/Implementation-notes-and-reasoning.md`** summary table row.
 - **Git:** `git reset --hard 1.2.1-eo` at **MegaFlash** repo root — **HEAD** **`483e8da`** matches tag **`1.2.1-eo`**; dropped **3** local commits that were on **`main`** ahead of **`origin/main`**. Untracked files (debug logs, **`.cursor/rules`**, **`docs/Uthernet-II-stack-architecture-and-todos.md`**, etc.) were **not** removed.
 
+## 2026-07-12
+- **Apple IIc logo renders:** Quantized MegaFlash logo for **HGR 280×192 (6 colors)**, **DHGR 560×192 / 140 color cells (16)**, **DLGR 80×48 (16)** into `pico/assets/apple2-logo/` (previews, native PNGs, `megaflash_hgr.bin` @ `$2000`, DLGR packed/idx). Regenerator `render_apple2_logo.py`. Documented in `docs/Implementation-notes-and-reasoning.md` §24. **Why:** match real IIc palette/resolution constraints for on-machine display.
+
 Append new entries above this line
 

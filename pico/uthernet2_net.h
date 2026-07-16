@@ -32,8 +32,12 @@ int  U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len);
 void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len);
 int  U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_t local_port);
 int  U2_Net_ListenTcp(int i, uint16_t local_port);
-void U2_Net_SendUdp(int i, const uint8_t *data, uint16_t len, uint32_t dest_ip_net, uint16_t dest_port);
-void U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len);
+/** Send a UDP datagram copied from the socket TX ring (handles wrap; ring_size must be power of two).
+ * Copies directly into the pbuf so no large intermediate buffer is needed. */
+void U2_Net_SendUdp(int i, const uint8_t *ring_base, uint16_t ring_size, uint16_t start_off,
+                    uint16_t len, uint32_t dest_ip_net, uint16_t dest_port);
+/** Returns bytes accepted by lwIP (0..len; may be < len under backpressure), or -1 on socket error. */
+int U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len);
 void U2_Net_RecvConfirm(int i);
 
 uint8_t U2_Net_GetStatus(int i);

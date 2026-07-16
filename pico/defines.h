@@ -10,8 +10,8 @@
 
 ****************************************************/
 
-#define FIRMWAREVER     0x0022
-#define FIRMWAREVERSTR  "V1.2.2-eo"
+#define FIRMWAREVER     0x0023
+#define FIRMWAREVERSTR  "V1.2.3-eo"
 // Per-build id is NOT here: CMake generates build_id.h (Unix + human-readable UTC string; see build_id.h.in, build-both.sh).
 // 0x0000 = V0.1
 // 0x0001 = V0.2   18-Apr-2025
@@ -45,6 +45,7 @@
 // 0x0020 = V1.2.0-eo 21-Mar-2026  (1.2.x series: Uthernet II, com port, imagewriter)
 // 0x0021 = V1.2.1-eo 26-Apr-2026
 // 0x0022 = V1.2.2-eo 27-Jun-2026
+// 0x0023 = V1.2.3-eo 16-Jul-2026
 
 //Deivce Signature Bytes
 #define SIGNATURE1 0x88

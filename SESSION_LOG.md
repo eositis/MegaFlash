@@ -4,6 +4,10 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-07-16
+
+- **Incremented release build:** Ran `pico/cmakeall.sh`, advancing firmware to `V1.2.3-eo` (`0x0023`) and successfully building Pico W and Pico 2 W release UF2s under `pico/_releases/V1.2.3-eo/`. Verified both artifacts with SHA-256 checksums.
+
 ## 2026-07-12
 
 - **RECV wedge self-heal now catches *creeping* `Sn_RX_RD`, not just frozen (§1ck→1cl):** `sensoroni_onion_1022.pcap` + serial (§1ck build, banner `20:16:30`): telnet connect + interactive worked cleanly (§1cj/§1ci held); then a bulk transfer (~590 B frames) overflowed the 4 KiB MACRAW ring (`no-room offered=590 free=45→17`), the host entered an ~8 µs RECV burst, and at t≈131 s the 6502 telnet **stopped entirely** — ring stuck full while the server retransmitted every ~3 s (the "reconnect swamped" state). **Neither `RECV STALL` nor `RECV RESYNC` fired.** Root cause of the missed self-heal: §1ck required `Sn_RX_RD` *exactly frozen* (`rd==last_rd`), but under bulk RX `rd` **creeps** off-boundary (reads bogus length, advances wrong small amount), so the freeze counter reset every RECV and the storm ran until the 6502 crashed. **Fix (`pico/uthernet2.c` RECV handler):** key detection on the **header** (invariant to freeze vs creep) — count consecutive *impossible-header* RECVs (`framesize<16 || >Sn_RX_RSR`), resync `Sn_RX_RD→Sn_RX_WR` after 3 in a row. Removed frozen-only `last_rd`/`stall` state; kept `U2_MonRecvStall` onset diagnostic. Did **not** enlarge the ring (W5100-sized overflow/drop/retransmit is correct). Reconfigured+rebuilt `pico2_debug/megaflash.uf2` (banner `2026-07-12 20:30:24 UTC`). See `docs/Implementation-notes-and-reasoning.md` §1ck→1cl.

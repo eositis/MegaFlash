@@ -66,6 +66,11 @@ typedef struct {
    * consumed region and overwrite unread ring bytes. We publish this shadow atomically when the
    * host completes the low byte (see write_socket_register) and core 0 reads it here (§1cf). */
   uint16_t sn_rx_rd;
+  /* Datasheet: Sn_RX_RSR / Sn_TX_FSR must be read upper-byte then lower-byte. Latch the full
+   * 16-bit value on the high-byte read so the low-byte cannot tear against a concurrent core-0
+   * producer update (§1cm). Matches Wiznet guidance and AppleWin's stable register return. */
+  uint16_t sn_rx_rsr_latch;
+  uint16_t sn_tx_fsr_latch;
 } u2_socket_t;
 
 static u2_socket_t u2_sockets[W5100_NUM_SOCKETS];
@@ -225,6 +230,8 @@ static void u2_reset(void) {
     u2_sockets[i].register_address = (uint16_t)(W5100_S0_BASE + (i << 8));
     u2_sockets[i].sn_rx_wr = 0;
     u2_sockets[i].sn_rx_rd = 0;
+    u2_sockets[i].sn_rx_rsr_latch = 0;
+    u2_sockets[i].sn_tx_fsr_latch = 0;
   }
   /* RTR/RCR: ip65 w5100.s probes $0017/$0018 with XOR; must match or init returns SEC → "Device not found". */
   u2_memory[W5100_RTR0] = 0x07;
@@ -280,7 +287,7 @@ static uint16_t get_tx_data_size(int i) {
   return (uint16_t)data;
 }
 
-static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
+static uint16_t get_tx_fsr(int i) {
   uint16_t ts = u2_sockets[i].transmit_size;
   if (ts == 0)
     return 0;
@@ -289,17 +296,12 @@ static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
    * Sn_TX_WR from FSR then computed garbage pointers (telnet65: wild Sn_TX_WR high bytes 0xEE/
    * 0xEF ≈ 1518=0x05EE) and DNS never egressed (§1ci). Oversize is now handled defensively in
    * send_data (drop the desynced frame instead of lying about FSR). */
-  uint16_t free_size = ts - get_tx_data_size(i);
-  return get_byte((uint16_t)free_size, shift);
+  return (uint16_t)(ts - get_tx_data_size(i));
 }
 
 /* W5100 RX occupancy: RSR = unread bytes in ring (§10l). Host-facing ⇒ LIVE rd (§1cj). */
 static uint16_t get_rx_rsr(int i) {
   return u2_rx_used_bytes_live(i);
-}
-
-static uint8_t get_rx_rsr_byte(int i, unsigned shift) {
-  return get_byte(get_rx_rsr(i), shift);
 }
 
 static uint8_t read_socket_register(uint16_t address) {
@@ -312,9 +314,11 @@ static uint8_t read_socket_register(uint16_t address) {
   case W5100_SN_SR:
     return U2_Net_GetStatus(i);
   case W5100_SN_TX_FSR0:
-    return get_tx_fsr_byte(i, 8);
+    /* Latch full FSR on upper-byte read (datasheet order); low byte returns the latch (§1cm). */
+    u2_sockets[i].sn_tx_fsr_latch = get_tx_fsr(i);
+    return get_byte(u2_sockets[i].sn_tx_fsr_latch, 8);
   case W5100_SN_TX_FSR1:
-    return get_tx_fsr_byte(i, 0);
+    return get_byte(u2_sockets[i].sn_tx_fsr_latch, 0);
   case W5100_SN_TX_RD0:
     return u2_memory[address];
   case W5100_SN_TX_RD1:
@@ -324,9 +328,11 @@ static uint8_t read_socket_register(uint16_t address) {
   case W5100_SN_TX_WR1:
     return u2_memory[address];
   case W5100_SN_RX_RSR0:
-    return get_rx_rsr_byte(i, 8);
+    /* Latch full RSR on upper-byte read so RSR1 cannot sample a different wr/rd (§1cm). */
+    u2_sockets[i].sn_rx_rsr_latch = get_rx_rsr(i);
+    return get_byte(u2_sockets[i].sn_rx_rsr_latch, 8);
   case W5100_SN_RX_RSR1:
-    return get_rx_rsr_byte(i, 0);
+    return get_byte(u2_sockets[i].sn_rx_rsr_latch, 0);
   case W5100_SN_RX_RD0:
   case W5100_SN_RX_RD1:
     return u2_memory[address];

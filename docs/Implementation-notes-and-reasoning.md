@@ -2324,6 +2324,42 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 
 ---
 
+## 1cm. Traffic corpus (Jul 24–25): checksum/session crashes vs W5100/AppleWin gaps (2026-07-27)
+
+**Corpus:** `/Users/eositis/Documents/AI-work/traffic/` — long UART `2026-07-24 14-51-05 FT232R USB UART #3.log` (firmware **V1.2.2-eo / §1cl** banner `2026-07-12 20:30:24 UTC`), `merged.pcap` / `sensoroni_onion_1024/1025.pcap`, provisional `indexed_traffic.csv` (48% overlap match; most UART MACRAW frames are LAN-local and absent from the server-side pcap).
+
+**What the logs show (not “app checksum bugs”):**
+| Signal | Count | Meaning |
+|--------|------:|---------|
+| `MACRAW rx len=` | 44,338 | Frames accepted into ring |
+| `no-room` | 19,646 | Ring full — almost always `free=3` or `28` (W5100-sized full) |
+| `RECV STALL` | 1,370 | Host RECV with impossible length header at `Sn_RX_RD` |
+| `RECV RESYNC` | 994 | Self-heal discarded unread tail (`rd→wr`) |
+| `OVERSIZE` TX | 26 | Host `Sn_TX_WR` desync; we drop (correct) |
+| Wire IP checksums in pcap | 0 bad | Corruption is **in the emulated path to the 6502**, not CYW43/WiFi |
+
+STALL headers are mid-frame Ethernet/IP bytes (`C0A8`=192.168…, `4500`=IPv4 hdr, `88A2`/`4822`=Pico MAC fragments, ASCII `312E`="1."), **not** valid MACRAW `wire_len` prefixes — `Sn_RX_RD` is off a frame boundary. ~90% of RESYNCs follow **creeping** `rd` (not a freeze). Each RESYNC throws away up to ~4 KiB of unread ring → Contiki/ip65 see truncated/garbled payloads → **TCP/UDP checksum errors and session death**. `Serial Saved Output.txt` is a later wedged state: continuous `no-room free=3` with the host no longer draining.
+
+**Datasheet / AppleWin gaps still open:**
+
+1. **`Sn_RX_RSR` / `Sn_TX_FSR` byte tear (fixed in §1cm code).** W5100 DS: read **upper byte first, then lower**. Wiznet ioLibrary double-reads until stable. We previously recomputed the full 16-bit value independently on **each** byte access, so a core-0 frame push between RSR0 and RSR1 could return a torn 16-bit size. **Fix:** latch the full value on `*0` (high) read; `*1` returns the latched low byte. Same for `Sn_TX_FSR`.
+
+2. **RSR update policy vs datasheet (still open).** DS: RSR “is automatically changed by **RECV** … and **receiving data**.” AppleWin matches: latched `sn_rx_rsr` increments as RX bytes are written, and `updateRSR()` runs **only on `Sn_CR=RECV`**. Our §1cj host RSR is **live `WR−RD`**, so it also shrinks when the host writes `Sn_RX_RD` *before* RECV — that window is **not** what the datasheet describes. §1cj’s prose claiming continuous shrink is “W5100-accurate” overstates the DS; the live model may still be useful for Contiki, but it is a deliberate divergence from AppleWin/DS and remains a suspect for multi-frame drain races.
+
+3. **AppleWin pulls RX on RSR read; we push async.** AppleWin `readSocketRegister(RSR*)` calls `receiveOnePacket()` then returns a stable latch — single-threaded. We push from core 0 while core 1 serves the bus. Producer uses a RECV-time `sn_rx_rd` shadow (conservative) so we should not overwrite unread bytes; the residual off-boundary `rd` means either (a) the host is still being handed a bad length somehow, or (b) RESYNC fights the host’s software pointer copy after we force `RX_RD=WR`.
+
+4. **`RECV RESYNC` is a safety net that *causes* the checksum symptom.** Discarding the ring tail is not real W5100 behavior. Prefer preventing desync (latch + RSR policy) and consider making RESYNC debug-only or much stricter once the root path is fixed.
+
+5. **TX `OVERSIZE` (26×) and `tx_q_drop`.** Host TX pointer math still occasionally invents ~4 KiB spans; drop-on-oversize avoids wire garbage but the host believes those frames were sent. Root still open (§1ci).
+
+**Code change this pass:** `sn_rx_rsr_latch` / `sn_tx_fsr_latch` in `u2_socket_t`; `read_socket_register` latches on `RSR0`/`FSR0`.
+
+**Next experiments:** rebuild debug UF2 with §1cm latch; retest Contiki/telnet bulk; expect fewer STALL/RESYNC. If desync remains, prototype AppleWin-style RSR (increment on push, recompute only on RECV) behind a flag and A/B against live RSR.
+
+**References:** W5100 DS v1.1.6 Sn_RX_RSR / Sn_TX_FSR; AppleWin `Uthernet2.cpp` `sn_rx_rsr` / `updateRSR` / `getRXDataSizeRegister`; `AI-work/traffic/indexed_traffic_summary.txt`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -2341,6 +2377,7 @@ Only explicit DNS query in file: **21:18:57** `0.pool.ntp.org` (port **42473**) 
 | `Sn_RX_RD` shadow publish point | §**1ch**, `uthernet2.c` `write_socket_register` | Publish `sn_rx_rd` **at `Sn_CR=RECV`** (both bytes final, core 1, order-independent) — **not** on low-byte write (§1cf tore lo-then-hi Contiki writes across 256 B → RECV storm) |
 | `Sn_RX_RSR` host-facing vs producer | §**1cj**, `uthernet2.c` `u2_rx_used_bytes_live` / `u2_rx_used_bytes` | Host RSR (`get_rx_rsr`, core 1) = **LIVE** `Sn_RX_RD` from `u2_memory` (shrinks as host drains). Core-0 producer free-space = **shadow** (tear-free, ≤ live ⇒ no overwrite). Shadow-at-RECV froze RSR → Contiki read past `wr` → storm |
 | RECV wedge self-heal (freeze **or** creep) | §**1ck→1cl**, `uthernet2.c` RECV handler `bad[]` + `U2_MonRecvResync` | Detect wedge by **impossible header** (`framesize<16 || >rsr`), not by frozen `rd`. Under bulk RX `Sn_RX_RD` **creeps** off-boundary so the old `rd==last_rd` guard never fired → storm ran until 6502 crashed. 3 consecutive impossible-header RECVs ⇒ resync `Sn_RX_RD→Sn_RX_WR` |
+| `Sn_RX_RSR`/`Sn_TX_FSR` 16-bit latch | §**1cm**, `uthernet2.c` `sn_*_latch` | Datasheet: read upper then lower. Latch full value on `*0` so `*1` cannot tear vs core-0. Jul 24 corpus: 994× RESYNC discards = checksum/session deaths; wire IP csums clean |
 | ADTProETH timeout vs captures | §**1aw** | **`rx_noroom`** = §**1au** **drops** (W5100-sized RX full); not fixed by bigger fake buffer; **`tcpdump`** UDP/6502 OK; UART **460800** |
 | UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
 | UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from CMake **`–DFIRMWARE_BUILD_TIMESTAMP`**). **`./build-debug.sh`** refreshes those vars each configure so the UF2 matches the UART line; **`cmake --build` alone** can leave a stale **`build_id.h`**. This stamp is **configure-time wall clock**, not the git commit author date — correlate binaries with the **build script run**, not only **`git log`**. |

@@ -2360,6 +2360,218 @@ STALL headers are mid-frame Ethernet/IP bytes (`C0A8`=192.168…, `4500`=IPv4 hd
 
 ---
 
+## 1cn. megaflash-vm / Bramble “flawless U2” is not the Pico `uthernet2.c` path (2026-08-17)
+
+**Question:** Same MegaFlash firmware checksums on real Pico hardware, but Bramble + megaflash-vm have no packet checksum issues.
+
+**What those projects actually do.** megaflash-vm **does not serve `$C0C4–$C0C7` from guest firmware**. Overlay Bramble `host_fast_read`/`host_fast_write` (nibble ≥ 4) call `host_u2_read`/`host_u2_write` in `megaflash-vm/bramble-overlay/host_uthernet.c`. Guest BusLoop inject never updates DATA for U2 (stayed `0x00`). MAME Lua still taps the ports; the W5100 window is **host-completed in the same RPC — AppleWin-style, single-threaded**. Guest `U2_Init`/`U2_Net_Init` may still run for radio/TAP, but the **6502 does not talk to `pico/uthernet2.c`**.
+
+So “same firmware, no checksums in the VM” proves **ip65/Contiki + a correct single-chip W5100 model work**. It does **not** prove `uthernet2.c` + PIO + dual-core are correct. The working model is the overlay, not the Pico U2 bus path.
+
+**What the working host W5100 does that Pico hardware does not (yet):**
+
+1. **No dual-core, no PIO prefetch.** Each `$C0C7` DATA byte is computed and returned in one RPC. Real RP2350 SM1 prefetches the next FIFO byte; if core 1 is late, the 6502 latches a **stale** DATA octet — that is payload/length corruption (checksum errors) that **cannot happen** in the VM. Existing `U2_PeekDataPort` + IRQ0 wait (§1d/§1f) is the hardware analog; load still stresses it.
+
+2. **Do not fill RX while streaming DATA.** `host_u2_read`: skip `host_u2_poll()` when nibble is DATA **and** `u2_addr ≥ $4000`. Comment: `recv()` on every DATA byte tore `Sn_RX_RSR` and wrapped new payload over unread samples (A2Stream sounded out-of-order). TAP sniff returns 0 when MACRAW RX is full so the host TCP window backs up (`[TAP] TCP NAT pause`) instead of ACKing then dropping. On Pico, `busloop` was waking core 0 (`U2_Poll`) every 32 U2 cycles **including** `$C0C7` AI copies, while core 0 CYW43/lwIP keeps pushing MACRAW into the same ring.
+
+3. **RSR/FSR 16-bit pair with lo-first fallback.** Host latches on high byte and sets `u2_rsr_have`; low byte returns the latch and clears the flag; **if low is read first**, it snapshots then. Pico §1cm only latched on high — a low-first read used a stale latch.
+
+4. **No `RECV RESYNC`.** The host never rewrites `Sn_RX_RD` to `WR`. Pico’s self-heal discards tails and is a checksum factory when it fires.
+
+**Code this pass (`pico/`):**
+- `sn_rx_rsr_have` / `sn_tx_fsr_have` (port of overlay latch) — **kept**.
+- `U2_DataPtrInSocketBuffer()` + skip `U2_Poll` on `$C0C7` AI — **reverted 2026-08-18**. Hardware log after the skip: no STALL/RESYNC, but first ARP TX ~16 s after OPEN; every SEND duplicated (`tx len=` twice); wget SYNs (`len=58`) without timely replies; after a second OPEN the host stopped RECV while RX still arrived. Cause: Pico `U2_Poll` is the §**10k** core-1→core-0 `IPCCMD_NET_WAKE` that **drains TX/lwIP**, not TAP-only fill. VM `host_u2_poll` only sniffs into the ring. Skipping it during DATA AI starved egress. Restore poll every 32 U2 cycles including `$C0C7`.
+
+**Still Pico-only (not copied):** CYW43 has no TAP pause — WiFi ACKs TCP even when the emulated ring is `no-room`. That is drop/retransmit, not checksum-by-itself, unless the ring is also corrupted. PIO prefetch remaining risk under debug UART load.
+
+**Takeaway:** Treat megaflash-vm `host_uthernet.c` as the **behavioral spec** for a working U2 (with AppleWin), not as evidence that guest `uthernet2.c` is already good. Do **not** skip `U2_Poll` during DATA AI on Pico. Hardware work remains: stable 16-bit RSR/FSR, honest `$C0C7` prefetch; ring immutability during AI cannot be done by starving core-0 net.
+
+**References:** `megaflash-vm/bramble-overlay/host_uthernet.c` (`u2_rsr_have`, `host_u2_read` poll skip, `host_u2_on_tap_frame`); `a2bus_bridge.c` `host_fast_read` nibble≥4; `docs/MAME-BRIDGE.md`; Bramble `tapif.c` sniff-return-0; `pico/busloop.c` U2 poll; `pico/uthernet2.c` RSR have-flag.
+
+---
+
+## 1co. `RECV RESYNC` kills wget’s second OPEN (2026-08-18)
+
+**Symptom:** After §1cn poll-skip revert (`11:18:01` banner): first Contiki connect still needs a retry; wget times out. UART: first session eventually does HTTP (`tx 178`, `rx 784`); ~10 s of SYN `len=58` retries before `rx len=58`. Second `OPEN` (wget) then `RECV STALL rsr=44 rd=0x320E hdr=0800` (EtherType, not a MACRAW length) and `RECV RESYNC … rd=0xAD7D -> wr=0x023A`. After that, DNS `tx 83` / `rx 119` then SYN retries with no handshake; host stops RECV; `RequestAbortAll`. Duplicate `MACRAW tx len=` is **log twice** (core-1 enqueue + core-0 `linkoutput`), not two frames on the wire.
+
+**Why RESYNC is wrong here:** After OPEN we zero chip `RX_RD`/`sn_rx_wr`. Occupancy math `wr=0x023A`, `rd=0x320E` ⇒ `rsr=44` matches leftover **host-cached** `Sn_RX_RD` from the previous session (offset `0x20E` still holds previous Ethernet `0x0800`). Forcing `RX_RD=wr` makes the **chip** empty while Contiki still RECV-commits `0xAD7D` — worse than leaving the pointers. A real W5100 never rewrites `RX_RD` on RECV.
+
+**Fix:** Stop rewriting `Sn_RX_RD` on impossible headers (STALL log only). On OPEN, `memset` the socket RX window so a stale cached pointer reads zeros, not an EtherType-as-length. Keep ring pointer reset on OPEN (§1 / Contiki reuse).
+
+**Still open:** First-try SYN-ACK ~10 s late (path/WiFi vs missed frame) without a STALL in that window.
+
+**Status 2026-08-18:** This experiment (no RESYNC rewrite + OPEN `memset`) did **not** restore first-try connect or wget. Reverted in §**1cp**.
+
+---
+
+## 1cp. Revert Bramble/§1cm latch imports; keep pre-import U2 model (2026-08-18)
+
+**What:** After Bramble-inspired ports (§1cm latch, §1cn have-flag + poll-skip, §1co RESYNC-off + OPEN memset), first `asimov.applefritter.com` connect fails until retry and wget fails to connect. **Before those imports** the same stack connected on the first try; the remaining defect was **checksum errors on every 2nd/4th/6th packet**. UART `2026-08-18 12:30:27` (RESYNC rewrite already off): first HTTP after ~10 s of SYN `len=58`; wget second `OPEN` then host stops RECV; ring `no-room free=1`. `tx_q=0` the whole time — the MACRAW queue is empty, not overflowing.
+
+**Why latch broke first connect:** §1cm latched FSR/RSR only on the **high** byte. A host that reads **FSR1 first** (or never hits FSR0 after OPEN) gets `latch=0` → looks like **no TX free space** until a later high-byte read. That matches “first attempt fails, reinitiate works.” The §1cn lo-first `*_have` patch did not restore usability. Poll-skip during `$C0C7` starved §10k drain (reverted earlier). RESYNC-off + memset did not fix first SYN-ACK delay.
+
+**What we did:** Drop `sn_*_latch` / `*_have`. `Sn_RX_RSR` / `Sn_TX_FSR` are again **live per byte** (`get_rx_rsr_byte` / `get_tx_fsr_byte`). Restore §**1cl** RESYNC (`bad>=3` → `RX_RD=wr`). No OPEN RX `memset`. Keep `U2_Poll` every 32 U2 cycles including DATA. MACRAW TX queue unchanged: enqueue on core 1, drain on core 0, pop only after `linkoutput` OK. UART: log `MACRAW tx len=` only from core 0 so SEND is not duplicated in the log.
+
+**What we did not do:** Did not remove the TX queue (needed so core 1 does not call lwIP). Did not skip poll on DATA. Checksum-every-Nth-packet remains the pre-import hardware problem (PIO `$C0C7` prefetch / dual-core RX vs VM host W5100).
+
+**Takeaway:** Do not import megaflash-vm `host_uthernet.c` latch/poll-skip/no-RESYNC onto Pico. VM U2 is single-threaded host-complete; Pico U2 must keep core-0 wake and live FSR for Contiki’s read order.
+
+**References:** `pico/uthernet2.c` `get_tx_fsr_byte` / `get_rx_rsr_byte`; `pico/uthernet2_net.cpp` `u2_macraw_tx_drain`; `pico/busloop.c` `U2_Poll`; §1cl, §1cm–§1co.
+
+---
+
+## 1cq. Latch revert was not the connect/wget bug; `RECV RESYNC` rewrite is (2026-08-18)
+
+**UART** `Firmware build: 2026-08-18 12:53:57 UTC` (§1cp live FSR, §1cl RESYNC rewrite on): same user-visible symptoms.
+
+**First session (browser):** OPEN at 19.5 M ticks; first ARP `tx 42` ~13 s later (host had not SENDed yet — not the TX queue: `tx_q=0`, SEND→wire ~7 ms). DNS `83`/`119` worked. First SYN `58` at 33.8 M, SYN-ACK `rx 58` only at 48.9 M (~15 s TCP RTO). Then HTTP `tx 178` / `rx 784` **succeeded**. Duplicate `tx len=` is gone (core-0-only log).
+
+**wget (second `OPEN`):** OPEN at 64.2 M; ~4 s of RX with **no RECV** (ambient 63/92/243 filling from `wr=0`); then ARP/DNS/SYN. Then `RECV STALL rsr=2625 rd=0x0E95 hdr=2053` and `RECV RESYNC rsr=2172 rd=0x905A -> wr=0x08D6` — chip emptied, Contiki still holding cached `RX_RD`. Further SYNs have no handshake in the rest of the log.
+
+**Why §1cp looked like “no change”:** first-try “failure” is the **15 s SYN RTO** (checksum-class integrity, pre-Bramble). wget death in *this* file is **RESYNC rewriting `Sn_RX_RD`**, which §1cp restored. TX queue is idle (`tx_q_drop=0`).
+
+**What we did:** keep STALL/RESYNC **logs**; **stop writing** `Sn_RX_RD=wr`. No OPEN memset (zeros still look like an impossible length if the host RECV-commits a cached pointer). No FSR latch.
+
+**Open:** 15 s first SYN-ACK — treat as the old every-Nth checksum/integrity problem, not the MACRAW queue.
+
+**References:** `pico/uthernet2.c` RECV `bad[]` block; UART `12:53:57`.
+
+---
+
+## 1cr. `sensoroni_onion_1026.pcap` + UART `13:03:54`: radio vs W5100 ring (2026-08-18)
+
+**UART** banner `2026-08-18 13:03:54 UTC` (RESYNC rewrite off). No `RECV STALL`/`RESYNC`. After wget’s second `OPEN`, host stops `RECV`; ring `no-room free=16`. `tx_q=0` always.
+
+**Pcap** (LAN, Pico STA `88:a2:9e:48:22:7a` → VMware `00:0c:29:2c:bb:f0`, Apple IP `192.168.0.234` → `66.59.109.26:80`):
+
+| Port | Role | What the wire shows |
+|------|------|---------------------|
+| **1026** | Contiki first TCP (browse) | **58 SYNs, 0 SYN-ACKs.** IPv4/TCP checksums **correct**. `seq=0`, `cksum=0x1d39` every time. This is “first connect fails.” |
+| **1027** | Browse retry | SYN (`seq≠0`) + SYN-ACK in ~16 ms, then HTTP. Apple `win=1460`; ACKs lag; server retransmits 730 B segments. Page can complete. |
+| **1028** | wget | SYN-ACK OK, GET implied (`ack 139`), server sends HTTP 200 + 730 B (checksums **correct**), Apple **RST**. Same pattern every wget. |
+
+**W5100 vs Pico radio (datasheet MACRAW):**
+
+- Chip: PHY/MAC presents frames into **Sn_RX** until full, then **drops**; host RECV shrinks RSR. No Wi-Fi ACK.
+- Pico: `cyw43_arch_poll` → `u2_netif_input_wrapper` **copies** into the 4 KiB ring, **`pbuf_free`, `ERR_OK`**. CYW43 has already **802.11-ACKed**. If `u2_push_rx_macraw` then `no-room`, the peer’s TCP still believes the hop succeeded; the Apple never saw the bytes. VM TAP **returns 0** when the ring is full (pause). That is the gap.
+- TX queue is not the failure (`tx_q_drop=0`). SEND copies into a slot then `linkoutput`; 58-byte SYNs appear as Ethernet **length 60** on the wire (padded).
+
+**1026 with valid checksums and no SYN-ACK** is not PIO TX corruption. Same 4-tuple (`192.168.0.234:1026` → `:80`, ISN 0) retried all day. 1027 (different port, ISN ≠ 0) always handshakes. Treat as path/NAT/peer state for that tuple **plus** any SYN-ACK that never shows at this capture. Do not “fix” Contiki ISN; keep looking at whether a reply was eaten on the STA before MACRAW.
+
+**wget RST after good HTTP** is host-side: the server’s payload is checksum-correct on the LAN. Contiki abort/RST matches **corrupt `$C0C7` reads** (PIO prefetch), not a bad radio frame.
+
+**What we did:** `U2_MacrawWifiRxPause()` — when socket 0 is MACRAW and producer free space cannot hold `2+1518+1`, `NetworkPump::PollOnce` **skips** `cyw43_arch_poll` but still **`U2_Net_ServicePoll`** (MACRAW TX drain). Analog of TAP pause. Real W5100 does not pause PHY; this is Pico-radio backpressure so we stop ACK-then-drop.
+
+**References:** `pico/uthernet2.c` `U2_MacrawWifiRxPause`; `pico/network_pump.cpp` `PollOnce`; `u2_netif_input_wrapper`; pcap `sensoroni_onion_1026.pcap`; serial `13:03:54`.
+
+---
+
+## 1cs. WiFi poll-pause did not change connect/wget (`sensoroni_onion_1027`, banner `01:22:15`) (2026-08-18)
+
+**UART:** `Firmware build: 2026-08-19 01:22:15 UTC` (§1cr pause). No `no-room`, no STALL/RESYNC. Same user symptoms.
+
+**Pcap `sensoroni_onion_1027.pcap`:** **`dst port 1026` = 0 packets.** 19 SYNs from `.234:1026` (`seq=0`, cksum OK); **the peer never sends SYN-ACK or any other segment to 1026.** Port **1027** SYN-ACK in 16 ms, HTTP completes. Port **1028** wget: SYN-ACK, GET (`ack 139`), two 730 B HTTP segments (cksum OK), Apple **RST** `ack 731` (~500 ms). UART: first SYN `tx 58` at 58.9 s, first `rx 58` at 70.7 s (that inbound is **1027** SYN-ACK in the pcap, not 1026).
+
+**Why pause could not help:** it only skips `cyw43_arch_poll` when the 4 KiB ring cannot hold one MTU. First-connect failure is **no SYN-ACK on the LAN for 1026** while the ring is nearly empty. wget RST is **after** a valid first MSS on the wire (host TCP accepted `ack 731` then aborted) — PIO/`$C0C7` or 6502 abort, not ring-full.
+
+**What we did:** **Reverted** `U2_MacrawWifiRxPause` / skip-poll. A real W5100 does not pause the PHY; skipping poll can hold later SYN-ACKs in CYW43 if the ring is busy with broadcasts. Keep always-poll + drop-new when full (§1au).
+
+**Next (not this change):** 1026 ISN-0 4-tuple that this Linux/VMware path never answers (same MAC as `.213`); wget payload integrity on `$C0C7` after the first 730 B.
+
+**References:** `sensoroni_onion_1027.pcap`; serial `01:22:15`; §1cr.
+
+---
+
+## 1ct. STA IPv4 masquerade + `$C0C7` peek after IRQ0 (2026-08-18)
+
+**What:** First connect to `asimov.applefritter.com` (Contiki ephemeral **1026**, ISN 0) never gets a SYN-ACK on the Wi-Fi capture; retry (**1027**) works. wget (**1028**) gets a valid first 730 B HTTP MSS then Apple **RST** `ack 731`. Pause-poll (§1cr) did not change this.
+
+**Why (1026):** Pico STA MAC `88:a2:9e:48:22:7a` carries **two** IPv4 addresses: lwIP DHCP **`.213`** and Contiki/ip65 **`.234`**. Ethernet SA is already rewritten to the STA MAC (and ARP SHA). A real Uthernet II has its own MAC, so the W5100 host IP is the only address on that MAC. On this radio, Linux/VMware (sensoroni) never answers **`.234:1026` seq=0** while **`.234:1027`** (nonzero ISN) does — treated as a **shared-MAC / dual-IP** path, not a Contiki ISN bug. VM TAP often NATs; Pico did not.
+
+**Why (wget RST):** Wire checksums on the 730 B segments were good; abort is after the host TCP accepted `ack 731`. Remaining hardware gap is **`$C0C7` PIO prefetch** vs core-0 ring writes. Peeking DATA **before** IRQ0 wait could sample the ring, then wait while core 0 finishes a frame, then push a stale next-byte into SM1.
+
+**What we did:**
+- **TX** (`u2_send_macraw_core0`): learn Apple IPv4 from outbound ARP SPA / IPv4 src (not `0.0.0.0`, not STA). SNAT that src (and ARP SPA) to the STA address; recompute IPv4 + TCP/UDP checksums. Skip SNAT for DHCP **68→67**. Restore BOOTP **chaddr** patch (UDP csum 0).
+- **RX** (`u2_netif_input_wrapper`): DNAT IPv4 dest STA→Apple and ARP TPA likewise, then push the W5100 ring. Forget the mapping on MACRAW close.
+- **`busloop.c`:** wait IRQ0, **then** `U2_PeekDataPort()` into `r[7]`, then `UpdateMegaFlashRegisters(1,…)`.
+
+**What we didn’t do:** Change Contiki ISN; skip `U2_Poll` on `$C0C7`; skip `cyw43_arch_poll`; re-port VM RSR latch.
+
+**Takeaway:** After flash, pcap SYNs should show **src = STA `.213`** (not `.234`) with a valid TCP checksum. First-connect 1026 should then be answerable if the peer was dropping the second IP on that MAC. wget RST: if it persists, the remaining defect is later payload on `$C0C7`, not dual-IP.
+
+**Build:** Pico 2 W Debug UF2 banner **`2026-08-19 01:57:51 UTC`**. Pico W Debug **did not link** (`.heap` overflow **480 B**); NAT helpers are extra code on an already-tight RP2040 Debug image.
+
+---
+
+## 1cu. Banner `01:57:51` / `sensoroni_onion_1028`: NAT missed the wire; wget walked a length header (2026-08-18)
+
+**What:** User: browser **first query worked** (improvement). wget ran for a bit with many checksum errors, then timed out. UART banner **`2026-08-19 01:57:51 UTC`**.
+
+**Pcap (`sensoroni_onion_1028.pcap`, 72 frames, all checksums OK):** Ethernet SA is STA `88:a2:9e:48:22:7a`, but **IPv4 is still Contiki `192.168.0.234`**, not STA `.213`. §1ct SNAT **did not apply**. 1026 SYNs still unanswered; 1027 browse completes with ACK lag; wget **1031/1028** SYN-ACK + GET then **RST ack 731** after the first good 730 B MSS (same as 1027 pcap).
+
+**UART:** No `no-room`. After wget’s second OPEN, many `rx len=784`, then **`RECV STALL hdr=6E2F`** (`n/` from HTML) / `7665` (`ve`) / `2E70` (`.p`) — `Sn_RX_RD` is in the HTTP body, not on a MACRAW length. Then frozen `rd=0xC418` `hdr=0000` and log-only RESYNC (§1cq does not rewrite `RX_RD`). That is the checksum-storm / timeout.
+
+**Why NAT missed:** live `netif_ip4_addr` at `linkoutput` was the only STA-IP source; SA rewrite (no IP needed) ran, IP SNAT did not. Cache STA IPv4 on core-0 `ServicePoll`/`OPEN` and SNAT any non-zero non-STA IPv4 src (still skip DHCP 68→67). One-shot `[u2] sta-nat a.b.c.d -> w.x.y.z`.
+
+**Why wget desyncs:** wire TCP is clean; the 6502 sees a bad 2-byte length and walks the ring. Skip `U2_Poll` on **`$C0C7` reads only** (keep poll on writes so SEND/RECV still wake core 0 — not §1cn). Acquire fence in `U2_PeekDataPort`.
+
+**What we didn’t do:** Re-enable RESYNC rewrite; skip poll on DATA **writes**; change Contiki ISN.
+
+**Build:** Pico 2 W Debug UF2 banner **`2026-08-19 02:27:43 UTC`**. Watch UART for one-shot `[u2] sta-nat 192.168.0.234 -> 192.168.0.213`. Pcap SYNs should then show **src `.213`**.
+
+---
+
+## 1cv. Checksums are `$C0C7`/ring, not dual-IP; revert STA NAT (2026-08-21)
+
+**What:** Re-read `sensoroni_onion_1028.pcap` + UART `01:57:51`. User: Contiki can be a **web server**, so SNAT/DNAT of `.234`→STA `.213` would hide the host address; checksum errors are unlikely to be dual-IP.
+
+**What “checksum error” is:** Contiki/uIP (and ip65 `verifyheader`) recompute the **IPv4 header checksum** and **TCP checksum** over the Ethernet payload copied from W5100 MACRAW (`wire_len − 2` bytes after the 2-byte BE length). The LAN capture of those same frames has **0 bad IP/TCP checksums**. So the 6502 did **not** see the bytes CYW43 delivered.
+
+**Two stages in the UART (same wget):**
+1. **Selective fails** — many `MACRAW rx len=784` (= 14+20+20+730) and ACKs, matching “wget worked for a bit.” A few wrong `$C0C7` bytes still look like an Ethernet/IP frame → Contiki prints checksum error and drops that segment. Pcap wget **1031/1028**: Apple’s first ACK after data is still **ack 1** (MSS not accepted), later **RST ack 731** (accepted a retransmit, then aborted).
+2. **Stream desync** — `RECV STALL hdr=6E2F` (`n/`), `7665` (`ve`), `2E70` (`.p`) are **HTML body** as a MACRAW length. One bad length (or a skipped/duplicated DATA byte) advances `Sn_RX_RD` into the payload; every later RECV is junk. Log-only RESYNC (§1cq) does not repair `RX_RD` → timeout. This is the same class as §1cm STALL headers (`C0A8`/`4500`/MAC fragments).
+
+**Why “every 2nd/4th/6th” fits hardware, not two IPs:** Socket 0 RX is **4 KiB**; each HTTP MSS is a **786-byte** MACRAW record (`2+784`). Five records ≈ 3930 B; the **6th wraps**. Server also sends **pairs** of 730 B segments in one burst (pcap same timestamp). A stale PIO `$C0C7` byte at the **start of the second frame of a pair** shows up as even-numbered checksum fails, then a wrap turns that into a length-header walk.
+
+**Why dual-IP is the wrong diagnosis:** Checksum is over dest `.234` (what Contiki owns). Changing it to `.213` would not make `$C0C7` match the ring, and would break Contiki **listening** on `.234`. §1ct SNAT **never appeared** on pcap 1028 anyway (SA=STA MAC, IP still `.234`).
+
+**What we did:** **Removed** STA IPv4 SNAT/DNAT (`u2_macraw_sta_nat_*`, STA-IP cache). Kept Ethernet **SA** + ARP **SHA** + DHCP **chaddr** (radio, not host IP). Kept `$C0C7` peek-after-IRQ0, skip `U2_Poll` on DATA **reads**, acquire fence on peek — those are the checksum path.
+
+**Open:** First-connect **1026** with no SYN-ACK remains a **separate** question (not checksum). Next checksum work is PIO/DATA integrity under `mov_data` bursts and 4 KiB wrap, not IP masquerade.
+
+**Build:** Pico 2 W Debug UF2 banner **`2026-08-21 16:17:06 UTC`** (NAT removed).
+
+**References:** pcap `sensoroni_onion_1028.pcap`; AppleWin `writeDataMacRaw` (`size = len+2`, BE); ip65 `w5100.s` `poll` / `ip.s` `verifyheader`; `u2_push_rx_macraw`; §1cm, §10l, §1f.
+
+---
+
+## 1cw. UART `16:17:06`: browse-sized HTTP already walks the length header (2026-08-21)
+
+**Banner:** `Firmware build: 2026-08-21 16:17:06 UTC` (NAT off). One `sock0 OPEN mr=0x44`. `tx_q=0` always.
+
+**Timeline (seconds from boot µs):**
+- 20.3 s OPEN. Ambient RX (60/63) until first TX.
+- 42.8 s — **before ARP** — `rx 754`, `870`, `757` (unicast to STA MAC; lwIP `.213` traffic can still land in MACRAW).
+- 48.4 ARP `tx 42`; 48.9 DNS `tx 83` / `rx 119`; 49.3 SYN `tx 58`.
+- 57.1 SYN retry `tx 58` / `rx 58` (handshake); 57.5 GET `tx 178`; **two `rx 784` in 3 ms**, ACK `tx 54`, third `784`, ACK, `rx 424`.
+- **62.1 s STALL** `rsr=3454 rd=0x949B rd_off=0x049B hdr=11BC` — 4.6 s after first 784. Then `hdr=4000` (IPv4 DF at IP[6:7]) with `Sn_RX_RD` advancing **+0x4000** per RECV (`rd_off` stuck at `0x0657`). 1043 STALL / 971 RESYNC. Later `hdr=0000` frozen at `rd_off=0x0079`. Four `no-room` once the host stopped draining (`free=70→45`).
+
+**Why this matters:** Desync is **not** wget-only or 4 KiB wrap after many MSS. Three 730 B segments + one 370 B tail is enough. `0x11BC` (4540) is not a legal MACRAW length (`>1518+2` and `>RSR`); Contiki still added it to `RX_RD` (`0x949B+0x11BC=0xA657`). Skip `U2_Poll` on `$C0C7` reads did not stop it. TX path still ran (14 SENDs).
+
+**Takeaway:** Next fix is the **first bad 2-byte length** under a short `mov_data` burst (PIO prefetch / DATA coherence), not NAT and not ring-full.
+
+**Second capture (same banner):** First browse **completed**. `754/870/757` arrived **after** that HTTP (not before ARP) — pre-ARP STA unicast is **not** required. wget then second `OPEN`; ~20× `784` (~4× 4 KiB wrap); STALL `hdr=5370` (`Sp`) and later `88A2` (STA MAC as length). Added first-STALL **`dbg e66cf7 A/C`**: `match=1` means last producer record header still equals `last_wire` (ring write OK → host `$C0C7`/`RX_RD`); `match=0` means that header is already wrong (core-0 ring).
+
+**Third capture (`20:21:09`):** wget “did not start” = no STALL. Browse worked (GET `178`). wget GET `192` + two `784` then new `OPEN`; later SYNs had **no** matching `rx 58` (SYN-ACK never enqueued). A/C dump **inconclusive**. Hyp **H**: MF filter drops TCP unicast if dest≠SHAR — log `mf-filter` / `dbg e66cf7 H`.
+
+**UART `12:33:25` DHCP storm:** `match=1` (`last_wire=65` == `hdr_at_rec=0x0041`). Producer ring OK; 6502 `RX_RD` mid-payload (`hdr=4F13`, `ring8=4F13…0806`). Hyp **C rejected**, **A/B confirmed**. No `tx` before STALL — DHCP discover never left. A/C/STALL/RESYNC UART once per OPEN.
+
+**pcap `sensoroni_onion_1033` (2026-08-22):** 189 frames, 48 min. Wire IP/TCP checksums all good; Ethernet SA = STA MAC; IPv4 = Contiki `.234` (no `.213`). **`:1026` SYN `seq=0` never SYN-ACKed** (52 SYNs). **`:1028`/`:1030` wget** handshake + two 730 B HTTP then Apple **RST**. Browse `:1027` completes with delayed ACKs/retransmits. Confirms: unanswered first-connect is **on the LAN** (not MF dropping SYN-ACK); wget RST is **host `$C0C7`**, not bad radio L4.
+
+**References:** UART `Serial Saved Output.txt` (`16:17:06`); §1cv.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -2377,7 +2589,13 @@ STALL headers are mid-frame Ethernet/IP bytes (`C0A8`=192.168…, `4500`=IPv4 hd
 | `Sn_RX_RD` shadow publish point | §**1ch**, `uthernet2.c` `write_socket_register` | Publish `sn_rx_rd` **at `Sn_CR=RECV`** (both bytes final, core 1, order-independent) — **not** on low-byte write (§1cf tore lo-then-hi Contiki writes across 256 B → RECV storm) |
 | `Sn_RX_RSR` host-facing vs producer | §**1cj**, `uthernet2.c` `u2_rx_used_bytes_live` / `u2_rx_used_bytes` | Host RSR (`get_rx_rsr`, core 1) = **LIVE** `Sn_RX_RD` from `u2_memory` (shrinks as host drains). Core-0 producer free-space = **shadow** (tear-free, ≤ live ⇒ no overwrite). Shadow-at-RECV froze RSR → Contiki read past `wr` → storm |
 | RECV wedge self-heal (freeze **or** creep) | §**1ck→1cl**, `uthernet2.c` RECV handler `bad[]` + `U2_MonRecvResync` | Detect wedge by **impossible header** (`framesize<16 || >rsr`), not by frozen `rd`. Under bulk RX `Sn_RX_RD` **creeps** off-boundary so the old `rd==last_rd` guard never fired → storm ran until 6502 crashed. 3 consecutive impossible-header RECVs ⇒ resync `Sn_RX_RD→Sn_RX_WR` |
-| `Sn_RX_RSR`/`Sn_TX_FSR` 16-bit latch | §**1cm**, `uthernet2.c` `sn_*_latch` | Datasheet: read upper then lower. Latch full value on `*0` so `*1` cannot tear vs core-0. Jul 24 corpus: 994× RESYNC discards = checksum/session deaths; wire IP csums clean |
+| `Sn_RX_RSR`/`Sn_TX_FSR` 16-bit latch | §**1cm**→**1cp**, `uthernet2.c` | §1cm high-byte latch **reverted**: low-first FSR1 saw 0 → first connect/wget failed. Live per-byte FSR/RSR restored |
+| VM vs Pico U2 (checksums only on hardware) | §**1cn**→**1cp**, megaflash-vm `host_uthernet.c` vs Pico | VM **host-completes** `$C0C4–$C0C7`. **Do not** skip `U2_Poll` on `$C0C7`; **do not** port overlay latch/have. Hardware-only: PIO prefetch + CYW43 no TAP pause |
+| `RECV RESYNC` vs wget second OPEN | §**1cq**, `uthernet2.c` | `12:53:57`: wget STALL/RESYNC discarded 2 KiB after second OPEN. **Log RESYNC, do not rewrite `RX_RD`**. First HTTP can succeed after SYN RTO |
+| CYW43 ACK-then-drop vs TAP pause | §**1cr**→**1cs** | Skip-poll **reverted** (no connect/wget change). 1027 pcap: **0** frames to port **1026**; wget RST after good 730 B HTTP |
+| STA IPv4 masquerade | §**1ct**→**1cv**, `uthernet2_net.cpp` | **Reverted.** Dual-IP does not explain checksums; NAT would break Contiki as a server. Keep SA/SHA/chaddr only |
+| UART `16:17:06` browse STALL | §**1cw** | 3×784 + 424 then `hdr=11BC`→`4000`; `RX_RD` += 0x4000. Not wget/wrap-only |
+| UART `16:17:06` browse STALL | §**1cw** | 3×784 + 424 then `hdr=11BC`→`4000`; `RX_RD` += 0x4000. Not wget/wrap-only |
 | ADTProETH timeout vs captures | §**1aw** | **`rx_noroom`** = §**1au** **drops** (W5100-sized RX full); not fixed by bigger fake buffer; **`tcpdump`** UDP/6502 OK; UART **460800** |
 | UART vs “Device not found” | §1c, `debug/*.log` | `w5100.s` `init` only `SEC`s on RTR XOR; correct RTR reads ⇒ that run passed Ethernet init; **`ip65_init` then `clc`s unconditionally** — see §1c if UI still says device not found; **48× `DATA read`** after `mode=0x03` traces RMSR/SHAR/OPEN |
 | UART boot identity | `main.c`, `build_id.h.in`, `CMakeLists.txt` | After reboot, scroll to **latest** `Megaflash DEBUG Firmware…` block: includes **`FIRMWAREVERSTR`** and **`Firmware build:`** (UTC + Unix s from CMake **`–DFIRMWARE_BUILD_TIMESTAMP`**). **`./build-debug.sh`** refreshes those vars each configure so the UF2 matches the UART line; **`cmake --build` alone** can leave a stale **`build_id.h`**. This stamp is **configure-time wall clock**, not the git commit author date — correlate binaries with the **build script run**, not only **`git log`**. |

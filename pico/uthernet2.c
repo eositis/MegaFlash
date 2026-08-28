@@ -66,14 +66,13 @@ typedef struct {
    * consumed region and overwrite unread ring bytes. We publish this shadow atomically when the
    * host completes the low byte (see write_socket_register) and core 0 reads it here (§1cf). */
   uint16_t sn_rx_rd;
-  /* Datasheet: Sn_RX_RSR / Sn_TX_FSR must be read upper-byte then lower-byte. Latch the full
-   * 16-bit value on the high-byte read so the low-byte cannot tear against a concurrent core-0
-   * producer update (§1cm). Matches Wiznet guidance and AppleWin's stable register return. */
-  uint16_t sn_rx_rsr_latch;
-  uint16_t sn_tx_fsr_latch;
 } u2_socket_t;
 
 static u2_socket_t u2_sockets[W5100_NUM_SOCKETS];
+#if UTHERNET2_DEBUG
+static uint16_t u2_dbg_last_wire[W5100_NUM_SOCKETS];
+static uint8_t u2_dbg_stall_dumped[W5100_NUM_SOCKETS];
+#endif
 
 enum {
   U2_RX_PROTO_UDP = 1,
@@ -124,6 +123,9 @@ static void u2_reset_socket_rings(int i) {
   u2_memory[reg + W5100_SN_TX_RD1] = 0;
   u2_memory[reg + W5100_SN_TX_WR0] = 0;
   u2_memory[reg + W5100_SN_TX_WR1] = 0;
+#if UTHERNET2_DEBUG
+  u2_dbg_stall_dumped[i] = 0;
+#endif
 }
 
 static inline uint16_t u2_rx_rd_load(const u2_socket_t *s) {
@@ -230,8 +232,6 @@ static void u2_reset(void) {
     u2_sockets[i].register_address = (uint16_t)(W5100_S0_BASE + (i << 8));
     u2_sockets[i].sn_rx_wr = 0;
     u2_sockets[i].sn_rx_rd = 0;
-    u2_sockets[i].sn_rx_rsr_latch = 0;
-    u2_sockets[i].sn_tx_fsr_latch = 0;
   }
   /* RTR/RCR: ip65 w5100.s probes $0017/$0018 with XOR; must match or init returns SEC → "Device not found". */
   u2_memory[W5100_RTR0] = 0x07;
@@ -304,6 +304,17 @@ static uint16_t get_rx_rsr(int i) {
   return u2_rx_used_bytes_live(i);
 }
 
+/* Per-byte live FSR/RSR (§1cp). §1cm latched on high-only: a low-first read returned latch=0
+ * (FSR looked empty) until FSR0 was touched — first SYN/ARP delayed. Bramble lo-first have-flags
+ * did not restore first-try connect. Recompute each access like pre-import firmware. */
+static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
+  return get_byte(get_tx_fsr(i), shift);
+}
+
+static uint8_t get_rx_rsr_byte(int i, unsigned shift) {
+  return get_byte(get_rx_rsr(i), shift);
+}
+
 static uint8_t read_socket_register(uint16_t address) {
   int i = (address >> 8) - 0x04;
   uint16_t loc = address & 0xFF;
@@ -314,11 +325,9 @@ static uint8_t read_socket_register(uint16_t address) {
   case W5100_SN_SR:
     return U2_Net_GetStatus(i);
   case W5100_SN_TX_FSR0:
-    /* Latch full FSR on upper-byte read (datasheet order); low byte returns the latch (§1cm). */
-    u2_sockets[i].sn_tx_fsr_latch = get_tx_fsr(i);
-    return get_byte(u2_sockets[i].sn_tx_fsr_latch, 8);
+    return get_tx_fsr_byte(i, 8);
   case W5100_SN_TX_FSR1:
-    return get_byte(u2_sockets[i].sn_tx_fsr_latch, 0);
+    return get_tx_fsr_byte(i, 0);
   case W5100_SN_TX_RD0:
     return u2_memory[address];
   case W5100_SN_TX_RD1:
@@ -328,11 +337,9 @@ static uint8_t read_socket_register(uint16_t address) {
   case W5100_SN_TX_WR1:
     return u2_memory[address];
   case W5100_SN_RX_RSR0:
-    /* Latch full RSR on upper-byte read so RSR1 cannot sample a different wr/rd (§1cm). */
-    u2_sockets[i].sn_rx_rsr_latch = get_rx_rsr(i);
-    return get_byte(u2_sockets[i].sn_rx_rsr_latch, 8);
+    return get_rx_rsr_byte(i, 8);
   case W5100_SN_RX_RSR1:
-    return get_byte(u2_sockets[i].sn_rx_rsr_latch, 0);
+    return get_rx_rsr_byte(i, 0);
   case W5100_SN_RX_RD0:
   case W5100_SN_RX_RD1:
     return u2_memory[address];
@@ -354,6 +361,8 @@ static uint8_t U2_BUS_RAM(read_value_at)(uint16_t address) {
 }
 
 uint8_t U2_BUS_RAM(U2_PeekDataPort)(void) {
+  /* Pair with core-0 release-store of sn_rx_wr so DATA peeks see the frame bytes. */
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
   return read_value_at(u2_data_address);
 }
 
@@ -562,6 +571,9 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
     wr++;
   }
   u2_rx_wr_store(s, wr);
+#if UTHERNET2_DEBUG
+  u2_dbg_last_wire[socket_i] = wire_len;
+#endif
 }
 
 /* Read TX buffer data between rd and wr and send via network. Returns 0 on success, -1 if MACRAW not accepted. */
@@ -631,7 +643,8 @@ static int send_data(int i) {
       int n = data_len;
       for (int j = 0; j < n; j++)
         buf[j] = u2_memory[base + ((rd + j) & mask)];
-      U2_MonNetMacrawTx(i, (uint16_t)n);
+      /* Log TX only from core-0 linkoutput (`u2_send_macraw_core0`). A second line here made
+       * every SEND look like a duplicate frame; the queue copies once and drains once. */
       if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0)
         return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
       consumed = (uint16_t)data_len;
@@ -744,6 +757,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
       U2_RequestCore0NetPoll();
       break;
     case W5100_SN_CR_RECV: {
+#if UTHERNET2_DEBUG
+      if (!u2_dbg_stall_dumped[i])
+#endif
       U2_MonSockSendRecv(i, 0);
       /* W5100 semantics: host updates RX_RD to consumed length before RECV.
        * Do not force RX_RD->WR here; that drops unread tail data and breaks
@@ -797,15 +813,36 @@ static void write_socket_register(uint16_t address, uint8_t value) {
             if (impossible) {
               bad[i]++;
 #if UTHERNET2_DEBUG
-              if (bad[i] == 1u || (bad[i] & 0x3FFu) == 0u)
+              if (bad[i] == 1u && !u2_dbg_stall_dumped[i]) {
+                uint16_t wr_now = u2_rx_wr_load(&u2_sockets[i]);
+                uint16_t last_wire = u2_dbg_last_wire[i];
+                uint16_t rec_off = (uint16_t)((wr_now - last_wire) & m);
+                uint8_t rh0 = u2_memory[rb + rec_off];
+                uint8_t rh1 = u2_memory[rb + ((rec_off + 1u) & m)];
+                uint16_t hdr_at = (uint16_t)(((uint16_t)rh0 << 8) | rh1);
+                uint8_t match = (last_wire != 0 && hdr_at == last_wire) ? 1u : 0u;
+                uint32_t ring4a = 0, ring4b = 0;
+                unsigned k;
+                for (k = 0; k < 4u; k++)
+                  ring4a = (ring4a << 8) | u2_memory[rb + ((off + k) & m)];
+                for (k = 4u; k < 8u; k++)
+                  ring4b = (ring4b << 8) | u2_memory[rb + ((off + k) & m)];
+                U2_MonRecvStallDbg(i, last_wire, rec_off, hdr_at, match, ring4a, ring4b);
                 U2_MonRecvStall(i, rsr, rd, off, h0, h1);
+                u2_dbg_stall_dumped[i] = 1;
+              }
 #endif
               if (bad[i] >= 3u) {
+                /* Log only. Do not force Sn_RX_RD=wr (§1cq). */
                 uint16_t wr = u2_rx_wr_load(&u2_sockets[i]);
-                u2_memory[ra + W5100_SN_RX_RD0] = (uint8_t)(wr >> 8);
-                u2_memory[ra + W5100_SN_RX_RD1] = (uint8_t)wr;
-                __atomic_store_n(&u2_sockets[i].sn_rx_rd, wr, __ATOMIC_RELEASE);
+#if UTHERNET2_DEBUG
+                if (u2_dbg_stall_dumped[i] == 1u) {
+                  U2_MonRecvResync(i, rsr, rd, wr, h0, h1);
+                  u2_dbg_stall_dumped[i] = 2;
+                }
+#else
                 U2_MonRecvResync(i, rsr, rd, wr, h0, h1);
+#endif
                 bad[i] = 0;
               }
             } else {

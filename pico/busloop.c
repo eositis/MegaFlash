@@ -122,10 +122,6 @@ void __no_inline_not_in_flash_func(BusLoop)() {
           registers.r[addr] = (uint8_t)data;
         }
       }
-      /* RP2350 a2bus prefetches SM1 FIFO for the *next* 6502 read; r[7] ($C0C7) must already
-       * hold the byte the W5100 would return on the next DATA read, or the first read after
-       * setting the address can latch a stale byte (monitor saw $08 then $07/$D0). */
-      registers.r[7] = U2_PeekDataPort();
 #ifndef PICO_RP2040
       /* RP2350 a2bus SM delays rxfifo pull behind IRQ 0; do not update chunk FIFOs until
        * the SM has pulled (same rule as bottom of loop). U2 used `continue` and skipped this,
@@ -136,11 +132,17 @@ void __no_inline_not_in_flash_func(BusLoop)() {
         tight_loop_contents();
       }
 #endif
+      /* Peek *after* IRQ0 so r[7] samples the RX ring after any core-0 MACRAW write that
+       * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
+      registers.r[7] = U2_PeekDataPort();
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
-      /* Drain U2 net often; [u2]/[u2m] UART flush runs on core 0 (U2_MonPollFlush in main), not here. */
-      if (++u2_poll_counter >= 32) {
-        u2_poll_counter = 0;
-        U2_Poll();
+      /* Poll/wake on writes and non-DATA (SEND, RECV, addr). Skip during $C0C7 reads so the
+       * PIO prefetch word is not delayed in the ip65 mov_data burst (checksums / RX_RD walk). */
+      if (!(addr == U2_C0X_LAST && (busdata & READFLAG))) {
+        if (++u2_poll_counter >= 32) {
+          u2_poll_counter = 0;
+          U2_Poll();
+        }
       }
       continue;
     }

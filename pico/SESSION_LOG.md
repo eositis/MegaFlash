@@ -1,3 +1,13 @@
+## 2026-08-22
+- **pcap `sensoroni_onion_1033`:** Full-day Sensoroni capture (~48 min, 189 frames). Wire checksums all OK; 1026 SYN seq=0 never SYN-ACK; wget RST after two 730 B. See repo `SESSION_LOG.md` / `docs/Implementation-notes-and-reasoning.md` §1cw.
+
+## 2026-08-21
+- **§1cv:** Reverted STA IPv4 NAT. Checksums are `$C0C7`/ring vs clean wire, not dual-IP. See repo `SESSION_LOG.md` / `docs/Implementation-notes-and-reasoning.md` §1cv.
+
+## 2026-08-18
+- **§1cu:** NAT missed wire on `01:57:51` UF2. Cache STA IP + skip `U2_Poll` on `$C0C7` reads. See repo `SESSION_LOG.md` / `docs/Implementation-notes-and-reasoning.md` §1cu.
+- **§1ct STA IPv4 masquerade + `$C0C7` peek after IRQ0:** SNAT/DNAT Apple IP onto STA DHCP address on MACRAW; peek DATA after IRQ0. UF2 `pico2_debug/megaflash.uf2` banner `2026-08-19 01:57:51 UTC`. Pico W Debug RAM overflow +480 B (not linked). See `docs/Implementation-notes-and-reasoning.md` §1ct.
+
 ## 2026-05-24
 - **Q&A — ProDOS clock update is 6502-pulled, not Pico-pushed:** Walked the chain end-to-end at user's request. Pico **cannot** and **does not** write `$BF90-$BF93` directly — it has no DMA/bus-master path into IIc RAM; it is only a slot peripheral on `$C0Cx`. Actual stores are done by 6502 code in `firmware/megaflash.s`: at boot, `isonline` patches `$BF06`=JMP, `$BF07/$BF08`=`clockdriver` (slot ROM) and sets bit 0 of `$BF98` (MACHID); ProDOS then calls `JSR $BF06` whenever it needs a timestamp (file create/modify, `GET_TIME` MLI) — event-driven, not periodic. `clockdriverimpl` (ROM2) issues `CMD_GETPRODOSTIME` (or `CMD_GETPRODS25TIME` for `$BFFF>=$25`) to `cmdreg`=`$C0C0`, then loops `lda paramreg`(`$C0C1`) / `sta $BF8E,X` (X=2 → writes `$BF90-$BF93`; X=0 → `$BF8E-$BF93` for ProDOS 2.5), and re-asserts MACHID bit 0. On the Pico, `CMD_GETPRODOSTIME` dispatches to `DoGetProdosTime`/`DoGetProdos25Time` in `pico/cmdhandler.c` which only fill `parameterBuffer` via `GetProdosTimestamp`/`GetProdos25Timestamp` in `pico/rtc.c` (AON timer → ProDOS-packed bytes); no Apple RAM touched on the Pico side. Refs: `firmware/megaflash.s:400-430`, `:1004-1034`; `common/defines.inc:9-11`; `pico/cmdhandler.c:421-447,1586-1591`; `pico/rtc.c:89-108`. **No code changes.**
 

@@ -38,6 +38,8 @@ enum {
   U2M_NET_MACTX_PTRS,
   U2M_RECV_STALL,
   U2M_RECV_RESYNC,
+  U2M_RECV_STALL_DBG,
+  U2M_RECV_STALL_RING,
   U2M_MODE_LINE,
   U2M_DATA_READ_TRACE,
   U2M_DATA_WRITE_TRACE,
@@ -174,6 +176,15 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
     printf("[u2m] %lu sock%d RECV RESYNC rsr=%u rd=0x%04X -> wr=0x%04X hdr=%02X%02X (wedge cleared, tail discarded)\n",
            (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
            (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_STALL_DBG:
+    printf("[u2m] %lu sock%d dbg e66cf7 A/C last_wire=%u rec_off=0x%04X hdr_at_rec=%04X match=%u\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
+           (unsigned)(e->w1 >> 16), (unsigned)e->a1);
+    break;
+  case U2M_RECV_STALL_RING:
+    printf("[u2m] %lu sock%d dbg e66cf7 ring8=%08lX%08lX\n", (unsigned long)e->t_us, (int)e->a0,
+           (unsigned long)e->w1, (unsigned long)e->w2);
     break;
   case U2M_MODE_LINE:
     printf("[u2] mode=0x%02X (AI=%d IND=%d)\n", (unsigned)e->a1, (e->a1 & 0x02) ? 1 : 0, (e->a1 & 0x01) ? 1 : 0);
@@ -417,6 +428,22 @@ void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full
   u2_mon_push(&ev);
 }
 
+void U2_MonRecvStallDbg(int sock, uint16_t last_wire, uint16_t rec_off, uint16_t hdr_at_rec, uint8_t match,
+                        uint32_t ring4a, uint32_t ring4b) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_STALL_DBG,
+                     .a0 = (uint8_t)sock,
+                     .a1 = match,
+                     .w0 = last_wire,
+                     .w1 = (uint32_t)rec_off | ((uint32_t)hdr_at_rec << 16),
+                     .w2 = 0};
+  u2_mon_push(&ev);
+  ev.op = U2M_RECV_STALL_RING;
+  ev.w1 = ring4a;
+  ev.w2 = ring4b;
+  u2_mon_push(&ev);
+}
+
 #else /* !U2_ACTIVITY_MONITOR */
 
 #include <stddef.h>
@@ -517,6 +544,16 @@ void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full
   (void)wr_full;
   (void)h0;
   (void)h1;
+}
+void U2_MonRecvStallDbg(int sock, uint16_t last_wire, uint16_t rec_off, uint16_t hdr_at_rec, uint8_t match,
+                        uint32_t ring4a, uint32_t ring4b) {
+  (void)sock;
+  (void)last_wire;
+  (void)rec_off;
+  (void)hdr_at_rec;
+  (void)match;
+  (void)ring4a;
+  (void)ring4b;
 }
 
 void U2_MonQueueModeLine(uint8_t mr) { (void)mr; }

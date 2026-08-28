@@ -51,6 +51,9 @@ void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr
 /** Diagnostic: host issued RECV repeatedly without advancing Sn_RX_RD (storm signature). Rate-limited. */
 void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1);
 void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1);
+/** First-STALL only: last MACRAW record vs ring (A/C). match=1 if hdr at (wr-last_wire) still equals last_wire. */
+void U2_MonRecvStallDbg(int sock, uint16_t last_wire, uint16_t rec_off, uint16_t hdr_at_rec, uint8_t match,
+                        uint32_t ring4a, uint32_t ring4b);
 
 #ifdef __cplusplus
 }

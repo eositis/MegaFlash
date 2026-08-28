@@ -27,6 +27,7 @@
 #include "pico/sync.h"
 #include "pico/time.h"
 #include <cstring>
+#include <cstdio>
 #include <vector>
 #if U2_ETH_HEADER_TRACE
 #include <cstdio>
@@ -454,6 +455,8 @@ static void u2_macraw_tx_drain(void) {
     sock = u2_macraw_tx_q[u2_macraw_tx_q_head].sock;
     len = u2_macraw_tx_q[u2_macraw_tx_q_head].len;
     memcpy(buf, u2_macraw_tx_q[u2_macraw_tx_q_head].data, len);
+    /* Peek only: pop after linkoutput succeeds so a failed send retries the same frame.
+     * Do not emit twice — one copy, one drain attempt per poll slot. */
     critical_section_exit(&u2_macraw_tx_cs);
 
     cyw43_arch_lwip_begin();
@@ -494,6 +497,7 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
    * ethertype 0x0806 at eth[12:13]; ARP SHA is at payload offset 8 = frame offset 22. */
   if (len >= 28 && eth[12] == 0x08 && eth[13] == 0x06)
     memcpy(eth + 22, netif->hwaddr, 6);
+  u2_macraw_patch_dhcp_bootp_chaddr(eth, len, netif->hwaddr);
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_tap("core0-post", eth, len);
 #endif

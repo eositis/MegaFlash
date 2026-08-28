@@ -4,6 +4,58 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-08-22
+
+- **pcap `sensoroni_onion_1033`:** 189 frames, ~48 min (08:06–08:54 local). Only `.234`↔`66.59.109.26:80`. **0 bad IP/TCP checksums.** SA=`88:a2:9e:48:22:7a`. Port **1026: 52 SYNs seq=0, 0 SYN-ACK**. 1027 browse works (ACK lag). 1028/1030 wget: SYN-ACK + two 730 B then **RST**. Matches UART: first-connect is unanswered seq=0 SYNs on the wire; wget abort is local `$C0C7` not radio. See §1cw.
+
+- **UART `12:46:20` fresh boot (NTP 1787403171):** DNS OK (`tx 83`/`rx 119`). First SYN→SYN-ACK ~33 s. Browse GET `178`; wget GET `192` + two `784` then `OPEN`; reconnect DNS OK, SYNs **no** `rx 58`. 0 STALL. Same checksum abort + SYN blackhole. See §1cw.
+
+- **UART `12:46:20` DNS fail:** NTP OK. OPEN then STALL in ~12 s on ambient 60/62/63 only — **no `tx 83`**. `match=1 last_wire=62 hdr=11E4 ring8=…C0A8000A…`. 7× ARP `tx 42` after wedge; `no-room free=1` so replies dropped. RECV-after-dump suppress worked (21 RECVs). Same A/B. See §1cw.
+
+- **UART `12:41:19`:** NTP OK. DHCP/browse/wget ran (2× GET `178`, GET `192`). wget two `784` then `OPEN`; reconnect SYNs no `rx 58`. One A/C dump: `match=1 last_wire=62 hdr=4C45` ASCII `LE 2 OS ` (mid-payload). 1 STALL/1 RESYNC; **6198** `RECV` after wedge. Stop logging RECV after first dump. See §1cw.
+
+- **UART `12:33:25` DHCP loop:** NTP OK. **No MACRAW TX** before STALL (~6 s after OPEN). `dbg e66cf7 A/C match=1 last_wire=65 hdr_at_rec=0041` — ring last record OK; host `rd_off=0x024B hdr=4F13` mid-frame (`…0806` ARP). **C rejected, A/B confirmed.** RECV/STALL/RESYNC/dbg storm (UART ring full). Dump/STALL/RESYNC now once per OPEN. DHCP never sent. See §1cw.
+
+- **UART `12:10:59` no-USB retest:** NTP OK (`GetNTP err=11`). Same Contiki pattern: ~15 s first-connect SYNs then browse; wget two `784` then `OPEN`; reconnect **no** `rx 58`. 0 STALL / 0 `dbg e66cf7`. USB-unplug restored native stack; checksum/SYN-ACK issues unchanged. See §1cw.
+
+- **USB cable, not firmware:** UART/NTP/DNS failure was USB left plugged in (CDC vs UART / native stack). Reverted USB-wait=0, UART re-enable, heartbeat, `appleConnected` print. Stall A/C dump kept. See §1cw.
+
+- **UART `12:10:59`:** First-connect: 3× `tx 58` with no `rx 58` (~13 s), 4th SYN got SYN-ACK then slow browse (784 retransmit at +4 s / +9 s). wget GET `192` + two `784` then `OPEN`; reconnect SYNs had **no** `rx 58`. **0** `mf-filter` / **0** STALL. Hyp **H rejected** (`MACRAW rx` is logged *before* MF; SYN-ACK never hit netif). Removed MF debug logs. A/C still open (abort before STALL). See §1cw.
+
+- **UART `20:21:09` wget no start:** Correct banner; 0 STALL / 0 `dbg e66cf7` (A/C dump did not fire). Browse GET `178` + 784s worked after ~3 SYN RTOs. wget GET `192` got **two** `784` then `OPEN` (~2.1 s); reconnect SYNs `tx 58` with **no** `rx 58`. Missing SYN-ACK never reached the ring (not a length-walk). Added rate-limited `mf-filter` UART for IPv4/TCP dest≠SHAR (hyp H). See §1cw.
+
+## 2026-08-21
+
+- **UART `16:17:06` (2nd capture):** First browse completed (GET `178`, 3×784+424, ACKs). `754/870/757` were **after** that HTTP, not pre-ARP — hypothesis D rejected. wget + 2nd OPEN, ~20×784 (~4 ring wraps), STALL `hdr=5370` ("Sp") / `88A2` (STA MAC) = mid-payload walk. First-STALL A/C dump (`match` + `hdr_at_rec`) in `u2_monitor` / `u2_push_rx_macraw`. See §1cw.
+
+- **UART `16:17:06` (NAT-off):** One MACRAW OPEN; ARP/DNS/SYN/GET then 3× `rx 784` + `424`; STALL `hdr=11BC` 4.6 s later, then `hdr=4000` (IP DF) with `RX_RD` += 0x4000 (offset stuck at `0x657`). 1043 STALL / 971 RESYNC; 4× `no-room` after host stopped draining. Skip-poll on DATA reads did not prevent desync on a small browse. See `docs/Implementation-notes-and-reasoning.md` §1cw.
+
+- **§1cv checksums vs dual-IP:** Re-read pcap 1028 + UART `01:57:51`. Wire IP/TCP checksums all good; Contiki errors are `$C0C7`/MACRAW length walk (`hdr=6E2F` HTML). STA NAT reverted (would break Contiki as server; never hit the wire). Kept SA/SHA/chaddr + DATA-read poll skip + peek fence. Pico 2 W UF2 banner `2026-08-21 16:17:06 UTC`. See `docs/Implementation-notes-and-reasoning.md` §1cv.
+
+## 2026-08-18
+
+- **§1cu pcap 1028 / UART `01:57:51`:** STA NAT missed the wire (still `.234`). Browser first GET worked; wget STALL `hdr=6E2F` (HTML as MACRAW length). Cache STA IP; SNAT any non-STA IPv4 src; skip `U2_Poll` on `$C0C7` reads; peek acquire fence. Pico 2 W UF2 banner `2026-08-19 02:27:43 UTC`. See `docs/Implementation-notes-and-reasoning.md` §1cu.
+
+- **STA IPv4 masquerade + `$C0C7` peek after IRQ0 (§1ct):** Dual IP on one STA MAC (`.234` Contiki vs `.213` lwIP) — SNAT/DNAT + ARP SPA/TPA, recompute IPv4/TCP/UDP csums; skip DHCP 68→67. Peek DATA after IRQ0 wait. Pico 2 W debug UF2 `pico2_debug/megaflash.uf2` banner `2026-08-19 01:57:51 UTC`. Pico W Debug link failed (RAM +480 B). See `docs/Implementation-notes-and-reasoning.md` §1ct.
+
+- **WiFi pause did not help (§1cs):** UART `01:22:15` + `sensoroni_onion_1027.pcap` — still first-connect fail / wget RST. **0 packets `dst port 1026`** (SYNs checksum-OK, `seq=0`); 1027 handshakes; wget RST after `ack 731`. Pause never applied (ring not MTU-full). Reverted skip-`cyw43_arch_poll`. See `docs/Implementation-notes-and-reasoning.md` §1cs.
+
+- **Radio backpressure (§1cr):** UART `13:03:54` + `sensoroni_onion_1026.pcap`: 1026 SYNs checksum-OK but 0 SYN-ACKs; wget RST after good HTTP; then `no-room free=16`. Skip `cyw43_arch_poll` when MACRAW ring cannot hold one MTU (`U2_MacrawWifiRxPause`); still drain TX. Debug UF2 banner `2026-08-19 01:22:15 UTC`. See `docs/Implementation-notes-and-reasoning.md` §1cr.
+
+- **`RECV RESYNC` rewrite off again (§1cq):** UART `12:53:57` — first HTTP succeeded after ~15 s SYN RTO; wget second OPEN then `STALL hdr=2053` / `RESYNC rd=0x905A→wr=0x08D6` discarded ~2 KiB. TX queue idle. Stop rewriting `Sn_RX_RD`; keep log. Debug UF2 banner `2026-08-18 13:03:54 UTC`. See `docs/Implementation-notes-and-reasoning.md` §1cq.
+
+- **Reverted Bramble/§1cm imports (§1cp):** User: first connect + wget still fail after latch/have/poll-skip/RESYNC-off; pre-import only checksums-every-Nth. Dropped FSR/RSR latch (low-first FSR1=0 delays first SYN); restored live per-byte FSR/RSR + §1cl RESYNC; no OPEN memset. TX queue unchanged (pop after `linkoutput`); UART TX log only from core 0. Debug UF2 `pico2_debug/megaflash.uf2` banner `2026-08-18 12:53:57 UTC`. See `docs/Implementation-notes-and-reasoning.md` §1cp.
+
+- **Disabled `RECV RESYNC` rewrite (§1co):** wget UART: second OPEN then `STALL hdr=0800` (`rd=0x320E` cached vs `wr=0x023A`) and `RESYNC` discarded the ring; SYN retries then died. Stop forcing `Sn_RX_RD=wr` (real W5100 never does). OPEN now `memset`s the RX window. Duplicate `tx len=` is enqueue+core0 log, not two packets. Rebuilding `pico2_debug/megaflash.uf2`. **Superseded by §1cp.**
+
+- **Reverted §1cn `U2_Poll` skip (connect/wget worse):** UART: no STALL/RESYNC; first ARP TX long after OPEN; duplicate `MACRAW tx len=`; wget SYN `len=58` without timely replies. Pico `U2_Poll` is §10k core-0 TX/lwIP wake, not VM TAP-only fill. Restored poll every 32 U2 cycles including `$C0C7`; kept RSR/FSR have-flag. Rebuilding `pico2_debug/megaflash.uf2`.
+
+## 2026-08-17
+
+- **Debug rebuild for §1cn:** Reconfigured+built `pico2_debug/megaflash.uf2` (banner `2026-08-18 03:44:10 UTC`) after RSR/FSR have-flag + skip `U2_Poll` during `$C0C7` TX/RX AI.
+
+- **VM vs Pico U2 checksums (§1cn):** megaflash-vm/Bramble “flawless Uthernet” is **host-completed** `$C0C4–$C0C7` (`host_uthernet.c`), not guest `uthernet2.c`. Clues ported: RSR/FSR lo-first latch (`*_have`); skip `U2_Poll` during `$C0C7` AI of TX/RX RAM (VM: filling RX during DATA tore RSR / wrapped unread bytes). Hardware-only remainders: PIO `$C0C7` prefetch, CYW43 ACKs while ring `no-room`. See `docs/Implementation-notes-and-reasoning.md` §1cn.
+
 ## 2026-07-27
 
 - **Traffic corpus triage + RSR/FSR latch (§1cm):** Analyzed `AI-work/traffic/` (FT232R UART + merged pcap + provisional index). On §1cl firmware: 994× `RECV RESYNC` / 1370× `RECV STALL` with mid-frame headers (`C0A8`/`4500`/MAC fragments), 19k `no-room` (`free=3`), 26× TX `OVERSIZE`; pcap IP checksums clean — corruption is emulated-ring→6502, and RESYNC discards are a direct checksum/session-crash mechanism. Datasheet gap: RSR/FSR must be read hi-then-lo as one value; we recomputed per byte (tear vs core-0). **Fix:** latch full `Sn_RX_RSR`/`Sn_TX_FSR` on high-byte read. Open: AppleWin/DS RSR updates only on receive+RECV (our live RD shrink is a divergence); RESYNC not real W5100. See `docs/Implementation-notes-and-reasoning.md` §1cm.

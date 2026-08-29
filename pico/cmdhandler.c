@@ -21,6 +21,7 @@
 #include "ipc.h"
 #include "network.h"
 #include "tftpstate.h"
+#include "smb/smbdisk.h"
 
 // From generated build_id.h (CMake configure_file); 0 if unset (e.g. IDE configure without script).
 static void WriteFirmwareBuildTimestampLE(uint8_t *dst) {
@@ -156,6 +157,8 @@ static void Reconfig() {
   
   //NTP Client may be enabled.
   if (GetNTPClientEnabled() && !IsRTCRunning()) updateNTPNow = true;
+
+  SmbDisk_OnConfigChanged();
 }
 
 
@@ -1505,6 +1508,30 @@ static void DoTFTPSaveLastServer() {
   ClearError();
 }
 
+static void DoSaveSmbSettings() {
+  ClearError();
+  if (!CheckWriteEnableKey(0)) return;
+  if (!SaveSmbSettings((SmbSetting_t *)dataBuffer)) {
+    SetError(MFERR_USERCONFIG);
+    return;
+  }
+  SmbDisk_OnConfigChanged();
+}
+
+static void DoGetSmbSettings() {
+  GetSmbSettings((SmbSetting_t *)dataBuffer);
+  dataBufferTransferMode = MODE_LINEAR;
+  ResetDataPointer();
+  ClearError();
+}
+
+static void DoSmbStatus() {
+  SmbDisk_GetStatusText((char *)dataBuffer, DATABUFFERSIZE);
+  dataBufferTransferMode = MODE_LINEAR;
+  ResetDataPointer();
+  ClearError();
+}
+
 
 /********************************************************************/
 
@@ -1721,6 +1748,15 @@ void __no_inline_not_in_flash_func(DoCommand)(const uint32_t command) {
       break;
     case CMD_TFTPSAVELASTSERVER:
       DoTFTPSaveLastServer();
+      break;
+    case CMD_SAVESMBSETTINGS:
+      DoSaveSmbSettings();
+      break;
+    case CMD_GETSMBSETTINGS:
+      DoGetSmbSettings();
+      break;
+    case CMD_SMBSTATUS:
+      DoSmbStatus();
       break;
     default:
       SetError(MFERR_UNKNOWNCMD);

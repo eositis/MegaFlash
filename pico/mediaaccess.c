@@ -5,6 +5,7 @@
 #include "romdisk.h"
 #include "ramdisk.h"
 #include "misc.h"
+#include "smb/smbdisk.h"
 
 //******************************************************************
 //
@@ -27,7 +28,8 @@ uint GetTotalUnitCount() {
   
   unitCount = GetUnitCountRomdisk() +
               GetUnitCountFlashEnabled()   +
-              GetUnitCountRamdisk();
+              GetUnitCountRamdisk() +
+              SmbDisk_GetUnitCount();
   
   return unitCount;
 }
@@ -67,9 +69,10 @@ static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaT
   uint romdiskCount = GetUnitCountRomdisk();
   uint flashdiskCount = GetUnitCountFlashEnabled();
   uint ramdiskCount = GetUnitCountRamdisk();
+  uint smbCount = SmbDisk_GetUnitCount();
   
   if (GetRomdiskFirst()) {
-    // Order: Romdisk, Flash, Ramdisk
+    // Order: Romdisk, Flash, Ramdisk, SMB
     if (unitNum <= romdiskCount) {
       *typeOut = TYPE_ROMDISK;
       *mediumUnitNumOut = unitNum;
@@ -87,8 +90,14 @@ static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaT
       *mediumUnitNumOut = unitNum;
       return;
     }
+    unitNum -= ramdiskCount;
+    if (unitNum <= smbCount) {
+      *typeOut = TYPE_SMB;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
   } else {
-    // Order: Flash, Ramdisk, Romdisk (ROM disk last)
+    // Order: Flash, Ramdisk, SMB, Romdisk (ROM disk last)
     if (unitNum <= flashdiskCount) {
       *typeOut = TYPE_FLASH;
       *mediumUnitNumOut = MapFlashUnitNum(unitNum);
@@ -101,6 +110,12 @@ static void __no_inline_not_in_flash_func(TranslateUnitNum)(uint unitNum, MediaT
       return;
     }
     unitNum -= ramdiskCount;
+    if (unitNum <= smbCount) {
+      *typeOut = TYPE_SMB;
+      *mediumUnitNumOut = unitNum;
+      return;
+    }
+    unitNum -= smbCount;
     if (unitNum <= romdiskCount) {
       *typeOut = TYPE_ROMDISK;
       *mediumUnitNumOut = unitNum;
@@ -163,6 +178,8 @@ uint32_t __no_inline_not_in_flash_func(GetBlockCount)(const uint unitNum) {
       return GetBlockCountFlash(mediumUnitNum);
     case TYPE_RAMDISK:
       return GetBlockCountRamdisk();
+    case TYPE_SMB:
+      return SmbDisk_GetBlockCount();
   }
   
   assert(false);  //Should not happen
@@ -189,6 +206,8 @@ uint32_t GetBlockCountActual(const uint unitNum) {
       return GetBlockCountFlashActual(mediumUnitNum);
     case TYPE_RAMDISK:
       return GetBlockCountRamdiskActual();
+    case TYPE_SMB:
+      return SmbDisk_GetBlockCount();
   }
   
   assert(false);  //Should not happen
@@ -218,6 +237,9 @@ void GetDIB(const uint unitNum,uint8_t *destBuffer) {
       return;
     case TYPE_RAMDISK:
       GetDIBRamdisk(destBuffer);
+      return;
+    case TYPE_SMB:
+      SmbDisk_GetDIB(destBuffer);
       return;
   }
   
@@ -290,6 +312,11 @@ uint __no_inline_not_in_flash_func(ReadBlock)(const uint unitNum, const uint blo
       spResult = tsReadBlockRamdisk(blockNum, destBuffer);
       if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
       goto exit;
+      break;
+    case TYPE_SMB:
+      spResult = SmbDisk_ReadBlock(blockNum, destBuffer);
+      if (spResult != SP_NOERR) retValue=MFERR_RWERROR;
+      goto exit;
       break;    
     default:
       assert(false);  //should not happen
@@ -347,8 +374,12 @@ uint __no_inline_not_in_flash_func(WriteBlock)(const uint unitNum, const uint bl
       goto exit;
     case TYPE_RAMDISK:
       spResult = tsWriteBlockRamdisk(blockNum, srcBuffer);
-      if (spResult != SP_NOERR) retValue=MFERR_RWERROR;  
-      goto exit;      
+      if (spResult != SP_NOERR) retValue=MFERR_RWERROR;
+      goto exit;
+    case TYPE_SMB:
+      spResult = SmbDisk_WriteBlock(blockNum, srcBuffer);
+      if (spResult != SP_NOERR) retValue=MFERR_RWERROR;
+      goto exit;
     default:
       assert(false); //should not happen
   }
@@ -493,7 +524,10 @@ bool EraseEntireUnit(const uint unitNum) {
     case TYPE_RAMDISK:
       tsEraseRamdisk();
       success = true;
-      goto exit;      
+      goto exit;
+    case TYPE_SMB:
+      success = false;
+      goto exit;
     default:
       assert(false); //should not happen
   }  

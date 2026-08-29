@@ -71,6 +71,9 @@
 #define CMD_TFTPSTATUS          0x51
 #define CMD_TFTPGETLASTSERVER   0x52
 #define CMD_TFTPSAVELASTSERVER  0x53
+#define CMD_SAVESMBSETTINGS     0x54
+#define CMD_GETSMBSETTINGS      0x55
+#define CMD_SMBSTATUS           0x56
 
 //MegaFlash Error Code
 #define MFERR_NONE         0x00  /* No Error*/
@@ -117,7 +120,8 @@ typedef enum {
 typedef enum {
   TYPE_FLASH,
   TYPE_ROMDISK,
-  TYPE_RAMDISK
+  TYPE_RAMDISK,
+  TYPE_SMB
 } MediaType;
 
 
@@ -222,6 +226,27 @@ typedef enum {
 /********************************* TFTP ***********************************/
 #define TFTP_HOSTNAME_MAXLEN 80     /* Not including the NULL characters */
 #define TFTP_FILENAME_MAXLEN 80     /* Not including the NULL characters */
+
+/********************************* SMB ************************************/
+#define SMBSETTINGVER            1
+#define SMBSETTING_CHKBYTECOMP   0xA5
+#define SMB_HOST_MAX             47
+#define SMB_SHARE_MAX            47
+#define SMB_USER_MAX             31
+#define SMB_PASS_MAX             63
+#define SMB_DOMAIN_MAX           15
+
+typedef struct {
+  uint8_t version;
+  uint8_t checkbyte;
+  uint8_t enabled;
+  uint8_t reserved;
+  char host[SMB_HOST_MAX + 1];
+  char share[SMB_SHARE_MAX + 1];
+  char user[SMB_USER_MAX + 1];
+  char password[SMB_PASS_MAX + 1];
+  char domain[SMB_DOMAIN_MAX + 1];
+} SmbSetting_t;
 
 
 

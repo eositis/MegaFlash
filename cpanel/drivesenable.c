@@ -25,7 +25,7 @@ extern UserSettings_t config;
 #define XPOS 1
 #define YPOS 6
 #define WIDTH 38
-#define HEIGHT 16
+#define HEIGHT 17
 
 //
 //static Global Variables 
@@ -94,20 +94,40 @@ static void PrintCheckbox(uint8_t relY, bool checked) {
 void DoDrivesEnable() {
   static_local uint8_t listCount;
   static_local uint8_t unitCount;
+  static_local uint8_t volCount;
   static_local unsigned char key;
   static_local bool newFlag;
   static_local uint8_t romdiskRow;
+  static_local uint8_t extra;
+  static_local VolInfo_t smbInfo;
   
   unitCount = GetUnitCount();
-  listCount = GetDriveListCount();  /* Excludes ROM disk when last (show on separate row) */
+  listCount = GetDriveListCount();  /* Flash + RAM checkboxes only */
+  volCount = GetVolumeListCount();  /* Includes TYPE_SMB */
+  extra = (volCount > listCount) ? 1 : 0;
   UnpackFlags();
   
-  //Draw window and its content (flash + RAM only; ROM disk has its own row below)
+  //Draw window and its content (flash + RAM only; SMB/ROM are display rows)
   DrawWindowFrame();
   PrintDriveListWithCheckboxes(listCount, enableFlags, ramdiskEnableFlag);
+
+  if (extra) {
+    if (!GetVolInfo((uint8_t)(listCount + 1), &smbInfo))
+      extra = 0;
+    else {
+      gotoxy(2, listCount + 1);
+      cprintf("%u", (unsigned)(listCount + 1));
+      gotoxy(6, listCount + 1);
+      cputs(smbInfo.volName);
+      gotoxy(23, listCount + 1);
+      cprintf("%5u", smbInfo.blockCount);
+      gotoxy(31, listCount + 1);
+      cputs("---");
+    }
+  }
   
   //ROM Disk line - row after last drive (window-relative Y for gotoxy; WNDTOP is set by wnd_DrawWindow)
-  romdiskRow = listCount + 1;
+  romdiskRow = listCount + extra + 1;
   gotoxy(2, romdiskRow);
   cputs("R");
   gotoxy(6, romdiskRow);
@@ -121,7 +141,7 @@ void DoDrivesEnable() {
   //Prompt Messages (one newline to stay within 24-screen line limit)
   newline();
   cprintf(" 1-%d or R: toggle  Enter: OK", listCount);
-  gotoxy(1,15);
+  gotoxy(1,16);
   cputs(strCancelesc);
   gotox(31);
   cputs(strOK_Enter);

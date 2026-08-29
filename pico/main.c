@@ -25,6 +25,7 @@
 #include "uthernet2.h"
 #include "uthernet2_net.h"
 #include "u2_monitor.h"
+#include "smb/smbdisk.h"
 
 static inline void InitActLed() {
   gpio_init(ACT_LED_PIN);
@@ -238,6 +239,7 @@ int main() {
     /* USB before core0Loop so Release stdio_usb_connected() / gate are valid in core0Loop. */
     stdio_usb_init();
     InitPicoLed();
+    SmbDisk_Init();
 #if defined(NDEBUG)
     ReleaseUpdateBusUsbGate();
 #endif

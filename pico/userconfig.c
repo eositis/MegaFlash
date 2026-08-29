@@ -106,6 +106,14 @@ static void InitAdvancedSettings() {
   pConfig->tftp_enable1kblock = TFTP_ENABLE1KBLOCK_DEFAULT;
   pConfig->tftp_lastserver[0]='\0';
   pConfig->ntpserver_override[0] ='\0';
+  pConfig->smb_magic = SMB_CONFIG_MAGIC;
+  pConfig->smb_enabled = 0;
+  memset(pConfig->smb_padding, 0, sizeof(pConfig->smb_padding));
+  memset(pConfig->smb_host, 0, sizeof(pConfig->smb_host));
+  memset(pConfig->smb_share, 0, sizeof(pConfig->smb_share));
+  memset(pConfig->smb_user, 0, sizeof(pConfig->smb_user));
+  memset(pConfig->smb_password, 0, sizeof(pConfig->smb_password));
+  memset(pConfig->smb_domain, 0, sizeof(pConfig->smb_domain));
 }
 
 
@@ -160,6 +168,16 @@ void LoadAllConfigs() {
     InitAdvancedSettings();    
   } else {
     settingsNotInFlash = false;
+    if (pConfig->smb_magic != SMB_CONFIG_MAGIC) {
+      pConfig->smb_magic = SMB_CONFIG_MAGIC;
+      pConfig->smb_enabled = 0;
+      memset(pConfig->smb_padding, 0, sizeof(pConfig->smb_padding));
+      memset(pConfig->smb_host, 0, sizeof(pConfig->smb_host));
+      memset(pConfig->smb_share, 0, sizeof(pConfig->smb_share));
+      memset(pConfig->smb_user, 0, sizeof(pConfig->smb_user));
+      memset(pConfig->smb_password, 0, sizeof(pConfig->smb_password));
+      memset(pConfig->smb_domain, 0, sizeof(pConfig->smb_domain));
+    }
   }  
 }
 
@@ -519,9 +537,56 @@ bool SaveNTPServerOverride(const char* ntpserver) {
 // Get Flash Drives Enable Flags
 //
 // Output: uint8_t - Flash Drives Enable Flags
-// 
+//
 uint8_t GetFlashdriveEnableFlag(){
   return pConfig->user2_fd_enableflags;
+}
+
+static_assert(sizeof(SmbSetting_t) <= 512);
+static_assert(sizeof(SmbSetting_t) <= 255);
+
+bool GetSmbEnabled() {
+  return pConfig->smb_enabled != 0 && pConfig->smb_host[0] != '\0' && pConfig->smb_share[0] != '\0';
+}
+
+const char* GetSmbHost() { return pConfig->smb_host; }
+const char* GetSmbShare() { return pConfig->smb_share; }
+const char* GetSmbUser() { return pConfig->smb_user; }
+const char* GetSmbPassword() { return pConfig->smb_password; }
+const char* GetSmbDomain() { return pConfig->smb_domain; }
+
+void GetSmbSettings(SmbSetting_t *dest) {
+  if (!dest) return;
+  memset(dest, 0, sizeof(*dest));
+  dest->version = SMBSETTINGVER;
+  dest->checkbyte = (uint8_t)(SMBSETTINGVER ^ SMBSETTING_CHKBYTECOMP);
+  dest->enabled = pConfig->smb_enabled;
+  strncpy(dest->host, pConfig->smb_host, SMB_HOST_MAX);
+  strncpy(dest->share, pConfig->smb_share, SMB_SHARE_MAX);
+  strncpy(dest->user, pConfig->smb_user, SMB_USER_MAX);
+  strncpy(dest->password, pConfig->smb_password, SMB_PASS_MAX);
+  strncpy(dest->domain, pConfig->smb_domain, SMB_DOMAIN_MAX);
+}
+
+bool SaveSmbSettings(const SmbSetting_t *src) {
+  if (!src) return false;
+  if (src->version != SMBSETTINGVER) return false;
+  if ((uint8_t)(src->version ^ SMBSETTING_CHKBYTECOMP) != src->checkbyte) return false;
+
+  pConfig->smb_magic = SMB_CONFIG_MAGIC;
+  pConfig->smb_enabled = src->enabled ? 1 : 0;
+  strncpy(pConfig->smb_host, src->host, SMB_HOST_MAX);
+  pConfig->smb_host[SMB_HOST_MAX] = '\0';
+  strncpy(pConfig->smb_share, src->share, SMB_SHARE_MAX);
+  pConfig->smb_share[SMB_SHARE_MAX] = '\0';
+  strncpy(pConfig->smb_user, src->user, SMB_USER_MAX);
+  pConfig->smb_user[SMB_USER_MAX] = '\0';
+  strncpy(pConfig->smb_password, src->password, SMB_PASS_MAX);
+  pConfig->smb_password[SMB_PASS_MAX] = '\0';
+  strncpy(pConfig->smb_domain, src->domain, SMB_DOMAIN_MAX);
+  pConfig->smb_domain[SMB_DOMAIN_MAX] = '\0';
+  EncryptWriteConfigToFlash();
+  return true;
 }
 
 

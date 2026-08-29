@@ -73,6 +73,7 @@ add_executable(${CMAKE_PROJECT_NAME}
     tftprxtask.cpp
     tftptxtask.cpp
     tftpstate.c
+    smb/smbdisk.c
 )
 
 set(FIRMWARE_BUILD_TIMESTAMP_STR_DISPLAY "${FIRMWARE_BUILD_TIMESTAMP_STR}")
@@ -147,8 +148,24 @@ set(U2_MON_LOG_BUS "0" CACHE STRING "1=verbose [u2m] per bus cycle at C0C4-C0C7 
 set(U2_IP65_TRACE_DATA "0" CACHE STRING "1=verbose 48 DATA reads after MODE=0x03 ([u2])")
 set(U2_ETH_HEADER_TRACE "0" CACHE STRING "1=UART [u2eth] hex dump first 64B of STA TX/RX Ethernet frames (bring-up; not pcap/tcpdump)")
 set(U2_MACRAW_COMPAT_DROP_OLDEST "0" CACHE STRING "1=MACRAW RX: discard unread once when full to admit new frame (compat; not strict W5100)")
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_ETH_HEADER_TRACE=${U2_ETH_HEADER_TRACE})
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MACRAW_COMPAT_DROP_OLDEST=${U2_MACRAW_COMPAT_DROP_OLDEST})
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_ETH_HEADER_TRACE=${U2_ETH_HEADER_TRACE})
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MACRAW_COMPAT_DROP_OLDEST=${U2_MACRAW_COMPAT_DROP_OLDEST})
+# Native SMB3 share disk. Pico W (RP2040) overflows RAM (~8 KiB) with the client BSS;
+# default off there. Pico 2 W keeps it on. Override: -DMEGAFLASH_SMB=0|1
+if(PICO_BOARD STREQUAL "pico_w")
+  set(MEGAFLASH_SMB_DEFAULT "0")
+else()
+  set(MEGAFLASH_SMB_DEFAULT "1")
+endif()
+set(MEGAFLASH_SMB "${MEGAFLASH_SMB_DEFAULT}" CACHE STRING "1=enable native SMB3 SmartPort volume")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE MEGAFLASH_SMB=${MEGAFLASH_SMB})
+if(MEGAFLASH_SMB STREQUAL "1")
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    smb/smb_crypto.c
+    smb/smb_prodos.c
+    smb/smb_client.cpp
+  )
+endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     UTHERNET2_DEBUG=1

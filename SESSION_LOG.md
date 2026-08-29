@@ -4,6 +4,17 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-08-20
+
+- **SMB CP UI:** Replaced multi-field selector with Yes/No inverse enable, then one screen for host/share/user/password/domain. After save, polls `CMD_SMBSTATUS` and shows PASSED/FAILED/DISABLED/TIMEOUT with Pico reason (`OK:` / `Failed:` status strings). Rebuilt `cpanel.bin` + both UF2s.
+
+## 2026-08-19
+
+- **Removed leftover Arm GNU tarball:** Deleted `~/arm-gnu-toolchain` (15.3.rel1 `.tar.xz` + extract). Firmware builds use Homebrew `gcc-arm-embedded`.
+- **Homebrew Arm toolchain:** Prefer **`brew install --cask gcc-arm-embedded`** (`/opt/homebrew/bin`) over a side tarball; `mf_resolve_arm_toolchain` searches Homebrew first. Rebuilt both UF2s without `ARM_TOOLCHAIN_PATH`. Ask before sudo/cask installs.
+- **cc65 via Homebrew:** Installed `cc65` 2.19 (`brew install cc65`). Rebuilt Control Panel with `make -C cpanel release` so `cpanel.bin` includes **SMB Share Disk** (`smb.c`).
+- **SMB3 share disk (`SMB-drive`):** Native Pico SMB client (CYW43/lwIP like TFTP, not Uthernet) plus Control Panel credentials; extra SmartPort ProDOS unit with 65535-block mask, name/type mapping, Core 1 block wait / Core 0 session. Rebuild Pico UF2s with `./pico/build-both.sh`. See `docs/Implementation-notes-and-reasoning.md` §25.
+
 ## 2026-07-27
 
 - **Traffic corpus triage + RSR/FSR latch (§1cm):** Analyzed `AI-work/traffic/` (FT232R UART + merged pcap + provisional index). On §1cl firmware: 994× `RECV RESYNC` / 1370× `RECV STALL` with mid-frame headers (`C0A8`/`4500`/MAC fragments), 19k `no-room` (`free=3`), 26× TX `OVERSIZE`; pcap IP checksums clean — corruption is emulated-ring→6502, and RESYNC discards are a direct checksum/session-crash mechanism. Datasheet gap: RSR/FSR must be read hi-then-lo as one value; we recomputed per byte (tear vs core-0). **Fix:** latch full `Sn_RX_RSR`/`Sn_TX_FSR` on high-byte read. Open: AppleWin/DS RSR updates only on receive+RECV (our live RD shrink is a divergence); RESYNC not real W5100. See `docs/Implementation-notes-and-reasoning.md` §1cm.

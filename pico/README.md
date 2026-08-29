@@ -4,7 +4,7 @@
 
 For full requirements (SDK, ARM toolchain, CMake, Control Panel prerequisite, and how to recreate the build on another machine), see **[BUILD-REQUIREMENTS.md](BUILD-REQUIREMENTS.md)**.
 
-Summary: clone [pico-sdk](https://github.com/raspberrypi/pico-sdk) to **`~/pico-sdk`** (or set **`PICO_SDK_PATH`**). On **Apple Silicon**, install **arm64** CMake (e.g. Homebrew **`/opt/homebrew`**); **`build-env.sh`** picks that **`cmake`** before **`/usr/local`**. From the MegaFlash `pico` directory run:
+Summary: clone [pico-sdk](https://github.com/raspberrypi/pico-sdk) to **`~/pico-sdk`** (or set **`PICO_SDK_PATH`**). On **macOS**, prefer Homebrew: **`brew install cmake`** and **`brew install --cask gcc-arm-embedded`**. **`build-env.sh`** uses **`/opt/homebrew/bin/cmake`** and the cask’s **`arm-none-eabi-*`** shims before **`/usr/local`** or **`/Applications`**. From the MegaFlash `pico` directory run:
 
 ```
 ./cmakeall.sh

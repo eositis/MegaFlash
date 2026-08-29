@@ -7,7 +7,7 @@
 //
 // asm-megaflash.s
 //
-void __fastcall__ SendCommand();
+void __fastcall__ SendCommand(uint8_t cmd);
 bool __fastcall__ GetInfoString(uint8_t type);
 uint8_t __fastcall__ GetUnitCount();
 uint8_t __fastcall__ EraseDisk();

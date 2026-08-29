@@ -5,7 +5,7 @@ This document describes what is needed to build the MegaFlash Pico firmware on a
 ## Supported hosts
 
 - **Linux** — x86_64 or **aarch64** (ARM64). Install `gcc-arm-none-eabi` / CMake from your distro (or Arm’s tarball for **aarch64** if you need a specific GCC version).
-- **macOS** — **Apple Silicon (ARM64)** and Intel. On Apple Silicon, **Homebrew** lives under **`/opt/homebrew`** (not `/usr/local`). Use the **macOS arm64 / darwin-aarch64** build of the [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) when installing the `.pkg`, or `brew install arm-none-eabi-gcc`. `sed` behaviour matches BSD sed (see §6).
+- **macOS** — **Apple Silicon (ARM64)** and Intel. On Apple Silicon, **Homebrew** lives under **`/opt/homebrew`**. Install **`brew install cmake`** and **`brew install --cask gcc-arm-embedded`** (not the formula **`arm-none-eabi-gcc`**). `sed` behaviour matches BSD sed (see §6).
 
 ## 1. Raspberry Pi Pico SDK
 
@@ -42,11 +42,17 @@ The RP2040 and RP2350 are built with the **arm-none-eabi** toolchain (no OS, bar
 
 - **Required programs:** `arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-ar`, `arm-none-eabi-ranlib` (and `arm-none-eabi-as` via gcc).
 - **Obtain:**
-  - **macOS:** [Arm GNU Toolchain for Arm Embedded Processors](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) (e.g. “Arm GNU Toolchain arm-none-eabi”). Pick the installer matching your Mac: **darwin-aarch64** on Apple Silicon, **darwin-x86_64** on Intel. Install so that the `arm-none-eabi/bin` directory is available; the scripts look under `/Applications/ArmGNUToolchain/*/arm-none-eabi/bin`, then **`/opt/homebrew/bin`** and **`/usr/local/bin`** (Homebrew), then **`PATH`**, or use **`ARM_TOOLCHAIN_PATH`** (see below).
-  - **Not enough for Pico:** **`brew install arm-none-eabi-gcc`** provides a cross-GCC **without newlib** (no **`nosys.specs`**). The Pico SDK boot stage and C runtime need the **full** Arm GNU Embedded toolchain. Use the **.pkg** from Arm (correct host arch), not Homebrew’s standalone GCC, unless you know you have a complete newlib layout.
+  - **macOS (preferred):** Homebrew-managed full toolchain + CMake:
+    ```bash
+    brew install cmake
+    brew install --cask gcc-arm-embedded   # needs admin once (installs the Arm .pkg)
+    ```
+    The cask puts **`arm-none-eabi-*`** shims in **`/opt/homebrew/bin`** (Apple Silicon) or **`/usr/local/bin`** (Intel). Those shims have **`nosys.specs`** (newlib). Build scripts prefer that prefix first.
+  - **Not enough for Pico:** **`brew install arm-none-eabi-gcc`** (formula) is a cross-GCC **without newlib**. Scripts reject it. Do **not** substitute it for the **cask**.
+  - **Fallback:** [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) **darwin-aarch64** / **darwin-x86_64** `.pkg` under **`/Applications/ArmGNUToolchain/*/arm-none-eabi/bin`**, then **`PATH`**, or **`ARM_TOOLCHAIN_PATH`**.
   - **Linux:** Install the package (e.g. `sudo apt install gcc-arm-none-eabi` on Debian/Ubuntu) or use the Arm GNU Toolchain tarball for **aarch64** or **x86_64** matching your host.
 - **Important:** The build script explicitly passes the C/C++/AR/RANLIB paths to CMake so that the correct toolchain is used (e.g. on macOS, Xcode’s `ranlib` must not be used). Use a toolchain that provides `nosys.specs` and is intended for bare-metal.
-- **Optional override:** Set **`ARM_TOOLCHAIN_PATH`** to the **bin** directory containing `arm-none-eabi-gcc` (e.g. `export ARM_TOOLCHAIN_PATH="/Applications/ArmGNUToolchain/12.3.rel1/arm-none-eabi/bin"`) to force a specific toolchain.
+- **Optional override:** Set **`ARM_TOOLCHAIN_PATH`** to the **bin** directory containing `arm-none-eabi-gcc` (normally leave unset so Homebrew **`/opt/homebrew/bin`** is used).
 
 ## 3. CMake and Make
 
@@ -81,8 +87,8 @@ The firmware can include a ROM disk image via `romdisk.s`, which includes the bi
 ## 7. Summary: minimal steps to reproduce the build
 
 1. Install **Raspberry Pi Pico SDK**: clone the repo and run **`git submodule update --init`** in the SDK directory so all add-ons (tinyusb, cyw43-driver, lwip, mbedtls, btstack) are present. Set **`PICO_SDK_PATH`** to the SDK path.
-2. Install **arm-none-eabi** GCC toolchain; optionally set **`ARM_TOOLCHAIN_PATH`** to its `bin` directory.
-3. Install **CMake** (3.13+) and **Make**.
+2. Install **arm-none-eabi** GCC with newlib: on macOS **`brew install --cask gcc-arm-embedded`** (admin once). Optionally set **`ARM_TOOLCHAIN_PATH`**.
+3. Install **CMake** (3.13+) and **Make** (`brew install cmake` on macOS).
 4. Build the Control Panel: from repo root, `cd cpanel && make release` (ensure **CC65** is installed); then return to `pico/`.
 5. Ensure **`romdisk.po`** is present in `pico/` if your build expects it.
 6. From the **`pico/`** directory, run **`./cmakeall.sh`**.

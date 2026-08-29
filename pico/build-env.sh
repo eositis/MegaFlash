@@ -30,7 +30,8 @@ CMAKE_BIN="${CMAKE_BIN:-cmake}"
 unset _mf_cmake _c
 
 # True if arm-none-eabi-gcc in $1 runs on this host AND Pico SDK can link (newlib nosys.specs).
-# Skips: Intel-only Arm .pkg on Apple Silicon; Homebrew arm-none-eabi-gcc (GCC without newlib).
+# Skips: Intel-only Arm .pkg on Apple Silicon; Homebrew formula arm-none-eabi-gcc (GCC without newlib).
+# Accepts: Homebrew cask gcc-arm-embedded (shims in /opt/homebrew/bin with nosys.specs).
 mf_try_arm_toolchain_bin() {
   local d="$1"
   local specs
@@ -39,6 +40,67 @@ mf_try_arm_toolchain_bin() {
   "$d/arm-none-eabi-gcc" --version >/dev/null 2>&1 || return 1
   specs=$("$d/arm-none-eabi-gcc" -print-file-name=nosys.specs 2>/dev/null || true)
   [ -n "$specs" ] && [ -f "$specs" ]
+}
+
+# Set TOOLCHAIN_BIN and CMAKE_ARM_TOOLCHAIN. Return 1 if none (already printed).
+# Order: ARM_TOOLCHAIN_PATH override, then Homebrew prefixes, then Arm .pkg under
+# /Applications, then PATH. Homebrew cask gcc-arm-embedded is the supported macOS install.
+mf_resolve_arm_toolchain() {
+  TOOLCHAIN_BIN=""
+  CMAKE_ARM_TOOLCHAIN=""
+
+  if [ -n "${ARM_TOOLCHAIN_PATH:-}" ] && mf_try_arm_toolchain_bin "$ARM_TOOLCHAIN_PATH"; then
+    TOOLCHAIN_BIN="$ARM_TOOLCHAIN_PATH"
+  fi
+  if [ -z "$TOOLCHAIN_BIN" ]; then
+    local _hb
+    for _hb in /opt/homebrew /usr/local; do
+      if mf_try_arm_toolchain_bin "$_hb/bin"; then
+        TOOLCHAIN_BIN="$_hb/bin"
+        break
+      fi
+    done
+  fi
+  if [ -z "$TOOLCHAIN_BIN" ] && [ -d /Applications/ArmGNUToolchain ]; then
+    local d
+    for d in /Applications/ArmGNUToolchain/*/arm-none-eabi/bin; do
+      if mf_try_arm_toolchain_bin "$d"; then
+        TOOLCHAIN_BIN="$d"
+        break
+      fi
+    done
+  fi
+  if [ -z "$TOOLCHAIN_BIN" ]; then
+    local GCC_PATH _gdir
+    GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null || true)
+    if [ -n "$GCC_PATH" ]; then
+      _gdir=$(dirname "$GCC_PATH")
+      if mf_try_arm_toolchain_bin "$_gdir"; then
+        TOOLCHAIN_BIN="$_gdir"
+      fi
+    fi
+  fi
+
+  if [ -z "$TOOLCHAIN_BIN" ]; then
+    echo "Error: no usable arm-none-eabi toolchain (need host-native GCC + newlib, e.g. nosys.specs)." >&2
+    echo "  macOS: brew install --cask gcc-arm-embedded   # full Arm GNU Toolchain; needs admin for the .pkg" >&2
+    echo "  Also:  brew install cmake" >&2
+    echo "  Not enough: brew install arm-none-eabi-gcc (formula, no newlib)." >&2
+    echo "  Override: export ARM_TOOLCHAIN_PATH to a bin directory that has nosys.specs." >&2
+    return 1
+  fi
+
+  export PATH="$TOOLCHAIN_BIN:$PATH"
+  CMAKE_ARM_TOOLCHAIN="-DPICO_TOOLCHAIN_PATH=$TOOLCHAIN_BIN"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_C_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_CXX_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-g++"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_ASM_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_AR=$TOOLCHAIN_BIN/arm-none-eabi-ar"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_RANLIB=$TOOLCHAIN_BIN/arm-none-eabi-ranlib"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJDUMP=$TOOLCHAIN_BIN/arm-none-eabi-objdump"
+  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJCOPY=$TOOLCHAIN_BIN/arm-none-eabi-objcopy"
+  echo "Using ARM toolchain: $TOOLCHAIN_BIN"
+  return 0
 }
 
 # After a successful debug firmware build: create a marker commit at the repo root.

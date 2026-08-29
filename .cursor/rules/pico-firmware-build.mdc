@@ -13,4 +13,6 @@ When running a compile check or test build after editing `pico/`:
 - Prefer **`./pico/build-both.sh`** — configures and builds **both** Release targets, builds **cpanel** first, does **not** bump `defines.h`.
 - **`./pico/cmakeall.sh`** — full release flow (version bump, all four CMake dirs, copies `_releases/…`).
 
+macOS tools: **`brew install cmake`** and **`brew install --cask gcc-arm-embedded`** (the cask needs admin once). Do not use the Homebrew formula **`arm-none-eabi-gcc`**. If a cask/pkg install needs elevated privileges, **ask the user** rather than installing a side tarball.
+
 Do **not** verify only `pico_release` unless the user explicitly asked for RP2040-only.

@@ -16,56 +16,7 @@ source "$SCRIPT_DIR/build-env.sh"
 JOBS="${JOBS:-8}"
 U2_ETH_HEADER_TRACE="${U2_ETH_HEADER_TRACE:-0}"
 
-# --- ARM toolchain (same logic as cmakeall.sh) ---
-TOOLCHAIN_BIN=""
-if [ -n "${ARM_TOOLCHAIN_PATH:-}" ] && mf_try_arm_toolchain_bin "$ARM_TOOLCHAIN_PATH"; then
-  TOOLCHAIN_BIN="$ARM_TOOLCHAIN_PATH"
-elif [ -d /Applications/ArmGNUToolchain ]; then
-  for d in /Applications/ArmGNUToolchain/*/arm-none-eabi/bin; do
-    if mf_try_arm_toolchain_bin "$d"; then
-      TOOLCHAIN_BIN="$d"
-      break
-    fi
-  done
-fi
-# Homebrew: Apple Silicon uses /opt/homebrew; Intel macOS often /usr/local. Prefer before generic PATH.
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  for _hb in /opt/homebrew /usr/local; do
-    if mf_try_arm_toolchain_bin "$_hb/bin"; then
-      TOOLCHAIN_BIN="$_hb/bin"
-      break
-    fi
-  done
-fi
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null || true)
-  if [ -n "$GCC_PATH" ]; then
-    _gdir=$(dirname "$GCC_PATH")
-    if mf_try_arm_toolchain_bin "$_gdir"; then
-      TOOLCHAIN_BIN="$_gdir"
-    fi
-  fi
-fi
-
-CMAKE_ARM_TOOLCHAIN=""
-if [ -n "$TOOLCHAIN_BIN" ]; then
-  export PATH="$TOOLCHAIN_BIN:$PATH"
-  CMAKE_ARM_TOOLCHAIN="-DPICO_TOOLCHAIN_PATH=$TOOLCHAIN_BIN"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_C_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_CXX_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-g++"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_ASM_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_AR=$TOOLCHAIN_BIN/arm-none-eabi-ar"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_RANLIB=$TOOLCHAIN_BIN/arm-none-eabi-ranlib"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJDUMP=$TOOLCHAIN_BIN/arm-none-eabi-objdump"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJCOPY=$TOOLCHAIN_BIN/arm-none-eabi-objcopy"
-  echo "Using ARM toolchain: $TOOLCHAIN_BIN"
-else
-  echo "Error: no usable arm-none-eabi toolchain (need host-native GCC + newlib, e.g. Arm GNU Toolchain)." >&2
-  echo "  macOS Apple Silicon: install the **darwin-aarch64** arm-none-eabi package from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads" >&2
-  echo "  (Intel-only /Applications/ArmGNUToolchain and Homebrew arm-none-eabi-gcc are not sufficient for Pico.)" >&2
-  echo "  Then set ARM_TOOLCHAIN_PATH to the .../arm-none-eabi/bin directory, or fix your PATH." >&2
-  exit 1
-fi
+mf_resolve_arm_toolchain || exit 1
 
 CPANEL_DIR="$(cd "$SCRIPT_DIR/../cpanel" 2>/dev/null && pwd)"
 if [ -d "$CPANEL_DIR" ] && [ -f "$CPANEL_DIR/Makefile" ]; then
@@ -90,18 +41,20 @@ FIRMWARE_BUILD_TIMESTAMP_STR="${FIRMWARE_BUILD_TIMESTAMP_STR:-$(date -u +"%Y-%m-
 echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMESTAMP_STR)"
 echo "(override either by exporting FIRMWARE_BUILD_TIMESTAMP / FIRMWARE_BUILD_TIMESTAMP_STR before run)"
 
-echo "Configuring pico_release (Pico W)..."
+echo "Configuring pico_release (Pico W, MEGAFLASH_SMB=0)..."
 "$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
+  -DMEGAFLASH_SMB=0 \
   $CMAKE_ARM_TOOLCHAIN
 
-echo "Configuring pico2_release (Pico 2 W)..."
+echo "Configuring pico2_release (Pico 2 W, MEGAFLASH_SMB=1)..."
 "$CMAKE_BIN" -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
   -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
+  -DMEGAFLASH_SMB=1 \
   $CMAKE_ARM_TOOLCHAIN
 
 echo "Building pico_release (-j$JOBS)..."

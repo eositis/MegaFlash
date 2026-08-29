@@ -17,6 +17,7 @@
 #include "testwifi.h"
 #include "format.h"
 #include "tftp.h"
+#include "smb.h"
 #include "drivesenable.h"
 
 
@@ -47,6 +48,7 @@ enum COMMANDS {
   ID_WIFISETTINGS,
   ID_TESTWIFI,
   ID_TFTP,
+  ID_SMB,
   ID_FORMAT,
   ID_ERASESETTINGS,
   ID_SAVEANDREBOOT
@@ -63,6 +65,7 @@ static char* mainMenuItems[] = {
   
   "Test Wifi/NTP >",
   "Disk Image Transfer via WIFI >",
+  "SMB Share Disk >",
   "Format >",
   "Erase All Settings\n",
   
@@ -78,6 +81,7 @@ static uint8_t mainMenuIDs[] = {
   ID_WIFISETTINGS,
   ID_TESTWIFI,
   ID_TFTP,
+  ID_SMB,
   ID_FORMAT,
   ID_ERASESETTINGS,
   ID_SAVEANDREBOOT
@@ -90,7 +94,7 @@ static uint8_t mainMenuItemCount = MMITEMCOUNT;
 #define XPOS 4
 #define YPOS 3
 #define WIDTH 32
-#define HEIGHT 18
+#define HEIGHT 19
 
 //Menu Position
 #define MENU_XPOS 0
@@ -219,6 +223,7 @@ void DoMainMenu() {
   //Remove unwanted menu items. 
   //The order is from highest ID number to 0
   if (!isWifiSupported) {
+    RemoveMenuItem(ID_SMB);
     RemoveMenuItem(ID_TFTP);
     RemoveMenuItem(ID_TESTWIFI);
     mainMenuItems[ID_DRIVESENABLE][strlen(mainMenuItems[ID_DRIVESENABLE])]='\n'; //move the new line char from WIFI Settings to FPU
@@ -237,7 +242,7 @@ void DoMainMenu() {
       wnd_ResetScrollWindow();
       clrscr();
       DrawMainMenuWindowFrame(true);
-      gotoxy(0,17);
+      gotoxy(0,18);
       cputs(mmPrompt);
       ShowAllOptions();
       DisplayTime();
@@ -301,6 +306,12 @@ void DoMainMenu() {
           DrawMainMenuWindowFrame(false);  //Inactivate Main Menu Window 
           DoTFTPImageTransfer();
           redrawAll = true;   
+          break;
+        case ID_SMB:
+          if (key!=KEY_ENTER) break;
+          DrawMainMenuWindowFrame(false);
+          DoSmbSettings();
+          redrawAll = true;
           break;
         case ID_FORMAT:
           //Format Megaflash Drive

@@ -61,7 +61,17 @@ typedef struct {
   
   //User Settings (V2) (UserSettings_t version=2)
   uint8_t user2_fd_enableflags;     //Enable Flags of each individual flash drive
-  
+
+  //SMB client (native Wi-Fi, not Uthernet II). smb_magic validates these
+  //fields after upgrading an older Config_t image in the security registers.
+  uint32_t smb_magic;
+  uint8_t  smb_enabled;
+  uint8_t  smb_padding[3];
+  char     smb_host[SMB_HOST_MAX + 1];
+  char     smb_share[SMB_SHARE_MAX + 1];
+  char     smb_user[SMB_USER_MAX + 1];
+  char     smb_password[SMB_PASS_MAX + 1];
+  char     smb_domain[SMB_DOMAIN_MAX + 1];
   
 } Config_t;
 
@@ -96,6 +106,16 @@ void SaveTFTPLastServer(const char* hostname);
 const char* GetNTPServerOverride();
 bool SaveNTPServerOverride(const char* ntpserver);
 uint8_t GetFlashdriveEnableFlag();
+
+#define SMB_CONFIG_MAGIC  0x534d4233u  /* 'SMB3' */
+bool GetSmbEnabled();
+const char* GetSmbHost();
+const char* GetSmbShare();
+const char* GetSmbUser();
+const char* GetSmbPassword();
+const char* GetSmbDomain();
+void GetSmbSettings(SmbSetting_t *dest);
+bool SaveSmbSettings(const SmbSetting_t *src);
 
 void LoadAllConfigs();
 void SaveConfigs();

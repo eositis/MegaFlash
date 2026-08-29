@@ -267,6 +267,9 @@ void NetworkPump::PollOnce() {
     if (s) s->OnPump(*this);
   }
   DrainSessionTimers();
+  /* Also pump SMB if Init/AddSession was skipped (vector/EH under emu). */
+  extern "C" void SmbClient_Pump(void);
+  SmbClient_Pump();
 }
 
 void NetworkPump::DrainSessionTimers() {
@@ -347,6 +350,7 @@ tcp_pcb *NetworkPump::CreateTcpPcb(INetworkSession *owner) {
   tcp_arg(pcb, owner);
   tcp_recv(pcb, NetworkPump_LegacyTcpRecv);
   tcp_err(pcb, NetworkPump_LegacyTcpErr);
+  tcp_sent(pcb, NetworkPump_LegacyTcpSent);
   cyw43_arch_lwip_end();
   return pcb;
 }

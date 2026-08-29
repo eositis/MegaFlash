@@ -36,62 +36,9 @@ if [ -f "$DEFINES" ]; then
   echo "Build version: $NEW_VER ($NEXT_VER) $BUILD_DATE"
 fi
 
-# Force the ARM toolchain so the same compiler is used (with nosys.specs) and
-# macOS uses arm-none-eabi-ranlib, not Xcode's. Prefer explicit path over PATH.
-#
-# To force a specific toolchain, set ARM_TOOLCHAIN_PATH to its bin directory, e.g.:
-#   export ARM_TOOLCHAIN_PATH="/Applications/ArmGNUToolchain/12.3.rel1/arm-none-eabi/bin"
-#   ./cmakeall.sh
-#
-TOOLCHAIN_BIN=""
-if [ -n "$ARM_TOOLCHAIN_PATH" ] && mf_try_arm_toolchain_bin "$ARM_TOOLCHAIN_PATH"; then
-  TOOLCHAIN_BIN="$ARM_TOOLCHAIN_PATH"
-elif [ -d /Applications/ArmGNUToolchain ]; then
-  for d in /Applications/ArmGNUToolchain/*/arm-none-eabi/bin; do
-    if mf_try_arm_toolchain_bin "$d"; then
-      TOOLCHAIN_BIN="$d"
-      break
-    fi
-  done
-fi
-# Homebrew: Apple Silicon uses /opt/homebrew; Intel macOS often /usr/local. Prefer before generic PATH.
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  for _hb in /opt/homebrew /usr/local; do
-    if mf_try_arm_toolchain_bin "$_hb/bin"; then
-      TOOLCHAIN_BIN="$_hb/bin"
-      break
-    fi
-  done
-fi
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null || true)
-  if [ -n "$GCC_PATH" ]; then
-    _gdir=$(dirname "$GCC_PATH")
-    if mf_try_arm_toolchain_bin "$_gdir"; then
-      TOOLCHAIN_BIN="$_gdir"
-    fi
-  fi
-fi
-
-CMAKE_ARM_TOOLCHAIN=""
-if [ -n "$TOOLCHAIN_BIN" ]; then
-  export PATH="$TOOLCHAIN_BIN:$PATH"
-  CMAKE_ARM_TOOLCHAIN="-DPICO_TOOLCHAIN_PATH=$TOOLCHAIN_BIN"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_C_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_CXX_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-g++"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_ASM_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_AR=$TOOLCHAIN_BIN/arm-none-eabi-ar"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_RANLIB=$TOOLCHAIN_BIN/arm-none-eabi-ranlib"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJDUMP=$TOOLCHAIN_BIN/arm-none-eabi-objdump"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJCOPY=$TOOLCHAIN_BIN/arm-none-eabi-objcopy"
-  echo "Using ARM toolchain: $TOOLCHAIN_BIN"
-else
-  echo "Error: no usable arm-none-eabi toolchain (need host-native GCC + newlib, e.g. Arm GNU Toolchain)." >&2
-  echo "  macOS Apple Silicon: install the **darwin-aarch64** arm-none-eabi package from https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads" >&2
-  echo "  (Intel-only /Applications/ArmGNUToolchain and Homebrew arm-none-eabi-gcc are not sufficient for Pico.)" >&2
-  echo "  Then set ARM_TOOLCHAIN_PATH to the .../arm-none-eabi/bin directory, or fix your PATH." >&2
-  exit 1
-fi
+# ARM toolchain: Homebrew cask gcc-arm-embedded first (see mf_resolve_arm_toolchain).
+# Override: export ARM_TOOLCHAIN_PATH to a bin directory with nosys.specs.
+mf_resolve_arm_toolchain || exit 1
 
 # Build cpanel first (Control Panel binary embedded in firmware)
 CPANEL_DIR="$(cd "$SCRIPT_DIR/../cpanel" 2>/dev/null && pwd)"
@@ -119,20 +66,24 @@ echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMES
 "$CMAKE_BIN" -B pico_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=0 \
   $CMAKE_ARM_TOOLCHAIN
 "$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w  -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=0 \
   $CMAKE_ARM_TOOLCHAIN
 
 #Pico2 Build
 "$CMAKE_BIN" -B pico2_debug   -S . -DCMAKE_BUILD_TYPE=Debug   -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=1 \
   $CMAKE_ARM_TOOLCHAIN
 "$CMAKE_BIN" -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=1 \
   $CMAKE_ARM_TOOLCHAIN
 
 # Build release firmware

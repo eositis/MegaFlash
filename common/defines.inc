@@ -79,6 +79,9 @@ CMD_TFTPRUN             =       $50
 CMD_TFTPSTATUS          =       $51
 CMD_TFTPGETLASTSERVER   =       $52
 CMD_TFTPSAVELASTSERVER  =       $53
+CMD_SAVESMBSETTINGS     =       $54
+CMD_GETSMBSETTINGS      =       $55
+CMD_SMBSTATUS           =       $56
 
 
 WE_KEY                  =       $71     ;Write Enable Key

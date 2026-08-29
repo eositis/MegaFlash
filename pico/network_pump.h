@@ -30,6 +30,8 @@ extern "C" void NetworkPump_LegacyDnsCallback(const char *hostname, const ip_add
 // lwIP TCP: arg = INetworkSession* (pcb owner). `tcp_err` does not pass pcb; multi-pcb sessions track pcbs internally (§14.12).
 extern "C" err_t NetworkPump_LegacyTcpRecv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
 extern "C" void NetworkPump_LegacyTcpErr(void *arg, err_t err);
+extern "C" err_t NetworkPump_LegacyTcpConnected(void *arg, struct tcp_pcb *tpcb, err_t err);
+extern "C" err_t NetworkPump_LegacyTcpSent(void *arg, struct tcp_pcb *tpcb, u16_t len);
 
 //
 // INetworkSession
@@ -58,6 +60,17 @@ public:
 
   /// lwIP TCP fatal/error path; lwIP does not pass `pcb` here — use for single-pcb sessions or track pcbs internally.
   virtual void OnTcpErr(err_t err) { (void)err; }
+
+  virtual err_t OnTcpConnected(struct tcp_pcb *pcb, err_t err) {
+    (void)pcb;
+    return err;
+  }
+
+  virtual err_t OnTcpSent(struct tcp_pcb *pcb, uint16_t len) {
+    (void)pcb;
+    (void)len;
+    return ERR_OK;
+  }
 
   virtual void OnStart(NetworkPump &pump) { (void)pump; }
 

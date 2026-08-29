@@ -33,52 +33,7 @@ U2_MON_LOG_BUS="${U2_MON_LOG_BUS:-0}"
 U2_ETH_HEADER_TRACE="${U2_ETH_HEADER_TRACE:-0}"
 U2_MACRAW_COMPAT_DROP_OLDEST="${U2_MACRAW_COMPAT_DROP_OLDEST:-0}"
 
-# --- ARM toolchain (same as build-both.sh) ---
-TOOLCHAIN_BIN=""
-if [ -n "${ARM_TOOLCHAIN_PATH:-}" ] && mf_try_arm_toolchain_bin "$ARM_TOOLCHAIN_PATH"; then
-  TOOLCHAIN_BIN="$ARM_TOOLCHAIN_PATH"
-elif [ -d /Applications/ArmGNUToolchain ]; then
-  for d in /Applications/ArmGNUToolchain/*/arm-none-eabi/bin; do
-    if mf_try_arm_toolchain_bin "$d"; then
-      TOOLCHAIN_BIN="$d"
-      break
-    fi
-  done
-fi
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  for _hb in /opt/homebrew /usr/local; do
-    if mf_try_arm_toolchain_bin "$_hb/bin"; then
-      TOOLCHAIN_BIN="$_hb/bin"
-      break
-    fi
-  done
-fi
-if [ -z "$TOOLCHAIN_BIN" ]; then
-  GCC_PATH=$(command -v arm-none-eabi-gcc 2>/dev/null || true)
-  if [ -n "$GCC_PATH" ]; then
-    _gdir=$(dirname "$GCC_PATH")
-    if mf_try_arm_toolchain_bin "$_gdir"; then
-      TOOLCHAIN_BIN="$_gdir"
-    fi
-  fi
-fi
-
-CMAKE_ARM_TOOLCHAIN=""
-if [ -n "$TOOLCHAIN_BIN" ]; then
-  export PATH="$TOOLCHAIN_BIN:$PATH"
-  CMAKE_ARM_TOOLCHAIN="-DPICO_TOOLCHAIN_PATH=$TOOLCHAIN_BIN"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_C_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_CXX_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-g++"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_ASM_COMPILER=$TOOLCHAIN_BIN/arm-none-eabi-gcc"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_AR=$TOOLCHAIN_BIN/arm-none-eabi-ar"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_RANLIB=$TOOLCHAIN_BIN/arm-none-eabi-ranlib"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJDUMP=$TOOLCHAIN_BIN/arm-none-eabi-objdump"
-  CMAKE_ARM_TOOLCHAIN="$CMAKE_ARM_TOOLCHAIN -DCMAKE_OBJCOPY=$TOOLCHAIN_BIN/arm-none-eabi-objcopy"
-  echo "Using ARM toolchain: $TOOLCHAIN_BIN"
-else
-  echo "Error: no usable arm-none-eabi toolchain (see build-both.sh)." >&2
-  exit 1
-fi
+mf_resolve_arm_toolchain || exit 1
 
 CPANEL_DIR="$(cd "$SCRIPT_DIR/../cpanel" 2>/dev/null && pwd)"
 if [ -d "$CPANEL_DIR" ] && [ -f "$CPANEL_DIR/Makefile" ]; then
@@ -113,18 +68,20 @@ echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMES
 
 U2_FLAGS="-DU2_IP65_CHECKPOINT=$U2_IP65_CHECKPOINT -DU2_IP65_TRACE_DATA=$U2_IP65_TRACE_DATA -DU2_MON_LOG_BUS=$U2_MON_LOG_BUS -DU2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE -DU2_MACRAW_COMPAT_DROP_OLDEST=$U2_MACRAW_COMPAT_DROP_OLDEST"
 
-echo "Configuring pico_debug (Pico W, Debug)..."
+echo "Configuring pico_debug (Pico W, Debug, MEGAFLASH_SMB=0)..."
 "$CMAKE_BIN" -B pico_debug -S . -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=0 \
   $U2_FLAGS \
   "${PIOASM_INSTALL_DIR_FLAG[@]}" \
   $CMAKE_ARM_TOOLCHAIN
 
-echo "Configuring pico2_debug (Pico 2 W, Debug)..."
+echo "Configuring pico2_debug (Pico 2 W, Debug, MEGAFLASH_SMB=1)..."
 "$CMAKE_BIN" -B pico2_debug -S . -DCMAKE_BUILD_TYPE=Debug -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
   "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
+  -DMEGAFLASH_SMB=1 \
   $U2_FLAGS \
   "${PIOASM_INSTALL_DIR_FLAG[@]}" \
   $CMAKE_ARM_TOOLCHAIN

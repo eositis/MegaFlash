@@ -1311,7 +1311,7 @@ ADTPro **directory listing** and **disk Send start** are different exchanges (li
 
 **Change:** Scripts pass **`-DPICO_SDK_PATH="$SDK_PATH"`** with **`SDK_PATH="${PICO_SDK_PATH:-$HOME/pico-sdk}"`**.
 
-**Follow-up:** `pico/CMakeLists.txt` applies the same **`$HOME/pico-sdk`** fallback when neither `-DPICO_SDK_PATH` nor a non-empty `ENV{PICO_SDK_PATH}` is set, *before* `include(pico_sdk_import.cmake)`, so bare `cmake -B build -S .` works in non-interactive environments. **Toolchain discovery:** after **`ARM_TOOLCHAIN_PATH`** and **`/Applications/ArmGNUToolchain/...`**, scripts check **`/opt/homebrew/bin`** then **`/usr/local/bin`** so Apple Silicon Homebrew is preferred over a stale Intel-era **`PATH`**. **`mf_try_arm_toolchain_bin`** also requires **`nosys.specs`** (newlib) so Homebrew’s **`arm-none-eabi-gcc`** alone is rejected; Pico needs the full Arm GNU Embedded **.pkg** (darwin-aarch64 on Apple Silicon). **`pico/build-env.sh`** sets **`CMAKE_BIN`** the same way (**`/opt/homebrew/bin/cmake`** first) so **`cmakeall.sh`**, **`build-both.sh`**, and **`build-debug.sh`** do not invoke an x86_64 CMake on ARM Macs; override with **`CMAKE=/path/to/cmake`**. **`cpanel`:** scripts run **`make release`** only so the test-disk **`java`** step is skipped (avoids x86 Java after Intel→ARM migration). **`set -e`:** **`GCC_PATH=$(command -v …)`** uses **`|| true`** so a missing compiler does not abort before the error message.
+**Follow-up:** `pico/CMakeLists.txt` applies the same **`$HOME/pico-sdk`** fallback when neither `-DPICO_SDK_PATH` nor a non-empty `ENV{PICO_SDK_PATH}` is set, *before* `include(pico_sdk_import.cmake)`, so bare `cmake -B build -S .` works in non-interactive environments. **Toolchain discovery** (`mf_resolve_arm_toolchain` in **`pico/build-env.sh`**): **`ARM_TOOLCHAIN_PATH`** override, then **Homebrew** **`/opt/homebrew/bin`** / **`/usr/local/bin`** (cask **`gcc-arm-embedded`** shims with **`nosys.specs`**), then **`/Applications/ArmGNUToolchain/...`**, then **`PATH`**. **`mf_try_arm_toolchain_bin`** still requires **`nosys.specs`** so the Homebrew **formula** **`arm-none-eabi-gcc`** (no newlib) is rejected. The **cask** is the supported macOS install (`brew install --cask gcc-arm-embedded`; admin once for the Arm `.pkg`). **`CMAKE_BIN`**: **`/opt/homebrew/bin/cmake`** first. **`cpanel`:** scripts run **`make release`** only so the test-disk **`java`** step is skipped. **`set -e`:** **`GCC_PATH=$(command -v …)`** uses **`|| true`** so a missing compiler does not abort before the error message.
 
 **`build-both.sh`:** For verification without bumping `defines.h`, run `./build-both.sh` from `pico/` — it builds **cpanel**, then configures and **`make`s both `pico_release` and `pico2_release`** (same toolchain logic as `cmakeall.sh`). See summary table §11.
 
@@ -2391,7 +2391,7 @@ STALL headers are mid-frame Ethernet/IP bytes (`C0A8`=192.168…, `4500`=IPv4 hd
 | Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses **`$HOME/pico-sdk`** when env or `-D` unset (§4); SDK is same git repo on all host architectures |
 | Host CMake | `build-env.sh`, `cmakeall.sh`, `build-both.sh`, `build-debug.sh` | **`CMAKE_BIN`**: `/opt/homebrew/bin/cmake` → `/usr/local/bin/cmake` → **`PATH`**; **`CMAKE`** env override |
 | Debug build → git marker | `build-env.sh` `mf_debug_build_git_commit`, `build-debug.sh`, `build-debug-both.sh` | After a **successful** debug build: **`git commit --allow-empty`** at **MegaFlash** repo root (UF2 trees are **gitignored**). Message includes **HEAD**, **branch**, **clean/dirty**, host uname, and **`build-debug-both.sh`**-specific **`FIRMWARE_BUILD_TIMESTAMP*`** / **`U2_*`** CMake env lines. **Opt out:** **`MF_DEBUG_BUILD_NO_GIT_COMMIT=1`**. Commit failure **does not** fail the build (warns only). |
-| Pico-capable GCC | `build-env.sh` `mf_try_arm_toolchain_bin`, `cmakeall.sh`, `build-both.sh` | Must run on host CPU **and** resolve existing **`nosys.specs`** (rejects Homebrew bare GCC + Intel **.pkg** on Apple Silicon); else scripts **`exit 1`** with install hint |
+| Pico-capable GCC | `build-env.sh` `mf_resolve_arm_toolchain` | Homebrew **`/opt/homebrew/bin`** first (`gcc-arm-embedded` cask); must run on host CPU **and** resolve **`nosys.specs`** (rejects formula **`arm-none-eabi-gcc`** + Intel **.pkg** on Apple Silicon) |
 | Host **picotool** | `pico/picotool/picotool/picotool`, `picotool-src` | Must match host CPU; rebuild from **`picotool-src`** + **`cmake --install`** to **`pico/picotool/`** if link fails (**§4b**). **libusb:** **`brew install libusb`** (+ **`pkgconf`**) on Apple Silicon for **arm64** dylib; else **`PICOTOOL_NO_LIBUSB=1`** for UF2-only |
 | **cpanel / Java** | `cpanel/Makefile`, **`tools/register-arm-openjdk-macos.sh`** | **`make all`** needs **arm64** **`java`**; register Homebrew JDK in **`JavaVirtualMachines`** (**§4c**) or **`JAVA_HOME`**; Intel **`/usr/local/Cellar/openjdk`** removed manually if Intel **`brew` fails |
 | **vs ThomasFok upstream** | **`ThomasFok-upstream-comparison.md`** (root), §4d–**§4h** | **§4e–§4f:** Pico storage/DMA + **`dmamemops`**. **§4g:** **`smartport.s`**. **§4h:** **`fswrts`** + **`swjmp_ay`**, **`B1_FFC8`**. **Not merged:** Thomas **`HOMESEGMENT`** all of **`megaflash.s`**, **`flash.h`** rename, **TFTP DOS-order** |
@@ -2419,6 +2419,7 @@ STALL headers are mid-frame Ethernet/IP bytes (`C0A8`=192.168…, `4500`=IPv4 hd
 | Drives Enable toggles | `cpanel/drivesenable.c` | `gotoxy` Y is WNDTOP-relative; do not add `YPOS` (§10d) |
 | Git 1.1.x patches | branch `1.1.x` | `checkout 1.1.x` to patch/build; `checkout main` to resume tip (§10e) |
 | NetworkPump entry | `network_pump.cpp`, `network.cpp`, `main.c` | `RunNTP` / `RunTestWifi` / `RunTFTP` register a short-lived `LegacyUdpSessionAdapter` and spin `PollOnce()` until `GetCompleted()`; `CUDPTask::Run()` still wraps `EnterRunSession` + same loop for any direct caller; Core 0 idle `NetworkPump_PollOnce` (§14.8) |
+| SMB3 share disk | `pico/smb/*`, `cpanel/smb.c`, §25 | Native STA TCP/445; SmartPort `TYPE_SMB`; Core 1 waits, Core 0 SMB; not Uthernet. **CP:** Yes/No enable → one config page → poll status PASSED/FAILED. **Pico W:** `MEGAFLASH_SMB=0` (RAM); **Pico 2 W:** on |
 | lwIP DNS/UDP vs `runningObject` | `udptask.cpp`, `network_pump.{h,cpp}` | DNS: `dns_pending_owner_` (`INetworkSession*`) + `OnDnsGetHostByNameResult` (§14.11), with pending-owner armed before `dns_gethostbyname` to avoid fast-callback race/timeouts. UDP: `NetworkPump_LegacyUdpRecv` + pcb→`INetworkSession*` (`udp_pcb_owners_`); `OnUdpRecvPbuf(pcb,p,…)` → `NotifyUdpReceived` or U2 (§14.10, §14.10b) |
 | Uthernet II lwIP | `uthernet2_net.{h,cpp}`, `uthernet2.c`, `main.c` | **`u2_netif_input_wrapper`**: §**10w** — MACRAW-only ingress when sock0 MACRAW + not legacy; lwIP-only when **`IsLegacyOperationActive()`**; **`U2_Net_ServicePoll`** from **`PollOnce`**. **`main.c` §10x**: poll-before-FIFO, **`core0Loop`** FIFO **0**, **`U2_RequestCore0NetPoll`** on SEND/RECV. **`U2_Net_Poll`** → **`PollOnce`**. §**1ar** duplicate feed superseded for coexistence. |
 | ADTPro socket-pointer tracing | `uthernet2.c`, `u2_monitor.{h,c}` | Added `sock ptrs` monitor snapshots for `send-pre/send-post/recv-pre` with `TX_RD/TX_WR/RX_RD/RX_WR/SR`; later added coherent `RX_RD` reads (high/low/high retry) to avoid torn cross-core pointer values in `RX_RSR` and trace output (§1ai) |
@@ -3001,4 +3002,27 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **References:** `pico/assets/apple2-logo/`, `render_apple2_logo.py`, `megaflash_apple2_modes_sheet.png`.
 
+---
+
+## 25. SMB3 client as a SmartPort ProDOS volume (branch `SMB-drive`)
+
+**What:** Present one remote SMB3 share to the IIc as an extra SmartPort disk so ProDOS can copy files to/from MegaFlash volumes. Network path is native CYW43/lwIP (same as TFTP), not Uthernet II.
+
+**Why:** MegaFlash has no LocalTalk/AFP. The equivalent UX is another block device. Pico never sees ProDOS filenames, so the Pico synthesizes a ProDOS volume (65535-block mask) from SMB directory listings and maps `.TXT`/`.BIN`/`.SYS`/`.BAS` types. Core 1 must not call lwIP: it posts a block I/O and waits on `BUSYFLAG` already set; Core 0 completes SMB in `NetworkPump::OnPump`. TFTP’s `RunTFTP` blocks Core 0, so SMB I/O fails fast while a legacy op is active.
+
+**What we did:** Control Panel + encrypted `Config_t` credentials; `CSmbSession` (SMB 2.x/3.0.2, NTLMv2, AES-CMAC signing when dialect ≥ 3.0); virtual VDH/catalog; read and write data blocks; `TYPE_SMB` in `mediaaccess.c`. Encryption-on-the-wire is not on by default (CPU cost); servers that require it will fail auth/tree until that path is added.
+
+**CP UI:** Enable is a Yes/No menu with inverse highlight (same pattern as confirm dialogs). Choosing Yes opens one screen that collects host/share/user/password/domain sequentially. After save, the CP polls `CMD_SMBSTATUS` and reports PASSED / FAILED / DISABLED / TIMEOUT with the Pico status string as the reason. Pico status strings use `OK:` / `Failed:` / `Disabled` prefixes for classification.
+
+**What we didn’t do:** Kerberos, SMB 3.1.1 preauth, nested directory trees beyond root listing, AppleDouble/vfs_fruit type/auxtype, BSD sockets (`LWIP_SOCKET` stays 0).
+
+**Compile:** First Pico W Release build failed because `CSmbSession::ApplyConfig()` called `CheckPicoW()` without a prototype. That helper lives in `misc.c` / `misc.h` (`extern "C"`). Include `misc.h` from `smb_client.cpp` rather than duplicating a board check.
+
+RP2040 Release then overflowed RAM by ~8 KiB (`.bss` + SMB TX/RX and catalog). `MEGAFLASH_SMB` defaults to **0** on `pico_w` (client sources not linked; `smbdisk.c` stubs) and **1** on Pico 2 W. Override with `-DMEGAFLASH_SMB=0|1`.
+
+**Takeaway:** Treat Pico 2 W as the primary target if RP2040 heap is tight (U2 + 140 KiB RAM disk + 4 KiB SMB RX). On this tree Pico W firmware builds **without** the SMB client.
+
+**References:** `pico/smb/*`, `pico/userconfig.c`, `cpanel/smb.c`, `pico/mediaaccess.c`, `pico/network_pump.{h,cpp}`.
+
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*
+

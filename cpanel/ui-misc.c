@@ -22,11 +22,32 @@ static VolInfo_t volInfo;  //Data structure returned by CMD_GETVOLINFO command
 //
 uint8_t GetDriveListCount(void) {
   static_local uint8_t unitCount;
+  static_local uint8_t unit;
+  static_local uint8_t last;
   unitCount = GetUnitCount();
-  if (unitCount == 0) return 0;
-  if (!GetVolInfo(unitCount, &volInfo)) return unitCount;
-  if (volInfo.mediumType == TYPE_ROMDISK) return unitCount - 1;
-  return unitCount;
+  last = 0;
+  for (unit = 1; unit <= unitCount; ++unit) {
+    if (!GetVolInfo(unit, &volInfo)) continue;
+    if (volInfo.mediumType == TYPE_FLASH || volInfo.mediumType == TYPE_RAMDISK)
+      last = unit;
+  }
+  return last;
+}
+
+/* Same as GetDriveListCount plus SMB share disk (TYPE_SMB). */
+uint8_t GetVolumeListCount(void) {
+  static_local uint8_t unitCount;
+  static_local uint8_t unit;
+  static_local uint8_t last;
+  unitCount = GetUnitCount();
+  last = 0;
+  for (unit = 1; unit <= unitCount; ++unit) {
+    if (!GetVolInfo(unit, &volInfo)) continue;
+    if (volInfo.mediumType == TYPE_FLASH || volInfo.mediumType == TYPE_RAMDISK ||
+        volInfo.mediumType == TYPE_SMB)
+      last = unit;
+  }
+  return last;
 }
 
 /////////////////////////////////////////////////////////////////////

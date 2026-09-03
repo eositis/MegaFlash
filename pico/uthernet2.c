@@ -91,7 +91,7 @@ static inline uint8_t get_byte(uint16_t val, unsigned shift) {
   return (uint8_t)((val >> shift) & 0xFF);
 }
 
-static uint16_t read_net16(const uint8_t *p) {
+static uint16_t U2_BUS_RAM(read_net16)(const uint8_t *p) {
   return (uint16_t)p[0] << 8 | p[1];
 }
 
@@ -158,7 +158,7 @@ static uint16_t u2_rx_used_bytes(int i) {
  * header, and stalled Sn_RX_RD → the unbounded "sock0 RECV" storm (§1cj). Core 0's producer free-
  * space math still uses the tear-free shadow (u2_rx_used_bytes) so it can never overwrite unread
  * data (shadow ≤ live rd ⇒ conservative). */
-static uint16_t u2_rx_used_bytes_live(int i) {
+static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t size = s->receive_size;
   if (size == 0)
@@ -273,7 +273,7 @@ static void U2_BUS_RAM(set_rx_sizes)(uint16_t address, uint8_t value) {
   u2_apply_socket_sizes(1, value);
 }
 
-static uint16_t get_tx_data_size(int i) {
+static uint16_t U2_BUS_RAM(get_tx_data_size)(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t size = s->transmit_size;
   if (size == 0)
@@ -287,7 +287,7 @@ static uint16_t get_tx_data_size(int i) {
   return (uint16_t)data;
 }
 
-static uint16_t get_tx_fsr(int i) {
+static uint16_t U2_BUS_RAM(get_tx_fsr)(int i) {
   uint16_t ts = u2_sockets[i].transmit_size;
   if (ts == 0)
     return 0;
@@ -300,22 +300,25 @@ static uint16_t get_tx_fsr(int i) {
 }
 
 /* W5100 RX occupancy: RSR = unread bytes in ring (§10l). Host-facing ⇒ LIVE rd (§1cj). */
-static uint16_t get_rx_rsr(int i) {
+static uint16_t U2_BUS_RAM(get_rx_rsr)(int i) {
   return u2_rx_used_bytes_live(i);
 }
 
 /* Per-byte live FSR/RSR (§1cp). §1cm latched on high-only: a low-first read returned latch=0
  * (FSR looked empty) until FSR0 was touched — first SYN/ARP delayed. Bramble lo-first have-flags
  * did not restore first-try connect. Recompute each access like pre-import firmware. */
-static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
+static uint8_t U2_BUS_RAM(get_tx_fsr_byte)(int i, unsigned shift) {
   return get_byte(get_tx_fsr(i), shift);
 }
 
-static uint8_t get_rx_rsr_byte(int i, unsigned shift) {
+static uint8_t U2_BUS_RAM(get_rx_rsr_byte)(int i, unsigned shift) {
   return get_byte(get_rx_rsr(i), shift);
 }
 
-static uint8_t read_socket_register(uint16_t address) {
+/* §1cx: reached from read_value_at on every $C0C7 read AND every U2_PeekDataPort prefetch, so it
+ * sits inside the ~90 ns window before the a2bus SM latches the next byte. Was XIP-resident and
+ * contended with core 0's lwIP for the cache. */
+static uint8_t U2_BUS_RAM(read_socket_register)(uint16_t address) {
   int i = (address >> 8) - 0x04;
   uint16_t loc = address & 0xFF;
   switch (loc) {
@@ -658,7 +661,9 @@ static int send_data(int i) {
   return 0;
 }
 
-static void write_socket_register(uint16_t address, uint8_t value) {
+/* §1cx: the RECV branch runs immediately before the host reads the next frame's length header,
+ * so its latency lands directly on the prefetch deadline. Keep it in SRAM (RP2350 only). */
+static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
   u2_memory[address] = value;
   uint16_t loc = address & 0xFF;
   /* NOTE: Sn_RX_RD byte writes deliberately do NOT publish the core-0 shadow. On a real W5100
@@ -910,29 +915,19 @@ void U2_Init(void) {
 }
 
 #if PICO_CYW43_ARCH_POLL
-static struct IpcMsg u2_net_wake_msg;
-static absolute_time_t u2_last_net_wake;
-
-void U2_RequestCore0NetPoll(void) {
-  if (get_core_num() != 1)
-    return;
-  absolute_time_t now = get_absolute_time();
-  if (absolute_time_diff_us(u2_last_net_wake, now) < 1000)
-    return;
-  u2_last_net_wake = now;
-  u2_net_wake_msg.command = IPCCMD_NET_WAKE;
-  u2_net_wake_msg.data = 0;
-  (void)multicore_fifo_push_timeout_us((uint32_t)&u2_net_wake_msg, 0);
-}
+/* Set on core 1 from the SEND/RECV handlers, cleared on core 0 in U2_Net_Poll.
+ * §1cx: this used to read the APB timer and push an IPC message through the multicore FIFO
+ * (multicore_fifo_push_timeout_us itself calls make_timeout_time_us + time_reached), all from
+ * XIP flash contended by core 0's lwIP. That ran on the bus path, where the budget before the
+ * 6502's next $C0C7 read is ~90 ns. Core 0 polls the network unconditionally with a zero FIFO
+ * timeout (PicoW_ServiceCore0IpcAndNetwork), so there is nothing to unblock — a single store to
+ * an SRAM flag conveys the same request at no cost to core 1. */
+void U2_BUS_RAM(U2_RequestCore0NetPoll)(void) { u2_core0_net_wake_pending = true; }
 #else
 void U2_RequestCore0NetPoll(void) {}
 #endif
 
-void U2_Poll(void) {
-  U2_RequestCore0NetPoll();
-  U2_Net_Poll();
-  /* U2_MonPollFlush: call from core 0 only — see u2_monitor.h (stdio + cyw43 async_context). */
-}
+volatile bool u2_core0_net_wake_pending;
 
 void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
   uint32_t loc = busdata & U2_C0X_MASK;

@@ -94,7 +94,7 @@ void __no_inline_not_in_flash_func(BusLoopDataInit)() {
 void __no_inline_not_in_flash_func(BusLoop)() {
   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
   const uint READFLAG = (1<<4); //Read flag is at bit 4
-  uint u2_poll_counter = 0;
+
 
   while(true) {
     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
@@ -136,14 +136,12 @@ void __no_inline_not_in_flash_func(BusLoop)() {
        * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
       registers.r[7] = U2_PeekDataPort();
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
-      /* Poll/wake on writes and non-DATA (SEND, RECV, addr). Skip during $C0C7 reads so the
-       * PIO prefetch word is not delayed in the ip65 mov_data burst (checksums / RX_RD walk). */
-      if (!(addr == U2_C0X_LAST && (busdata & READFLAG))) {
-        if (++u2_poll_counter >= 32) {
-          u2_poll_counter = 0;
-          U2_Poll();
-        }
-      }
+      /* Nothing else may run here. The a2bus SM serves the next $C0C7 read straight from
+       * rxf_putget ~90 ns after nDEVSEL falls, so any work on this path can make the 6502 latch
+       * the previous byte (or overflow the 4-deep listener FIFO, which drops the cycle so
+       * u2_data_address never advances). Either duplicates a byte and shifts the rest of the
+       * frame — the every-3rd/6th-packet checksum failures of §1cx. Core 0 is woken from the
+       * SEND/RECV handlers and polls the network unconditionally, so no poll belongs here. */
       continue;
     }
 

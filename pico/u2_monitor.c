@@ -18,7 +18,14 @@
 #include "pico/time.h"
 
 #define U2_MON_RING 256
+/* Flush budget per core-0 iteration. printf here goes to a blocking UART, so at 115200 the stock
+ * 128 lines (~10 KB) cost core 0 roughly 0.9 s per call — NetworkPump_PollOnce is starved and TCP
+ * handshakes time out, which by itself makes the Debug build unable to connect (§1cz/§1de).
+ * Override with -DU2_MON_FLUSH_MAX=n (and raise PICO_DEFAULT_UART_BAUD_RATE) to keep the trace
+ * while leaving core 0 enough time to service lwIP. */
+#ifndef U2_MON_FLUSH_MAX
 #define U2_MON_FLUSH_MAX 128
+#endif
 
 enum {
   U2M_BUS = 1,
@@ -212,7 +219,7 @@ void U2_MonInit(void) {
   u2_mon_head = u2_mon_tail = 0;
   u2_mon_dropped = 0;
   critical_section_exit(&u2_mon_cs);
-  printf("[u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=%d flush<=%d/call\n", U2_MON_RING,
+  printf("[u2m] U2 activity monitor on; bus+socket+net events; ring=%d flush<=%d/call\n", U2_MON_RING,
          U2_MON_FLUSH_MAX);
 }
 

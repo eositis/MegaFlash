@@ -147,6 +147,28 @@ set(U2_MON_LOG_BUS "0" CACHE STRING "1=verbose [u2m] per bus cycle at C0C4-C0C7 
 set(U2_IP65_TRACE_DATA "0" CACHE STRING "1=verbose 48 DATA reads after MODE=0x03 ([u2])")
 set(U2_ETH_HEADER_TRACE "0" CACHE STRING "1=UART [u2eth] hex dump first 64B of STA TX/RX Ethernet frames (bring-up; not pcap/tcpdump)")
 set(U2_MACRAW_COMPAT_DROP_OLDEST "0" CACHE STRING "1=MACRAW RX: discard unread once when full to admit new frame (compat; not strict W5100)")
+# §1dg checksum experiment. Applies to ALL build types (Release included) because it has to be
+# tested with normal timing, not under the Debug monitor. ip65's RMSR=0x0A gives socket 0 a 4 KiB
+# ring, so the producer wraps at 0x7000 while auto_increment() only wraps at 0x8000 -> one corrupt
+# frame per 4 KiB received. Setting this to 1 gives socket 0 the whole 8 KiB so both wraps become
+# the same boundary. cmake ... -DU2_RX_SOCK0_8K=1
+set(U2_RX_SOCK0_8K "0" CACHE STRING "1=socket 0 RX ring = full 8 KiB regardless of RMSR (§1dg wrap test)")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_RX_SOCK0_8K=${U2_RX_SOCK0_8K})
+# Debug-build usability (§1de). U2_MonPollFlush printf()s to a *blocking* UART on every core-0
+# iteration, so the stock 128-line budget costs ~10 KB (~0.9 s at 115200) per call and starves
+# NetworkPump_PollOnce — TCP handshakes then time out and the Debug build cannot connect at all,
+# independently of any emulation defect. Lower the budget and/or raise the baud to keep the [u2m]
+# trace while leaving core 0 time to service lwIP:
+#   cmake ... -DCMAKE_BUILD_TYPE=Debug -DU2_MON_FLUSH_MAX=8 -DMF_UART_BAUD=460800
+set(U2_MON_FLUSH_MAX "" CACHE STRING "[u2m] events flushed per core-0 iteration (blank = stock 128)")
+set(MF_UART_BAUD "" CACHE STRING "UART baud for stdio/[u2m] (blank = SDK default 115200)")
+if(NOT U2_MON_FLUSH_MAX STREQUAL "")
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MON_FLUSH_MAX=${U2_MON_FLUSH_MAX})
+endif()
+if(NOT MF_UART_BAUD STREQUAL "")
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PICO_DEFAULT_UART_BAUD_RATE=${MF_UART_BAUD})
+endif()
+
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_ETH_HEADER_TRACE=${U2_ETH_HEADER_TRACE})
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MACRAW_COMPAT_DROP_OLDEST=${U2_MACRAW_COMPAT_DROP_OLDEST})
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")

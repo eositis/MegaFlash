@@ -2796,6 +2796,132 @@ This works because `main()` already guards the terminal with `stdio_usb_connecte
 
 ---
 
+## 1df. An nRESET edge closes every U2 socket mid-transfer; the §1aj guard is not in the code (2026-09-03)
+
+**Capture:** `Serial Saved Output.txt` (2026-09-03), option-B throttled Debug image, 774 lines covering uptime **112.99 s → 202.39 s**.
+
+### The session was healthy, then was killed from outside
+
+```
+[u2m] 136563011 sock0 OPEN mr=0x44 port=0 ok       <- MACRAW + MAC filter
+   ... 255x "net sock0 MACRAW rx", 249x "sock0 RECV", 81x SEND / 81x MACRAW tx ...
+[u2m] 202391572 sock0 RECV                          <- last activity
+NETPUMP: RequestAbortAll()
+NETPUMP: RequestAbortAll()
+[u2macraw] ... x12                                  <- ~120 s, zero U2 activity
+```
+
+**~66 seconds of genuinely healthy bidirectional MACRAW traffic** after OPEN: 255 frames in, 81 out, RX dominated by **92 × 784-byte** payloads (bulk HTTP) alongside 63/60-byte control frames. TX ring pointers advance normally (`rd=0x10A7 wr=0x10DD rdm=0xA7 wrm=0xDD`).
+
+Two findings that stand on their own:
+
+- **Zero `RECV STALL` and zero `RECV RESYNC` across 249 RECVs.** §1cx continues to hold; the wedge is gone.
+- **Zero "dropped monitor events" warnings**, so the §1de throttled monitor (`U2_MON_FLUSH_MAX=8` @ 460800) keeps up and no longer starves core 0. The Debug build is usable again.
+
+Everything stops dead at the two `RequestAbortAll()` lines. Core 0 stays alive — the 10 s `[u2macraw]` block keeps printing for another ~120 s — but not one further MACRAW frame moves in either direction.
+
+### Root cause: the abort is unconditional, and it closes all four sockets
+
+`gpio_intr_callback` fires on the **falling edge of `nRESET_PIN`** and calls `NetworkPump_RequestAbortAll()` with no qualification. That reaches:
+
+```c
+void NetworkPump::RequestAbortAll() {
+  INFO_PRINTF("NETPUMP: RequestAbortAll()\n");
+  if (activeLegacyOperation != LEGACY_OPERATION_NONE) {
+    INFO_PRINTF("NETPUMP: aborting active legacy op=%d ...");   /* log only! */
+  }
+  session_timers_.clear();
+  for (INetworkSession *s : sessions_) { if (s) s->Abort(); }
+  UDPTask_RequestAbortIfRunning();
+}
+```
+
+**The `activeLegacyOperation` test guards only an `INFO_PRINTF`.** It does not gate the abort. So every session is torn down regardless, and `Uthernet2Session::Abort()` is:
+
+```c
+void Uthernet2Session::Abort() {
+  for (int i = 0; i < U2_NET_MAX_SOCKETS; i++)
+    U2_Net_Close(i);
+}
+```
+
+— it closes **all four sockets**. The 6502 is never told, so ip65 goes on polling `Sn_RX_RD` for data that can no longer arrive.
+
+**This retro-explains the §1db capture.** There, `ptr` sat frozen at `0x0428` (socket 0's `Sn_RX_RD`) while the host issued ~600 `$C0C7` reads per second and nothing arrived. That is exactly the post-`Abort()` state. §1db concluded "the defect is upstream of the bus transport" — correct, and this is the upstream defect.
+
+**The docs asserted a guard that does not exist.** §1aj records "nRESET abort now requires active legacy operation; ignore abort during Uthernet-only sessions so ADTPro MACRAW transfer is not globally torn down". The summary table also lists §10n as "**Reverted:** no `IsLegacyOperationActive`". `IsLegacyOperationActive()` does exist and *is* used in `uthernet2_net.cpp:386` for the ingress decision — but it was never wired into `RequestAbortAll()`. §1aj should be read as intent, not as landed behaviour.
+
+### RESOLVED — not a defect. Operator confirmed a deliberate Ctrl-Reset
+
+The operator confirms the `nRESET` edge at t≈202.4 s was a **deliberate Ctrl-Reset** to quit wget: *"apple reset is end of story. clear and go home."* So the teardown is intended product behaviour, the two `RequestAbortAll()` lines are the correct response to it, and **no fix is wanted**. The `AbortOnAppleReset()` opt-out sketched here was **not implemented** — do not re-propose it.
+
+Two things survive from this section:
+
+1. **The §1db "frozen pointer" reading was a red herring.** That capture almost certainly caught the same post-reset state, not an emulation defect. §1db's conclusion "the defect is upstream of the bus transport" should not be read as evidence for anything.
+2. **This capture contains no instance of the actual bug.** The monitor records frame arrival and RECV, never the bytes the 6502 read, so a frame delivered with a corrupt body still logs as a clean `rx` + `RECV` pair. The operator re-confirms the real symptom is unchanged and is the original one: **wget reports a bad checksum on roughly every 3rd or 6th packet.** A clean `[u2m]` log is therefore fully consistent with the bug being present throughout — see §1dg.
+
+**References:** `Serial Saved Output.txt`; `pico/main.c` (`gpio_intr_callback`), `pico/network_pump.cpp` (`RequestAbortAll`), `pico/uthernet2_net.cpp` (`Uthernet2Session::Abort`); §1cx, §1db, §1de, §1dg.
+
+---
+
+## 1dg. H3 confirmed by arithmetic: socket 0's RX ring wraps at 4 KiB but the host's address auto-increment wraps at 8 KiB (2026-09-03)
+
+The frame-size mix in the §1df capture turns the operator's "every 3rd, or 6th packet" into a **measurement**, and it lands exactly on a geometry disagreement that has been sitting in the code the whole time.
+
+### The two wrap boundaries do not coincide
+
+ip65 writes **`RMSR = 0x0A`** (noted at `uthernet2.c:259`; the reset default `0x06` gives socket 0 the same 4 KiB). RMSR is 2 bits per socket, socket 0 in bits [1:0]:
+
+| socket | field | requested | assigned by `u2_apply_socket_sizes` |
+|---|---|---|---|
+| 0 | `0b10` | 4 KiB | **4 KiB @ `0x6000`–`0x6FFF`** |
+| 1 | `0b10` | 4 KiB | 4 KiB @ `0x7000`–`0x7FFF` |
+| 2 | `0b00` | 1 KiB | clamped to 0 (8 KiB exhausted) |
+| 3 | `0b00` | 1 KiB | clamped to 0 |
+
+**Producer** (`u2_push_rx_macraw`) wraps at the *socket* size: `u2_memory[base + (wr & mask)]`, `mask = receive_size - 1 = 0x0FFF`, so it wraps `0x7000` → `0x6000`.
+
+**Consumer** (`auto_increment`, reached from `read_value` on every `$C0C7` DATA read) wraps only at the *8 KiB memory-block* boundaries:
+
+```c
+u2_data_address++;
+if (u2_data_address == W5100_RX_BASE || u2_data_address == W5100_MEM_SIZE)  /* 0x6000, 0x8000 */
+  u2_data_address -= 0x2000;
+```
+
+There is **no wrap at `0x7000`**. So when the host's read pointer walks off the end of socket 0's ring it does not come back to `0x6000` — it marches on into socket 1's region (`0x7000+`), which the producer never writes. The frame's tail was written at `0x6000`; the host reads unrelated bytes instead. **Bad checksum, once per 4 KiB of received data.**
+
+### The frequency is the fingerprint
+
+Corruption should hit one frame per 4096 bytes of RX:
+
+| frame size | 4096 / size | predicted | operator reports |
+|---|---|---|---|
+| 1514 (full MTU) | 2.7 | every ~3rd packet | **"every 3rd"** |
+| 784 (dominant in this capture, 92×) | 5.2 | every ~6th packet | **"or 6th"** |
+
+Both numbers fall out of one constant. This is the strongest correlation obtained so far, and it explains why the corruption is *periodic* yet indifferent to every timing fix attempted — it is a **geometry** bug, not a race, which is why §1cx (real, cured the stalls) and the H2 prefetch work (`behind = 0` over 38,807 reads) left it untouched. It also retro-explains the non-zero **`data_oow = 4`** in §1db, dismissed there as minor: those were reads landing outside socket 0's assigned window, i.e. this exact effect.
+
+### Which side is wrong is still open, and it matters
+
+`auto_increment` is **faithful to AppleWin**, which wraps at `0x6000`/`0x8000` and nothing else. On real W5100 hardware the chip's RX write pointer certainly wraps inside the socket buffer, and the address auto-increment certainly does not — so a correct W5100 driver must **split its read at the socket boundary** and re-point the address register to the buffer base. That leaves two possibilities:
+
+- **(A) ip65 splits correctly.** Then the producer is right, out-of-window reads are impossible, and the frequency match above is a coincidence.
+- **(B) ip65 relies on the chip's `0x8000` auto-wrap** and treats socket 0's ring as the full 8 KiB from `0x6000`. Then our 4 KiB producer wrap is the divergence.
+
+The `data_oow = 4` observation is weak evidence for (B), since under (A) it must be exactly zero. Under (B) there is a further consequence worth noting: once the host's `Sn_RX_RD` exceeds `0x6FFF`, our `rd & 0x0FFF` aliases it back to the *start* of the ring, which would wreck the RSR/occupancy math and manufacture exactly the "impossible header" conditions that §1cj/§1cq were built to paper over. That would make this one root cause behind a whole family of symptoms.
+
+### Decisive test: unify the two boundaries
+
+Rather than add more logging, make the disagreement impossible by construction — give socket 0 the entire 8 KiB RX region so the producer wrap (`0x8000`→`0x6000`) and the auto-increment wrap (`0x8000`→`0x6000`) are the *same boundary*. Gated by `-DU2_RX_SOCK0_8K=1`; RMSR readback stays honest, only internal geometry changes. MACRAW uses socket 0 only, so nothing else is affected.
+
+- **Checksum errors vanish** ⇒ (B) confirmed; then decide the fidelity-correct fix.
+- **Checksum errors persist** ⇒ (A); H3 is dead and geometry is exonerated.
+
+**References:** `pico/uthernet2.c` (`u2_apply_socket_sizes`, `u2_push_rx_macraw`, `auto_increment`, `read_value`, `u2_rx_used_bytes`), `pico/w5100_regs.h` (`W5100_RX_BASE`, `W5100_MEM_SIZE`, `W5100_RMSR`); §1cf, §1cj, §1cq, §1cx, §1db, §1df.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -2848,7 +2974,7 @@ This works because `main()` already guards the terminal with `stdio_usb_connecte
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
 | Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
-| Board bring-up `[hwdiag]` | §**25**, `hwdiag.c`, `docs/Debug-mode.md` §3 | Debug-only 1 Hz PHI0/nDEVSEL/cycle/ID/`CMD_GETDEVINFO` report + ACT LED blink. For boards the IIc does not see. Release no-ops. Thomas 6502 Serial Port 1 debug does **not** cover this |
+| Board bring-up `[hwdiag]` | §**25**, `hwdiag.c`, `docs/Debug-mode.md` §3 | Debug-only 1 Hz PHI0/nDEVSEL/cycle/ID/`CMD_GETDEVINFO` report + ACT LED blink. For boards the IIc does not see. Release no-ops. Do **not** revive `MF_BUS_DIAG`. Thomas 6502 Serial Port 1 debug does **not** cover this |
 | Pico W USB path + IPC | `main.c` §7i | When **`!appleConnected`** at boot, **`core0Loop()`** is skipped; **`PicoW_ServiceCore0IpcAndNetwork(0)`** must still run so Test WiFi / TFTP FIFO + **`NetworkPump_PollOnce`** are serviced |
 | Release USB vs Apple bus | `main.c`, `misc.c`, `a2bus.h` §7j | **`NDEBUG`**: bus emulation only when Apple **and** no USB host; USB terminal only when USB **and** no Apple; Debug builds exempt |
 | CYW43 init + LED | `misc.c`, `udptask.cpp`, `network_pump.cpp` §7k | **`InitPicoLed`** calls **`cyw43_arch_init()`**; **`InitCyw43()`** / **`NetworkPump::Init()`** must not call **`cyw43_arch_init_*`** again — use **`cyw43_is_initialized`** and only **`cyw43_arch_enable_sta_mode()`** |
@@ -3460,7 +3586,7 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 **What we did:** Debug-only `[hwdiag]` (`pico/hwdiag.c`): 1 Hz UART line + ACT LED blink. Core 1 increments cycle/nibble/write/`CMD_GETDEVINFO` counters in the existing bus loops (inline, no `printf` on the hot path). Core 0 samples GPIO levels without stealing PIO pins (`gpio_get` only — `IsAppleConnected()` is *not* called from the poll because it `gpio_init`s PHI0). Release compiles the hooks to no-ops.
 
-**What we didn’t do:** Did not re-enable `MF_BUS_DIAG` / `pico2_diag` (rolled back in §1dc). Did not add a separate UF2; a Debug image is the vehicle.
+**What we didn’t do:** Did not re-enable `MF_BUS_DIAG` / `pico2_diag` (rolled back in §1dc). Did not add a separate UF2; a Debug image is the vehicle. Did not enable UART in Release.
 
 **Takeaway:** `cyc=0` with `phi0=TGL` means the GAL is not selecting the Pico (A4–A15 / GP20), not the chips already swapped. `cmd10>0` with the Apple still saying not found means the return data path.
 

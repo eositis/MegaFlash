@@ -36,6 +36,20 @@
 #define U2_MACRAW_COMPAT_DROP_OLDEST 0
 #endif
 
+/* §1dg experiment: give socket 0 the whole 8 KiB RX region regardless of RMSR.
+ *
+ * ip65 writes RMSR=0x0A, so socket 0's ring is 4 KiB at 0x6000-0x6FFF and the producer wraps
+ * 0x7000 -> 0x6000 (mask = receive_size-1). But auto_increment() only wraps at 0x6000/0x8000
+ * (AppleWin behaviour), so a host draining past 0x6FFF keeps reading into socket 1's region
+ * instead of the wrapped tail -> one corrupt frame per 4 KiB received. That predicts a bad
+ * checksum every ~3rd full-MTU frame and every ~6th 784-byte frame, which is exactly what the
+ * operator reports. Forcing socket 0 to 8 KiB makes the producer wrap and the auto-increment
+ * wrap the SAME boundary, so the disagreement cannot occur. MACRAW uses socket 0 only.
+ * RMSR readback is left untouched; only internal geometry changes. */
+#ifndef U2_RX_SOCK0_8K
+#define U2_RX_SOCK0_8K 0
+#endif
+
 #if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
 /* Verbose: after MR=0x03, log next N DATA reads (enable with -DU2_IP65_TRACE_DATA=1). */
 static int u2_ip65_data_trace_left;
@@ -183,6 +197,11 @@ static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
   uint16_t base = is_rx ? W5100_RX_BASE : W5100_TX_BASE;
   const uint16_t end = is_rx ? W5100_MEM_SIZE : W5100_RX_BASE;
   uint8_t val = value;
+#if U2_RX_SOCK0_8K
+  /* §1dg: socket 0 takes the entire RX region, leaving nothing for 1..3. */
+  if (is_rx)
+    val = 0x03;
+#endif
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
     uint16_t requested = u2_size_from_rmsr_field(val);
     uint16_t assigned = requested;

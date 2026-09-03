@@ -136,22 +136,9 @@ void __no_inline_not_in_flash_func(BusLoop)() {
        * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
       registers.r[7] = U2_PeekDataPort();
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
-#if U2_RX_AUDIT
-      /* #region agent log
-       * H5: a listener FIFO entry already waiting the instant we finished this cycle means core 1
-       * did not keep up. The FIFO is 4 deep and pushes are noblock, so sustained backlog is
-       * precisely how a $C0C7 cycle gets silently discarded (u2_data_address never advances).
-       * Two register reads, no printf — safe on this path. */
-      g_u2_bus_cycles++;
-      {
-        uint32_t depth = pio_sm_get_rx_fifo_level(pio0, SM_LISTENER);
-        if (depth) {
-          g_u2_bus_backlog++;
-          if (depth > g_u2_bus_backlog_max) g_u2_bus_backlog_max = depth;
-        }
-      }
-      /* #endregion */
-#endif
+      /* §1di: H5 (core 1 falling behind the listener FIFO) was REJECTED by measurement —
+       * backlog occurred on 2 of 155,358 cycles, max depth 1 — so its probe is removed rather
+       * than left on the timing-critical path it was measuring. */
       /* Nothing else may run here. The a2bus SM serves the next $C0C7 read straight from
        * rxf_putget ~90 ns after nDEVSEL falls, so any work on this path can make the 6502 latch
        * the previous byte (or overflow the 4-deep listener FIFO, which drops the cycle so

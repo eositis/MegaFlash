@@ -735,6 +735,17 @@ void U2_Net_ServicePoll(void) {
   u2_eth_trace_try_install();
 #endif
   u2_macraw_tx_drain();
+#if U2_RX_AUDIT
+  /* Deliberately outside the NDEBUG guard: the audit has to run in a Release build so the bus
+   * path keeps its normal timing (the Debug monitor's blocking UART changes what we measure). */
+  {
+    static absolute_time_t u2_audit_next;
+    if (time_reached(u2_audit_next)) {
+      u2_audit_next = make_timeout_time_ms(10000);
+      U2_RxAuditReport();
+    }
+  }
+#endif
 #ifndef NDEBUG
   if (time_reached(u2_macraw_tx_stats_next)) {
     u2_macraw_tx_stats_next = make_timeout_time_ms(10000);

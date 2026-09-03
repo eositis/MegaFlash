@@ -12,6 +12,10 @@
 #include "pico/time.h"
 #include <stdio.h>
 #include <string.h>
+#if U2_RX_AUDIT
+#include "pico/stdio.h"
+#include "pico/stdio_uart.h"
+#endif
 
 #define READFLAG  (1u << 4)
 
@@ -36,18 +40,18 @@
 #define U2_MACRAW_COMPAT_DROP_OLDEST 0
 #endif
 
-/* §1dg experiment: give socket 0 the whole 8 KiB RX region regardless of RMSR.
+/* §1dh RX delivery audit (measurement only, no behaviour change).
  *
- * ip65 writes RMSR=0x0A, so socket 0's ring is 4 KiB at 0x6000-0x6FFF and the producer wraps
- * 0x7000 -> 0x6000 (mask = receive_size-1). But auto_increment() only wraps at 0x6000/0x8000
- * (AppleWin behaviour), so a host draining past 0x6FFF keeps reading into socket 1's region
- * instead of the wrapped tail -> one corrupt frame per 4 KiB received. That predicts a bad
- * checksum every ~3rd full-MTU frame and every ~6th 784-byte frame, which is exactly what the
- * operator reports. Forcing socket 0 to 8 KiB makes the producer wrap and the auto-increment
- * wrap the SAME boundary, so the disagreement cannot occur. MACRAW uses socket 0 only.
- * RMSR readback is left untouched; only internal geometry changes. */
-#ifndef U2_RX_SOCK0_8K
-#define U2_RX_SOCK0_8K 0
+ * Settles H1 (dropped bus cycle) with arithmetic instead of guesswork. The host tells us how many
+ * bytes it believes it consumed — it advances Sn_RX_RD by exactly that much before issuing RECV —
+ * and read_value() sees every real $C0C7 DATA read. If the a2buslistener FIFO silently discards a
+ * cycle (push noblock), u2_data_address never advances, the 6502 latches the previous byte again,
+ * and the rest of the frame shifts by one: a bad checksum. In that case our observed read count
+ * comes out BELOW the host's Sn_RX_RD advance, and the deficit is exactly the number of lost
+ * cycles. Frames the driver discards without reading show up as seen==0 (counted separately as
+ * "skip") so they cannot be mistaken for drops. */
+#ifndef U2_RX_AUDIT
+#define U2_RX_AUDIT 0
 #endif
 
 #if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
@@ -197,11 +201,6 @@ static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
   uint16_t base = is_rx ? W5100_RX_BASE : W5100_TX_BASE;
   const uint16_t end = is_rx ? W5100_MEM_SIZE : W5100_RX_BASE;
   uint8_t val = value;
-#if U2_RX_SOCK0_8K
-  /* §1dg: socket 0 takes the entire RX region, leaving nothing for 1..3. */
-  if (is_rx)
-    val = 0x03;
-#endif
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
     uint16_t requested = u2_size_from_rmsr_field(val);
     uint16_t assigned = requested;
@@ -396,8 +395,34 @@ static void U2_BUS_RAM(auto_increment)(void) {
   }
 }
 
+#if U2_RX_AUDIT
+volatile uint32_t g_u2_audit_frames;      /* RECVs seen on socket 0 */
+volatile uint32_t g_u2_audit_ok;          /* reads observed == Sn_RX_RD advance */
+volatile uint32_t g_u2_audit_short;       /* 0 < observed < advance  => DROPPED CYCLES (H1) */
+volatile uint32_t g_u2_audit_over;        /* observed > advance      => re-reads / stale addr */
+volatile uint32_t g_u2_audit_skip;        /* observed == 0 < advance => driver discarded frame */
+volatile uint32_t g_u2_audit_lost_bytes;  /* total deficit across all "short" frames */
+volatile int32_t  g_u2_audit_last_delta;  /* observed - advance, most recent mismatch */
+volatile uint32_t g_u2_audit_deficit[9];  /* histogram of deficits 1..8, [0] = 9+ */
+static volatile uint32_t u2_audit_reads;  /* in-window DATA reads since last RECV */
+
+/* Count only real host $C0C7 reads that land inside socket 0's RX ring. The prefetch path
+ * (U2_PeekDataPort -> read_value_at) deliberately bypasses this, so peeks are never counted.
+ * Plain `static inline` (no U2_BUS_RAM): it inlines into read_value, which is already
+ * RAM-resident, so pinning it separately would only force a noinline call on the hot path. */
+static inline void u2_audit_note_read(uint16_t addr) {
+  const u2_socket_t *s = &u2_sockets[0];
+  uint16_t sz = s->receive_size;
+  if (sz && (uint16_t)(addr - s->receive_base) < sz)
+    u2_audit_reads++;
+}
+#endif
+
 static uint8_t U2_BUS_RAM(read_value)(void) {
   uint16_t rd_addr = u2_data_address;
+#if U2_RX_AUDIT
+  u2_audit_note_read(rd_addr);
+#endif
 #if UTHERNET2_DEBUG
   /* Bisect ip65 init: move U2_IP65_CHECKPOINT between builds (CMake). */
   if (rd_addr == W5100_RTR0)
@@ -798,6 +823,33 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
         uint16_t ra = u2_sockets[i].register_address;
         uint16_t rd = (uint16_t)(((uint16_t)u2_memory[ra + W5100_SN_RX_RD0] << 8)
                                  | u2_memory[ra + W5100_SN_RX_RD1]);
+#if U2_RX_AUDIT
+        /* §1dh: compare what the host says it consumed against what we actually served.
+         * Done here, before the shadow is republished, because sn_rx_rd still holds the
+         * previous committed RD. */
+        if (i == 0 && u2_sockets[0].receive_size) {
+          uint16_t m = (uint16_t)(u2_sockets[0].receive_size - 1u);
+          uint16_t advance = (uint16_t)((rd - u2_rx_rd_load(&u2_sockets[0])) & m);
+          uint32_t seen = u2_audit_reads;
+          u2_audit_reads = 0;
+          g_u2_audit_frames++;
+          if (seen == advance) {
+            g_u2_audit_ok++;
+          } else {
+            g_u2_audit_last_delta = (int32_t)seen - (int32_t)advance;
+            if (seen == 0) {
+              g_u2_audit_skip++;          /* frame discarded unread: legitimate, not a drop */
+            } else if (seen < advance) {
+              uint32_t deficit = advance - seen;
+              g_u2_audit_short++;
+              g_u2_audit_lost_bytes += deficit;
+              g_u2_audit_deficit[deficit <= 8u ? deficit : 0u]++;
+            } else {
+              g_u2_audit_over++;
+            }
+          }
+        }
+#endif
         __atomic_store_n(&u2_sockets[i].sn_rx_rd, rd, __ATOMIC_RELEASE);
         /* MACRAW RX wedge detect + recovery (§1ck). A single-chip W5100 can never present a frame
          * whose 2-byte length header is 0x0000 (min header = frame_len + 2 ≥ 16) or larger than
@@ -921,7 +973,34 @@ void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
     u2_memory[W5100_SHAR0 + i] = mac[i];
 }
 
+#if U2_RX_AUDIT
+void U2_RxAuditReport(void) {
+  printf("[u2audit] frames=%lu ok=%lu SHORT=%lu over=%lu skip=%lu lost=%lu last=%ld "
+         "def1=%lu def2=%lu def3=%lu def4=%lu def5+=%lu\n",
+         (unsigned long)g_u2_audit_frames, (unsigned long)g_u2_audit_ok,
+         (unsigned long)g_u2_audit_short, (unsigned long)g_u2_audit_over,
+         (unsigned long)g_u2_audit_skip, (unsigned long)g_u2_audit_lost_bytes,
+         (long)g_u2_audit_last_delta,
+         (unsigned long)g_u2_audit_deficit[1], (unsigned long)g_u2_audit_deficit[2],
+         (unsigned long)g_u2_audit_deficit[3], (unsigned long)g_u2_audit_deficit[4],
+         (unsigned long)(g_u2_audit_deficit[5] + g_u2_audit_deficit[6] +
+                         g_u2_audit_deficit[7] + g_u2_audit_deficit[8] +
+                         g_u2_audit_deficit[0]));
+  printf("[u2audit] sock0 rx_base=0x%04X rx_size=%u\n",
+         (unsigned)u2_sockets[0].receive_base, (unsigned)u2_sockets[0].receive_size);
+}
+#endif
+
 void U2_Init(void) {
+#if U2_RX_AUDIT
+  /* The audit must run in a Release build to keep the bus path's normal timing, but Release
+   * disables UART stdio (main.c) leaving only USB CDC — and a connected USB console gates the
+   * bus loop off entirely (§1da), so USB cannot be the sink here. U2_Init runs immediately after
+   * main.c's stdio setup, so bring the UART back up from here and leave main.c alone. */
+  stdio_uart_init();
+  stdio_set_driver_enabled(&stdio_uart, true);
+  setbuf(stdout, NULL);
+#endif
   U2_DEBUGF("init\n");
   U2_MonInit();
 #if UTHERNET2_DEBUG

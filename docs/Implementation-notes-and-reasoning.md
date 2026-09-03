@@ -3053,7 +3053,6 @@ No inference, no correlation, no log archaeology. `-DU2_RX_AUDIT=1` prints every
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
 | Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
-| Board bring-up `[hwdiag]` | §**25**, `hwdiag.c`, `docs/Debug-mode.md` §3 | Debug-only 1 Hz PHI0/nDEVSEL/cycle/ID/`CMD_GETDEVINFO` report + ACT LED blink. For boards the IIc does not see. Release no-ops. Do **not** revive `MF_BUS_DIAG`. Thomas 6502 Serial Port 1 debug does **not** cover this |
 | Pico W USB path + IPC | `main.c` §7i | When **`!appleConnected`** at boot, **`core0Loop()`** is skipped; **`PicoW_ServiceCore0IpcAndNetwork(0)`** must still run so Test WiFi / TFTP FIFO + **`NetworkPump_PollOnce`** are serviced |
 | Release USB vs Apple bus | `main.c`, `misc.c`, `a2bus.h` §7j | **`NDEBUG`**: bus emulation only when Apple **and** no USB host; USB terminal only when USB **and** no Apple; Debug builds exempt |
 | CYW43 init + LED | `misc.c`, `udptask.cpp`, `network_pump.cpp` §7k | **`InitPicoLed`** calls **`cyw43_arch_init()`**; **`InitCyw43()`** / **`NetworkPump::Init()`** must not call **`cyw43_arch_init_*`** again — use **`cyw43_is_initialized`** and only **`cyw43_arch_enable_sta_mode()`** |
@@ -3657,18 +3656,16 @@ This is intentionally conservative: the common case remains unchanged, but the c
 
 ---
 
-## 25. Hardware bring-up: `[hwdiag]` when the IIc does not see MegaFlash (2026-09-01)
+## 25. Hardware bring-up `[hwdiag]` — REMOVED (2026-09-03)
 
-**What:** Newly assembled boards are not found by the Apple. GAL and 74LVC level shifters were swapped for known-good parts with no change. Need a way to see *which electrical stage* failed.
+A Debug-only 1 Hz PHI0/nDEVSEL/cycle-counter report (`pico/hwdiag.c`) was added by a concurrent
+session (§1dd) to bring up newly assembled boards the IIc could not see. **Removed at the
+operator's request** once it was no longer critical: `pico/hwdiag.{c,h}` deleted and the hooks
+backed out of `busloop.c`, `busloop_wa.c`, `slinky.c`, `main.c`, `CMakeLists.txt`, and
+`docs/Debug-mode.md`. Recorded here only so the §1dd collision notes still resolve.
 
-**Why Thomas’ original debug is not enough:** The 6502 `DEBUG EQU TRUE` path (`firmware/buildflags.inc`) prints SmartPort/ProDOS calls on IIc Serial Port 1 — only after MegaFlash already answered. Pico Debug UART printed heap/WiFi/U2, not PHI0, nDEVSEL, or captured `$C0Cx` cycles. Detection is two `$C0C3` reads XOR `$FF` plus `CMD_GETDEVINFO` (`firmware/megaflash.s` `chkmegaflash` / `chkmegaflashex`). None of that runs if nDEVSEL never reaches the Pico.
-
-**What we did:** Debug-only `[hwdiag]` (`pico/hwdiag.c`): 1 Hz UART line + ACT LED blink. Core 1 increments cycle/nibble/write/`CMD_GETDEVINFO` counters in the existing bus loops (inline, no `printf` on the hot path). Core 0 samples GPIO levels without stealing PIO pins (`gpio_get` only — `IsAppleConnected()` is *not* called from the poll because it `gpio_init`s PHI0). Release compiles the hooks to no-ops.
-
-**What we didn’t do:** Did not re-enable `MF_BUS_DIAG` / `pico2_diag` (rolled back in §1dc). Did not add a separate UF2; a Debug image is the vehicle. Did not enable UART in Release.
-
-**Takeaway:** `cyc=0` with `phi0=TGL` means the GAL is not selecting the Pico (A4–A15 / GP20), not the chips already swapped. `cmd10>0` with the Apple still saying not found means the return data path.
-
-**References:** `pico/hwdiag.c`, `docs/Debug-mode.md` §3, `firmware/megaflash.s`, `gal/megaflash_gal16.pld`.
+**Takeaway worth keeping:** for a board the Apple never sees, `cyc=0` with `phi0` toggling points
+at the GAL not selecting the Pico (A4–A15 / GP20) rather than the level shifters; `cmd10>0` while
+the Apple still reports not-found points at the return data path.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

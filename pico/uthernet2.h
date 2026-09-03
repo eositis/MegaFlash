@@ -44,6 +44,12 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
 uint8_t U2_PeekDataPort(void);
 
 #if U2_RX_AUDIT
+/* §1di instrumentation counters. Core 1 (bus loop) writes the bus ones, core 0 writes the
+ * service-gap ones, and U2_RxAuditReport (core 0) emits them all as NDJSON. */
+extern volatile uint32_t g_u2_bus_backlog, g_u2_bus_backlog_max, g_u2_bus_cycles;
+extern volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_gap_20ms,
+                         g_u2_core0_gap_100ms, g_u2_core0_polls;
+
 /**
  * §1dh RX delivery audit. Print the running comparison between the bytes the host committed
  * (Sn_RX_RD advance at each RECV) and the $C0C7 DATA reads we actually served. A non-zero

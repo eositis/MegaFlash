@@ -736,15 +736,33 @@ void U2_Net_ServicePoll(void) {
 #endif
   u2_macraw_tx_drain();
 #if U2_RX_AUDIT
-  /* Deliberately outside the NDEBUG guard: the audit has to run in a Release build so the bus
-   * path keeps its normal timing (the Debug monitor's blocking UART changes what we measure). */
+  /* #region agent log
+   * Deliberately outside the NDEBUG guard: the audit has to run in a Release build so the bus
+   * path keeps its normal timing (the Debug monitor's blocking UART changes what we measure).
+   * H4: time between consecutive core-0 services. lwIP/CYW43 live here, so a long gap is a
+   * direct measure of the starvation that would produce Contiki's stall-then-update pattern. */
   {
+    static uint64_t u2_last_poll_us;
+    uint64_t now_us = time_us_64();
+    if (u2_last_poll_us) {
+      uint32_t gap = (uint32_t)(now_us - u2_last_poll_us);
+      if (gap > g_u2_core0_gap_max_us) g_u2_core0_gap_max_us = gap;
+      if (gap > 5000u) g_u2_core0_gap_5ms++;
+      if (gap > 20000u) g_u2_core0_gap_20ms++;
+      if (gap > 100000u) g_u2_core0_gap_100ms++;
+    }
+    g_u2_core0_polls++;
+
     static absolute_time_t u2_audit_next;
     if (time_reached(u2_audit_next)) {
       u2_audit_next = make_timeout_time_ms(10000);
       U2_RxAuditReport();
     }
+    /* Re-sample AFTER the report: its own blocking UART write is instrumentation cost, and
+     * counting it as a service gap would fake the very starvation H4 is testing for. */
+    u2_last_poll_us = time_us_64();
   }
+  /* #endregion */
 #endif
 #ifndef NDEBUG
   if (time_reached(u2_macraw_tx_stats_next)) {

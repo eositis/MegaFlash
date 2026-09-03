@@ -404,7 +404,30 @@ volatile uint32_t g_u2_audit_skip;        /* observed == 0 < advance => driver d
 volatile uint32_t g_u2_audit_lost_bytes;  /* total deficit across all "short" frames */
 volatile int32_t  g_u2_audit_last_delta;  /* observed - advance, most recent mismatch */
 volatile uint32_t g_u2_audit_deficit[9];  /* histogram of deficits 1..8, [0] = 9+ */
+volatile uint32_t g_u2_audit_wrapped;     /* mismatches whose consumed range crossed the ring end (H6) */
 static volatile uint32_t u2_audit_reads;  /* in-window DATA reads since last RECV */
+
+/* Per-mismatch detail. printf() must never run on the bus path, so core 1 only fills this ring
+ * and core 0 drains it in U2_RxAuditReport (§1di). */
+#define U2_AUDIT_EVT_MAX 24u
+typedef struct {
+  uint16_t prev_rd, new_rd, advance, seen, rsr, hdr;
+  uint8_t kind;    /* 1 = short (dropped cycles), 2 = over, 3 = skip */
+  uint8_t wrapped; /* consumed range crossed receive_base + receive_size */
+} u2_audit_evt_t;
+static u2_audit_evt_t u2_audit_evt[U2_AUDIT_EVT_MAX];
+static volatile uint32_t u2_audit_evt_w, u2_audit_evt_r;
+
+/* H4: core-0 starvation. If enabling UART stdio in a Release build turned previously discarded
+ * printf()s into blocking 115200 writes, core 0 stops servicing lwIP for long stretches and
+ * Contiki shows exactly the reported "block of data, stall, update" pattern. */
+volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_gap_20ms,
+                  g_u2_core0_gap_100ms, g_u2_core0_polls;
+
+/* H5: core-1 falling behind. A listener FIFO entry already pending immediately after we serviced
+ * a cycle means we did not keep up; the FIFO is 4 deep and pushes are noblock, so sustained
+ * backlog is how a cycle gets silently discarded. */
+volatile uint32_t g_u2_bus_backlog, g_u2_bus_backlog_max, g_u2_bus_cycles;
 
 /* Count only real host $C0C7 reads that land inside socket 0's RX ring. The prefetch path
  * (U2_PeekDataPort -> read_value_at) deliberately bypasses this, so peeks are never counted.
@@ -829,23 +852,49 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
          * previous committed RD. */
         if (i == 0 && u2_sockets[0].receive_size) {
           uint16_t m = (uint16_t)(u2_sockets[0].receive_size - 1u);
-          uint16_t advance = (uint16_t)((rd - u2_rx_rd_load(&u2_sockets[0])) & m);
+          uint16_t prev_rd = u2_rx_rd_load(&u2_sockets[0]);
+          uint16_t advance = (uint16_t)((rd - prev_rd) & m);
           uint32_t seen = u2_audit_reads;
           u2_audit_reads = 0;
           g_u2_audit_frames++;
           if (seen == advance) {
             g_u2_audit_ok++;
           } else {
+            uint8_t kind;
             g_u2_audit_last_delta = (int32_t)seen - (int32_t)advance;
             if (seen == 0) {
+              kind = 3;
               g_u2_audit_skip++;          /* frame discarded unread: legitimate, not a drop */
             } else if (seen < advance) {
               uint32_t deficit = advance - seen;
+              kind = 1;
               g_u2_audit_short++;
               g_u2_audit_lost_bytes += deficit;
               g_u2_audit_deficit[deficit <= 8u ? deficit : 0u]++;
             } else {
+              kind = 2;
               g_u2_audit_over++;
+            }
+            /* H6: did the bytes just consumed run off the end of the ring? If mismatches cluster
+             * here, the fault is in the boundary-split re-point, not in delivery generally. */
+            uint16_t off = (uint16_t)(prev_rd & m);
+            uint8_t wrapped = (uint16_t)(off + advance) > m;
+            if (wrapped)
+              g_u2_audit_wrapped++;
+            uint32_t w = u2_audit_evt_w;
+            if (w - u2_audit_evt_r < U2_AUDIT_EVT_MAX) {
+              u2_audit_evt_t *e = &u2_audit_evt[w % U2_AUDIT_EVT_MAX];
+              uint16_t rb = u2_sockets[0].receive_base;
+              e->prev_rd = prev_rd;
+              e->new_rd = rd;
+              e->advance = advance;
+              e->seen = (uint16_t)seen;
+              e->rsr = u2_rx_used_bytes_live(0);
+              e->hdr = (uint16_t)(((uint16_t)u2_memory[rb + off] << 8)
+                                  | u2_memory[rb + ((off + 1u) & m)]);
+              e->kind = kind;
+              e->wrapped = wrapped;
+              __atomic_store_n(&u2_audit_evt_w, w + 1u, __ATOMIC_RELEASE);
             }
           }
         }
@@ -974,21 +1023,66 @@ void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
 }
 
 #if U2_RX_AUDIT
+/* #region agent log
+ * NDJSON over UART, one object per line, so a saved serial capture *is* the debug log file.
+ * Core 0 only — printf() on the bus path is what we are trying to measure. */
+#define U2_DBG_LOG(hyp_, loc_, msg_, fmt_, ...)                                                    \
+  printf("{\"sessionId\":\"a36369\",\"runId\":\"run1\",\"hypothesisId\":\"" hyp_ "\","             \
+         "\"location\":\"" loc_ "\",\"message\":\"" msg_ "\",\"timestamp\":%llu,\"data\":{" fmt_    \
+         "}}\n",                                                                                   \
+         (unsigned long long)(time_us_64() / 1000u), __VA_ARGS__)
+
 void U2_RxAuditReport(void) {
-  printf("[u2audit] frames=%lu ok=%lu SHORT=%lu over=%lu skip=%lu lost=%lu last=%ld "
-         "def1=%lu def2=%lu def3=%lu def4=%lu def5+=%lu\n",
-         (unsigned long)g_u2_audit_frames, (unsigned long)g_u2_audit_ok,
-         (unsigned long)g_u2_audit_short, (unsigned long)g_u2_audit_over,
-         (unsigned long)g_u2_audit_skip, (unsigned long)g_u2_audit_lost_bytes,
-         (long)g_u2_audit_last_delta,
-         (unsigned long)g_u2_audit_deficit[1], (unsigned long)g_u2_audit_deficit[2],
-         (unsigned long)g_u2_audit_deficit[3], (unsigned long)g_u2_audit_deficit[4],
-         (unsigned long)(g_u2_audit_deficit[5] + g_u2_audit_deficit[6] +
-                         g_u2_audit_deficit[7] + g_u2_audit_deficit[8] +
-                         g_u2_audit_deficit[0]));
-  printf("[u2audit] sock0 rx_base=0x%04X rx_size=%u\n",
-         (unsigned)u2_sockets[0].receive_base, (unsigned)u2_sockets[0].receive_size);
+  /* H1/H2: SHORT>0 proves dropped bus cycles. SHORT==0 while checksums still fail proves every
+   * byte was *counted* correctly, moving the fault to the byte values (PIO/prefetch delivery). */
+  U2_DBG_LOG("H1", "uthernet2.c:U2_RxAuditReport", "rx delivery audit",
+             "\"frames\":%lu,\"ok\":%lu,\"short\":%lu,\"over\":%lu,\"skip\":%lu,\"lost\":%lu,"
+             "\"last_delta\":%ld,\"wrapped\":%lu,\"def1\":%lu,\"def2\":%lu,\"def3\":%lu,"
+             "\"def4\":%lu,\"def5plus\":%lu,\"rx_base\":%u,\"rx_size\":%u",
+             (unsigned long)g_u2_audit_frames, (unsigned long)g_u2_audit_ok,
+             (unsigned long)g_u2_audit_short, (unsigned long)g_u2_audit_over,
+             (unsigned long)g_u2_audit_skip, (unsigned long)g_u2_audit_lost_bytes,
+             (long)g_u2_audit_last_delta, (unsigned long)g_u2_audit_wrapped,
+             (unsigned long)g_u2_audit_deficit[1], (unsigned long)g_u2_audit_deficit[2],
+             (unsigned long)g_u2_audit_deficit[3], (unsigned long)g_u2_audit_deficit[4],
+             (unsigned long)(g_u2_audit_deficit[5] + g_u2_audit_deficit[6] +
+                             g_u2_audit_deficit[7] + g_u2_audit_deficit[8] +
+                             g_u2_audit_deficit[0]),
+             (unsigned)u2_sockets[0].receive_base, (unsigned)u2_sockets[0].receive_size);
+
+  /* H4: is core 0 being starved (blocking UART writes) long enough to stall Contiki? */
+  U2_DBG_LOG("H4", "uthernet2.c:U2_RxAuditReport", "core0 service gaps",
+             "\"polls\":%lu,\"gap_max_us\":%lu,\"gap_gt5ms\":%lu,\"gap_gt20ms\":%lu,"
+             "\"gap_gt100ms\":%lu",
+             (unsigned long)g_u2_core0_polls, (unsigned long)g_u2_core0_gap_max_us,
+             (unsigned long)g_u2_core0_gap_5ms, (unsigned long)g_u2_core0_gap_20ms,
+             (unsigned long)g_u2_core0_gap_100ms);
+
+  /* H5: is core 1 falling behind the 4-deep listener FIFO (the drop mechanism)? */
+  U2_DBG_LOG("H5", "uthernet2.c:U2_RxAuditReport", "core1 bus backlog",
+             "\"cycles\":%lu,\"backlog\":%lu,\"backlog_max\":%lu",
+             (unsigned long)g_u2_bus_cycles, (unsigned long)g_u2_bus_backlog,
+             (unsigned long)g_u2_bus_backlog_max);
+
+  /* H1/H6 detail: where each mismatch happened, and whether it sat on the ring wrap. */
+  uint32_t r = u2_audit_evt_r;
+  uint32_t w = __atomic_load_n(&u2_audit_evt_w, __ATOMIC_ACQUIRE);
+  if (w - r > 6u)
+    w = r + 6u; /* cap per report: every line here is core-0 time spent blocked on the UART */
+  while (r != w) {
+    const u2_audit_evt_t *e = &u2_audit_evt[r % U2_AUDIT_EVT_MAX];
+    U2_DBG_LOG("H6", "uthernet2.c:RECV", "rx mismatch detail",
+               "\"kind\":%u,\"prev_rd\":%u,\"new_rd\":%u,\"advance\":%u,\"seen\":%u,"
+               "\"deficit\":%d,\"wrapped\":%u,\"rsr\":%u,\"hdr\":%u",
+               (unsigned)e->kind, (unsigned)e->prev_rd, (unsigned)e->new_rd,
+               (unsigned)e->advance, (unsigned)e->seen,
+               (int)e->seen - (int)e->advance, (unsigned)e->wrapped,
+               (unsigned)e->rsr, (unsigned)e->hdr);
+    r++;
+  }
+  u2_audit_evt_r = r;
 }
+/* #endregion */
 #endif
 
 void U2_Init(void) {

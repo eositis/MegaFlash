@@ -424,10 +424,18 @@ static volatile uint32_t u2_audit_evt_w, u2_audit_evt_r;
 volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_gap_20ms,
                   g_u2_core0_gap_100ms, g_u2_core0_polls;
 
-/* H5: core-1 falling behind. A listener FIFO entry already pending immediately after we serviced
- * a cycle means we did not keep up; the FIFO is 4 deep and pushes are noblock, so sustained
- * backlog is how a cycle gets silently discarded. */
-volatile uint32_t g_u2_bus_backlog, g_u2_bus_backlog_max, g_u2_bus_cycles;
+/* H7: the 2 bytes the audit found missing at every wrap. If the host's DATA reads run off the end
+ * of socket 0's ring, they land in 0x7000+ (socket 1's region, never written by the producer) and
+ * the frame is delivered with 2 foreign bytes in it. Record the actual addresses so the claim is
+ * localized rather than inferred. */
+volatile uint32_t g_u2_oow_reads;
+#define U2_OOW_MAX 16u
+static uint16_t u2_oow_addr[U2_OOW_MAX];
+static volatile uint32_t u2_oow_w, u2_oow_r;
+
+/* H8 control: how many frames crossed the ring end in total, matched or not. If every wrapping
+ * frame is short, the fault is structural; if only some are, it is a race. */
+volatile uint32_t g_u2_audit_wrap_total;
 
 /* Count only real host $C0C7 reads that land inside socket 0's RX ring. The prefetch path
  * (U2_PeekDataPort -> read_value_at) deliberately bypasses this, so peeks are never counted.
@@ -436,8 +444,20 @@ volatile uint32_t g_u2_bus_backlog, g_u2_bus_backlog_max, g_u2_bus_cycles;
 static inline void u2_audit_note_read(uint16_t addr) {
   const u2_socket_t *s = &u2_sockets[0];
   uint16_t sz = s->receive_size;
-  if (sz && (uint16_t)(addr - s->receive_base) < sz)
+  if (!sz)
+    return;
+  if ((uint16_t)(addr - s->receive_base) < sz) {
     u2_audit_reads++;
+  } else if (addr >= W5100_RX_BASE) {
+    /* H7: a DATA read inside the RX memory region but outside socket 0's ring — i.e. past the
+     * ring end, where the producer never writes. Capture the address itself. */
+    g_u2_oow_reads++;
+    uint32_t w = u2_oow_w;
+    if (w - u2_oow_r < U2_OOW_MAX) {
+      u2_oow_addr[w % U2_OOW_MAX] = addr;
+      __atomic_store_n(&u2_oow_w, w + 1u, __ATOMIC_RELEASE);
+    }
+  }
 }
 #endif
 
@@ -855,8 +875,12 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
           uint16_t prev_rd = u2_rx_rd_load(&u2_sockets[0]);
           uint16_t advance = (uint16_t)((rd - prev_rd) & m);
           uint32_t seen = u2_audit_reads;
+          uint16_t off0 = (uint16_t)(prev_rd & m);
           u2_audit_reads = 0;
           g_u2_audit_frames++;
+          /* H8 control: count every wrapping frame, not just the mismatching ones. */
+          if ((uint16_t)(off0 + advance) > m)
+            g_u2_audit_wrap_total++;
           if (seen == advance) {
             g_u2_audit_ok++;
           } else {
@@ -1050,6 +1074,27 @@ void U2_RxAuditReport(void) {
                              g_u2_audit_deficit[0]),
              (unsigned)u2_sockets[0].receive_base, (unsigned)u2_sockets[0].receive_size);
 
+  /* H7/H8: the addresses the host actually read past the ring end, plus the wrapping-frame
+   * total so short/wrap_total shows whether the fault is structural or a race. */
+  {
+    uint32_t r = u2_oow_r;
+    uint32_t w = __atomic_load_n(&u2_oow_w, __ATOMIC_ACQUIRE);
+    if (w - r > 8u)
+      w = r + 8u;
+    U2_DBG_LOG("H7", "uthernet2.c:read_value", "reads past ring end",
+               "\"oow_reads\":%lu,\"wrap_total\":%lu,\"short\":%lu,\"captured\":%lu",
+               (unsigned long)g_u2_oow_reads, (unsigned long)g_u2_audit_wrap_total,
+               (unsigned long)g_u2_audit_short, (unsigned long)(w - r));
+    while (r != w) {
+      U2_DBG_LOG("H7", "uthernet2.c:read_value", "oow addr",
+                 "\"addr\":%u,\"addr_hex\":\"0x%04X\",\"rx_end\":%u",
+                 (unsigned)u2_oow_addr[r % U2_OOW_MAX], (unsigned)u2_oow_addr[r % U2_OOW_MAX],
+                 (unsigned)(u2_sockets[0].receive_base + u2_sockets[0].receive_size));
+      r++;
+    }
+    u2_oow_r = r;
+  }
+
   /* H4: is core 0 being starved (blocking UART writes) long enough to stall Contiki? */
   U2_DBG_LOG("H4", "uthernet2.c:U2_RxAuditReport", "core0 service gaps",
              "\"polls\":%lu,\"gap_max_us\":%lu,\"gap_gt5ms\":%lu,\"gap_gt20ms\":%lu,"
@@ -1057,12 +1102,6 @@ void U2_RxAuditReport(void) {
              (unsigned long)g_u2_core0_polls, (unsigned long)g_u2_core0_gap_max_us,
              (unsigned long)g_u2_core0_gap_5ms, (unsigned long)g_u2_core0_gap_20ms,
              (unsigned long)g_u2_core0_gap_100ms);
-
-  /* H5: is core 1 falling behind the 4-deep listener FIFO (the drop mechanism)? */
-  U2_DBG_LOG("H5", "uthernet2.c:U2_RxAuditReport", "core1 bus backlog",
-             "\"cycles\":%lu,\"backlog\":%lu,\"backlog_max\":%lu",
-             (unsigned long)g_u2_bus_cycles, (unsigned long)g_u2_bus_backlog,
-             (unsigned long)g_u2_bus_backlog_max);
 
   /* H1/H6 detail: where each mismatch happened, and whether it sat on the ring wrap. */
   uint32_t r = u2_audit_evt_r;

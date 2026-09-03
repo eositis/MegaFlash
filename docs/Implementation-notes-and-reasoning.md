@@ -3001,6 +3001,93 @@ No inference, no correlation, no log archaeology. `-DU2_RX_AUDIT=1` prints every
 
 ---
 
+## 1di. Runtime evidence: the loss is exactly 2 bytes, always at the ring wrap (2026-09-03)
+
+First capture from the `U2_RX_AUDIT` build (`.cursor/debug-a36369.log`, 64 NDJSON records over
+~148 s, 201 socket-0 RECVs). Three hypotheses died and one very sharp signature emerged.
+
+### H5 (core 1 falling behind the listener FIFO) — REJECTED
+
+`{"cycles":155358,"backlog":2,"backlog_max":1}`
+
+Backlog on **2 of 155,358** bus cycles, maximum depth **1** of 4. Core 1 keeps up essentially
+perfectly, so the 4-deep `a2buslistener` FIFO is **not** discarding cycles. Probe removed from
+`busloop.c` rather than left on the timing-critical path it was measuring.
+
+### H4 (core 0 starved by blocking UART writes) — REJECTED
+
+`{"polls":15625065,"gap_max_us":50867,"gap_gt5ms":3,"gap_gt20ms":3,"gap_gt100ms":0}`
+
+15.6 M services in 148 s (~105 k/s), and `gap_max_us` was frozen at 50 ms from the 18 s mark
+onward — the three long gaps all happened during Wi-Fi bring-up, before traffic. Never a gap
+over 100 ms. **Enabling UART stdio in Release did not cause the browsing stall**, so the audit
+build is a valid measurement vehicle.
+
+### H1 (dropped bus cycle) — REJECTED as a mechanism
+
+`over=0`, `skip=0`, and the deficit histogram is **`def1=0, def2=17, def3=0, def4=0, def5plus=0`**.
+A discarded cycle loses **one** byte at a time and would land in `def1`. Every single loss here is
+**exactly 2 bytes**. Combined with the near-zero FIFO backlog, cycle loss is not what is happening.
+
+### The signature: 2 bytes, 100 % of the time, only at the wrap
+
+`frames=201 ok=184 short=17 lost=34 wrapped=17`
+
+**Every** mismatch (17/17) is a frame whose consumed range crossed the ring end, and **every** one
+is short by exactly 2. From the detail records:
+
+| prev_rd | off | advance | seen | deficit | hdr |
+|---|---|---|---|---|---|
+| `0x0F5D` | `0xF5D` | 426 | 424 | −2 | 426 |
+| `0x0D1D` | `0xD1D` | 786 | 784 | −2 | 786 |
+| `0x5FE5` | `0xFE5` | 65 | 63 | −2 | 65 |
+| `0xFE13` | `0xE13` | 786 | 784 | −2 | 786 |
+
+Two facts fall out:
+
+1. **`advance` == `hdr` == frame_len + 2 in every case.** The host consumes the whole MACRAW
+   record (2-byte length + payload) and advances `Sn_RX_RD` by exactly that, so the host's
+   accounting is correct and the header we wrote is intact at the wrapped location.
+2. **`seen` is always the payload length**, i.e. precisely **2 reads went uncounted**. The audit
+   only counts reads inside `[receive_base, receive_base+receive_size)`, so 2 of the host's DATA
+   reads landed **outside socket 0's ring**.
+
+### Correction: `Sn_RX_RD` is a free-running counter, not a physical address
+
+`prev_rd` climbs monotonically across the whole 16-bit range — `0x0F5D → 0x1CF9 → 0x5FE5 →
+0x9DBF → 0xFE13 → 0x0125` — rather than staying inside `0x6000`–`0x6FFF`. So the comment on
+`u2_rx_used_bytes` ("ip65 keeps Sn_RX_RD as a physical W5100 address") is **wrong**: ip65 keeps it
+as a virtual byte counter that wraps at 64 K, exactly as the W5100 datasheet specifies, and
+derives the physical address as `base + (RD & mask)`. Masking with `0x0FFF` happens to work either
+way because `0x6000` is 4 KiB-aligned, so nothing downstream is affected — but the comment should
+not mislead the next reader.
+
+### Live hypotheses
+
+- **H7 — reads run past the ring end.** `auto_increment()` wraps only at `0x6000`/`0x8000`, so
+  after `0x6FFF` it continues to `0x7000`, `0x7001` — socket 1's region, which the producer never
+  writes — before ip65 re-points to the base. Those 2 foreign bytes land mid-frame and break the
+  checksum, once per 4 KiB, i.e. every 3rd–6th packet depending on frame size. **This fits every
+  number in the capture.**
+- **H8 — accounting artifact.** The 2 reads could be in-window but attributed to the adjacent
+  RECV interval, in which case there is no real corruption at the wrap and the audit framing is
+  what is off. Weak (non-wrapping frames match exactly, 184/184) but it must be excluded, because
+  "fixing" a measurement artifact would be worse than the bug.
+
+Next capture records the **actual addresses** of reads outside the ring (`oow_reads` plus the raw
+addresses) and the **total** number of wrapping frames. `0x7000`/`0x7001` confirms H7 and makes the
+fix a one-line wrap at the socket boundary; zero out-of-window reads kills H7 and leaves H8.
+
+Note the browsing stall is probably the *same* defect rather than a second one: one corrupt frame
+per ~12 forces a TCP retransmit, which is a stall-then-burst for an interactive fetch, while
+wget's bulk stream absorbs it — matching the operator's report that wget is fine.
+
+**References:** `.cursor/debug-a36369.log`; `pico/uthernet2.c` (`u2_audit_note_read`, `read_value`,
+`auto_increment`, `write_socket_register` RECV case, `U2_RxAuditReport`), `pico/uthernet2_net.cpp`,
+`pico/busloop.c`; §1cx, §1dg, §1dh.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

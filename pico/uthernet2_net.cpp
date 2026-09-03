@@ -752,6 +752,7 @@ void U2_Net_ServicePoll(void) {
 void U2_Net_Poll(void) {
   if (get_core_num() != 0)
     return;
+  u2_core0_net_wake_pending = false; /* servicing core 1's request (§1cx) */
   NetworkPump_PollOnce();
 }
 

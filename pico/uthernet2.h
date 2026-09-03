@@ -23,11 +23,15 @@ extern "C" {
 /** Call once at startup before the bus loop. */
 void U2_Init(void);
 
-/** Advance network (lwIP); call periodically from the bus loop. Monitor UART flush is core 0 only — see U2_MonPollFlush in main. */
-void U2_Poll(void);
-
-/** Wake core 0 for lwIP poll (core 1 only; rate-limited). Phase 1 §10k. */
+/**
+ * Request a core-0 lwIP poll from the bus path. Must stay a single SRAM store: the a2bus PIO
+ * serves the 6502's next $C0C7 read ~90 ns after nDEVSEL falls, so anything slower here corrupts
+ * the byte stream (§1cx). Core 0 clears the flag in U2_Net_Poll.
+ */
 void U2_RequestCore0NetPoll(void);
+
+/** Set by U2_RequestCore0NetPoll on core 1; consumed by U2_Net_Poll on core 0. */
+extern volatile bool u2_core0_net_wake_pending;
 
 /**
  * Handle one Apple II bus access for Uthernet II at C0x4–C0x7 (slot 4: $C0C4–$C0C7).

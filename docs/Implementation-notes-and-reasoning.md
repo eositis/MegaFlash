@@ -2572,6 +2572,230 @@ So “same firmware, no checksums in the VM” proves **ip65/Contiki + a correct
 
 ---
 
+## 1cx. The periodic corruption source is `u2_poll_counter` in `BusLoop()`, not the ring (2026-08-29)
+
+**What:** User report — inbound frames are corrupted with a bad checksum on roughly **every 3rd or 6th packet**, after the radio has already ACKed, so no resend can be requested. §1cu/§1cv/§1cw had localised this to "`$C0C7`/ring, not the wire" and to "the first bad 2-byte length under a short `mov_data` burst", but no periodic trigger had been identified.
+
+**Evidence that the producer is innocent:**
+- `debug/2026-08-18 07-11-25 FT232R USB UART.log`: the `dbg e66cf7 A/C` self-check is **`match=1` in 1092 of 1092** samples. The 2-byte length header we wrote is exactly where we wrote it, with the right value. `u2_push_rx_macraw` and the ring wrap are correct.
+- The host is behaving *correctly* given what it reads. Two independent STALL/RESYNC pairs confirm `rd_new = rd_old + hdr` exactly: `0x554E + 0x7665 = 0xCBB3` and `0x57B3 + 0x6C65 = 0xC418`. Contiki faithfully reads a 2-byte length and advances `Sn_RX_RD` by it; the headers it reads are ASCII HTTP body (`"ve"`, `"le"`, `"n/"`). So the ring content is right and the *delivery* of bytes over `$C0C7` is wrong.
+- Wire captures (§1cw, `sensoroni_onion_1033`) show all IP/TCP checksums good. Corruption is introduced between `u2_memory` and the 6502.
+
+**Root cause — the poll gate fires in the inter-frame register dance.** `pico/busloop.c`:
+
+```c
+if (!(addr == U2_C0X_LAST && (busdata & READFLAG))) {
+  if (++u2_poll_counter >= 32) { u2_poll_counter = 0; U2_Poll(); }
+}
+```
+
+§1cu excluded `$C0C7` **reads** from incrementing the counter. That protects the cycle the poll runs on, but **not the cycle after it** — and it has a side effect nobody accounted for: during a `mov_data` burst the counter does not advance at all, so `U2_Poll()` can *only* fire during the register dance between frames (address writes, `Sn_RX_RD` update, `Sn_CR`=RECV). That is precisely the sequence that ends in the first `$C0C7` read of the **next frame's length header**.
+
+Per MACRAW frame Contiki issues roughly 13 counted (non-`$C0C7`-read) cycles: 2 to point at `Sn_RX_RSR`, 2 for `Sn_RX_RD`, 2 to set the data address, 4 to write `Sn_RX_RD` back, 3 for `Sn_CR`. `32 / 13 ≈ 2.5`; a leaner path (~5 counted cycles) gives `32 / 5.3 ≈ 6`. **That is the reported "every 3rd, or 6th packet" exactly.**
+
+**Why a delay corrupts data at all.** `a2bus_rp2350.pio` serves 6502 reads with **no CPU involvement**: `mov osr, rxfifo[y]` / `out pins, 8`. The byte the 6502 latches is whatever core 1 last wrote into `pio0->rxf_putget[SM_A2BUS][1]`. Core 1 is always one cycle behind and must have `registers.r[7] = U2_PeekDataPort()` pushed before the next read reaches `mov osr, rxfifo[y]` — about **90 ns after nDEVSEL falls** (`irq set 0 [3]` … `[1]` ≈ 13 PIO cycles at 150 MHz). Two failure modes, both giving the same result:
+- Core 1 has not pushed chunk 1 yet → the 6502 latches the **previous** byte.
+- `a2buslistener` uses `push noblock` into a 4-deep FIFO with **no overflow detection anywhere in the tree** → the cycle is silently discarded, `u2_data_address` never advances, and the next read returns the same byte.
+
+Either way one byte is **duplicated and the rest of the frame shifts by one** — mostly-correct data that fails checksum, and a mis-read length header when it lands on one. That is the observed signature.
+
+**Why `U2_Poll()` is expensive enough to matter.** `U2_Poll` and `U2_Net_Poll` are **not** in `U2_BUS_RAM`; they execute from XIP flash while core 0 is running lwIP/cyw43 from the same XIP cache. `U2_RequestCore0NetPoll` additionally does `get_absolute_time()` (APB timer), `absolute_time_diff_us`, then `multicore_fifo_push_timeout_us` (which itself calls `make_timeout_time_us` and `time_reached`). Nominal cost is a few µs against a ~15 µs budget, but under XIP contention it is unbounded — which is why the fault is intermittent rather than every time.
+
+**Fix (landed 2026-08-29):**
+1. **Deleted the `u2_poll_counter` block from `BusLoop()`** (`pico/busloop.c`). Core 1 now does nothing on a `$C0C4–$C0C7` cycle beyond servicing it. Safe because `U2_RequestCore0NetPoll()` still fires from the SEND and RECV handlers, and `PicoW_ServiceCore0IpcAndNetwork(0)` polls the network unconditionally with a zero FIFO timeout. `U2_Poll()` had exactly one caller and was removed with it.
+2. **`U2_RequestCore0NetPoll()` is now a single SRAM store** to `volatile bool u2_core0_net_wake_pending`, cleared by `U2_Net_Poll()` on core 0. Dropped the `get_absolute_time()` / `absolute_time_diff_us` / `multicore_fifo_push_timeout_us` sequence and the 1 ms rate-limit entirely — there is no blocking wait to unblock.
+3. **Moved the bus-path register plumbing into SRAM** via the existing `U2_BUS_RAM` macro (RP2350 only; no-op on RP2040 so its RAM budget is untouched): `read_socket_register`, `write_socket_register`, `get_rx_rsr`, `get_rx_rsr_byte`, `get_tx_fsr`, `get_tx_fsr_byte`, `get_tx_data_size`, `u2_rx_used_bytes_live`, `read_net16`, `U2_RequestCore0NetPoll`. Verified with `nm`: all now at `0x2000xxxx` on RP2350 and still at `0x10xxxxxx` on RP2040. This supersedes the §1d note that `read_socket_register` "stays in flash".
+
+**Still to do:** `FDEBUG.RXSTALL` drop detection. RP2350 PIO sets that bit for a SM whose `push noblock` discarded a word; counting it during a wget would convert the dropped-cycle half of the mechanism from inference to proof, and would catch any regression. Also worth tracking the listener FIFO high-water mark.
+
+**What we are not doing:** re-enabling the §1cq RESYNC rewrite, touching the ring/producer (proved correct by `match=1`), or revisiting NAT (§1cv already reverted it).
+
+**Secondary divergence found, not the cause:** `read_socket_register` recomputes `Sn_RX_RSR`/`Sn_TX_FSR` on **each byte** access, so a 16-bit read is torn (hi at T1, lo at T2 with core 0 free to advance `sn_rx_wr` between). A real W5100 latches the pair. Analysis shows this can only **under**-report (`wr` is monotonic between the two reads), so it costs an extra poll rather than corrupting data — worth fixing for fidelity, but it does not explain the checksum failures.
+
+**References:** `pico/busloop.c` (`u2_poll_counter`), `pico/a2bus_rp2350.pio` (`irq set 0` / `mov osr,rxfifo[y]`, `a2buslistener` `push noblock`), `pico/a2bus.h` (`UpdateMegaFlashRegisters`), `pico/uthernet2.c` (`U2_Poll`, `U2_RequestCore0NetPoll`, `U2_PeekDataPort`, `read_socket_register`), `debug/2026-08-18 07-11-25 FT232R USB UART.log`; §1cu, §1cv, §1cw.
+
+---
+
+## 1cy. §1cx result: stalls cured, checksums unchanged → bus-path instrumentation (2026-09-01)
+
+**User result after the §1cx build:**
+- **`RECV STALL` / `RECV RESYNC` gone.** Downloads now run far longer before failing (Contiki wget eventually dies).
+- **Checksum errors persist, unchanged in rate.**
+- **adtproeth** (ADTPro over Ethernet, UDP path) works briefly then crashes out.
+- **a2stream** cannot connect at all — likely the hardware **TCP socket** path, not MACRAW.
+
+**What this tells us.** §1cx was a real defect and its removal fixed exactly what it should have: the poll gate was firing in the inter-frame register dance, mis-delivering the length header and derailing `Sn_RX_RD` into the wedge. With core-1 latency on that path now minimal, the derailment is gone — so the *periodicity* of the wedge was the poll gate. But the underlying **byte corruption is a separate defect** and is not caused by core-1 work on the bus path, because there is no longer any.
+
+**What is now eliminated.**
+- **The RX ring / producer.** `match=1` on 1092/1092 producer self-checks (§1cx), plus a static argument: the host only ever reads inside `[rd, wr)`, and the producer's free-space math uses the shadow `sn_rx_rd`, which is published at RECV and therefore always at-or-behind the live `Sn_RX_RD`. So the producer can never overwrite a byte the host is about to read. The ring cannot be the corruption source.
+- **Core-1 latency from the poll gate** (§1cx, now removed).
+- **The wire.** All IP/TCP checksums good in `sensoroni_onion_1033` (§1cw).
+
+**Remaining hypothesis space, and why it is small.** Corruption must therefore be in the *delivery* of bytes over `$C0C7`:
+- **H1 — dropped bus cycle.** `a2buslistener` uses `push noblock` into a 4-deep FIFO. On overflow the record is silently discarded, `u2_data_address` never advances, and the next read returns the same byte. **There is no overflow detection anywhere in the tree.**
+- **H2 — prefetch turnaround.** The a2bus SM latches chunk 1 about 140 ns after nDEVSEL falls (`irq set 0 [3]` … `mov osr,rxfifo[y]`), so core 1 must have pushed the *next* byte before the *next* cycle starts. This is a hard per-cycle deadline that no amount of general speed-up removes; it is structural to the one-deep `rxf_putget` latch.
+- **H3 — ring geometry disagreement.** Our `auto_increment` wraps at `0x6000`/`0x8000` (the W5100 TX/RX *memory* blocks), but socket 0's buffer is only 4 KiB (`ring=4096` in the logs). If the host does not rewrite the address register at `receive_base + receive_size`, it reads `0x7000+` — socket 1's area — and every frame crossing the socket-buffer end is corrupt. `4096 / 1516 ≈ 2.7`, which independently matches the reported "every 3rd" beat.
+
+**Instrumentation added (Debug build only).** One run of a wget now discriminates all three:
+
+| Counter | Meaning | Verdict if non-zero |
+| --- | --- | --- |
+| `[busdiag] behind` | listener FIFO was already non-empty when core 1 popped a `$C0C7` read | **H2** — the queued cycle was answered from a prefetch computed one cycle early, so the 6502 got a duplicate byte. This is a *direct* count of corrupted bytes, not a proxy. |
+| `[busdiag] rxstall` | `FDEBUG.RXSTALL` for `SM_LISTENER` (write-1-to-clear) | **H1** — a cycle was silently discarded |
+| `[busdiag] fifo_hw` | high-water listener FIFO level | how deep the backlog gets |
+| `[u2diag] data_oow` | `$C0C7` reads inside RX memory but outside socket 0's `[receive_base, +receive_size)` | **H3** — host walked past its socket buffer without rewriting the address register |
+| `[u2diag] rx_geom` | per-socket base+size, plus RMSR/TMSR/MR/ptr | shows whether our geometry matches what the driver asked for |
+
+Why `behind` is a valid direct measure: the listener pushes ~70 ns after nDEVSEL, and the a2bus SM latches chunk 1 at ~140 ns. So if a cycle is already queued when core 1 pops the previous one, the queued cycle has necessarily already been answered from the stale latch. In healthy operation this must be **0** — even the tightest 6502 sequence (`eor $C0C7` back-to-back, the §1d RTR probe) leaves ~4 µs between accesses.
+
+**Cost / caveat:** one APB read (`pio0->flevel`) plus one `pio0->fdebug` test per bus cycle, Debug only, ~20–40 ns against a ~12 µs budget. Release is byte-identical to §1cx (verified: `nm` finds no `BusDiagReport` / `U2_DiagReport` / `g_bus_behind` in `pico2_release`).
+
+**If H2 is confirmed, the fix is structural, not a speed-up.** The data port must stop depending on per-cycle core-1 turnaround: replace the one-deep `rxf_putget` chunk-1 latch for `$C0C7` with a real PIO **TX FIFO** that core 1 keeps stuffed several bytes ahead, so the SM pops the next RX byte itself on each read. That converts a hard 140 ns deadline into a 4–8 byte pipeline. It is a `a2bus_rp2350.pio` rewrite and should not be attempted before the counters say it is needed.
+
+**Separate defects, not covered by the above:** `a2stream` failing to connect exercises the hardware TCP socket path (`U2_Net_OpenTcp` / `U2_Net_ConnectTcpEx` / `tcp_bind` on `Sn_PORT`), which shares nothing with the MACRAW ring but the `$C0C7` transport; adtproeth is the UDP path (`u2_push_rx` with the 4+2+2 header). Both need their own `[u2m]` OPEN/CONNECT traces before diagnosis.
+
+**References:** `pico/busloop.c` / `pico/busloop.h` (`g_bus_behind`, `g_bus_rxstall`, `BusDiagReport`), `pico/uthernet2.c` / `pico/uthernet2.h` (`g_u2_data_oow`, `U2_DiagReport`), `pico/uthernet2_net.cpp` (report call in the 10 s `U2_Net_ServicePoll` block), `pico/a2bus_rp2350.pio`; §1cx.
+
+---
+
+## 1cz. The §1cy Debug build was an invalid test vehicle — instrumentation moved to Release (`MF_BUS_DIAG`) (2026-09-01)
+
+**What.** §1cy shipped the new counters as `#ifndef NDEBUG` and the instruction was to flash `pico2_debug/megaflash.uf2`. The result was a regression against the §1cx Release build the previous data point came from: Contiki struggled to connect and download, wget did not connect at all, and a2stream could not create a connection. No `[busdiag]` data was obtained.
+
+**Why this was my methodology error, not new information about the bug.** Three independent defects in the test setup, in descending order of severity:
+
+1. **The Debug build starves core 0's lwIP poll through blocking UART.** `PicoW_ServiceCore0IpcAndNetwork` calls `NetworkPump_PollOnce()` and then `U2_MonPollFlush()` on every iteration. The flush formats up to `U2_MON_FLUSH_MAX` = **48** events per call with `printf` to a **115200 baud** UART, and `printf` blocks when the TX FIFO is full. 48 lines × ~80 chars ≈ 3.8 KB ≈ **330 ms of blocking output per iteration**. Under any real traffic the monitor produces events far faster than 115200 can drain, so core 0 lives inside `uart_write_blocking` and `NetworkPump_PollOnce` runs a handful of times per second instead of thousands. TCP handshakes need core 0 to answer SYN/SYN-ACK and service cyw43 — hence **"cannot connect"**, in all three applications at once. This is a property of the Debug build, unrelated to §1cx or §1cy.
+2. **Debug is `-Og`, Release is `-O3`** (confirmed from `flags.make`, not assumed). §1cx established a hard ~140 ns chunk-1 deadline on the bus path; a whole optimization tier of extra instructions in `BusLoop` and `U2_HandleBusAccess` is material against that budget, so Debug cannot be used to measure bus timing either.
+3. **The counters were sampled on the wrong side of the deadline.** `pio_sm_get_rx_fifo_level` and the `pio0->fdebug` test were placed *before* `U2_HandleBusAccess` and therefore before `UpdateMegaFlashRegisters(1, …)`. They delayed the very prefetch publish whose lateness they were counting: a textbook observer effect that inflates `behind` and can manufacture corruption. The §1cy claim that the cost was "~20–40 ns against a ~12 µs budget" was **wrong** — the relevant budget is the ~140 ns to chunk-1 latch, not the ~12 µs inter-cycle gap.
+
+**What we did.**
+
+- Added CMake cache var **`MF_BUS_DIAG`** (default `0`), deliberately decoupled from `CMAKE_BUILD_TYPE`, and switched every counter guard from `#ifndef NDEBUG` to `#if MF_BUS_DIAG`. The 10 s stats block in `U2_Net_ServicePoll` is now `#if !defined(NDEBUG) || MF_BUS_DIAG` so the report fires in Release. New build tree `pico2_diag` = **Release + `-O3` + `NDEBUG` + no `[u2m]` monitor + counters**, which is byte-for-byte the §1cx timing environment plus a 10 s printf.
+- **Moved the FIFO sample after `UpdateMegaFlashRegisters(1, …)`.** The measurement stays valid and is arguably stricter: a cycle still queued *after* the prefetch is published was unambiguously answered from the previous chunk-1 value.
+- **Removed the `pio0->fdebug` access from the bus path entirely.** RXSTALL is a sticky write-1-to-clear flag, so core 0 harvests and clears it inside `BusDiagReport()`. The bus path now costs one APB read on `$C0C7` reads only, after the deadline.
+
+**What we did not do.** We did not change any emulation logic in response to the reported regression, and we are not treating "wget did not connect" as a new W5100-emulation symptom — there is no evidence for that yet, because the build that produced it could not have connected regardless.
+
+**Takeaway, beyond this fix.** The Debug build cannot be used to judge connection-level behaviour, and much of the historical UART evidence was captured on it. Symptoms recorded in §10r ("slow core-0 lwIP poll"), §10t (SYN→RST at ~47–62 ms, DNS reply → ICMP port unreachable) are exactly what a core 0 pinned in blocking UART output looks like. **Some previously chased "emulation bugs" may be Debug-harness artifacts and should be re-confirmed on `pico2_diag` before further work.** If the monitor is needed alongside connectivity, the UART must be raised well above 115200 (§1aw already used 460800) or `U2_MON_FLUSH_MAX` cut hard.
+
+**References:** `pico/CMakeLists.txt` (`MF_BUS_DIAG`), `pico/busloop.c` / `pico/busloop.h` (sample moved after the chunk-1 publish; RXSTALL harvest in `BusDiagReport`), `pico/uthernet2.c` / `pico/uthernet2.h`, `pico/uthernet2_net.cpp`, `pico/u2_monitor.c` (`U2_MonPollFlush`, `U2_MON_FLUSH_MAX`), `pico/main.c` (`PicoW_ServiceCore0IpcAndNetwork`); §1cx, §1cy, §10r, §10t.
+
+---
+
+## 1da. `pico2_diag` was unreadable: Release logs to USB only, and USB halts the bus loop (2026-09-01)
+
+**What.** The §1cz `pico2_diag` image (Release + `MF_BUS_DIAG=1`) could not be used at all. Its output went out **USB CDC**, and connecting USB kills storage — so there was no way to read the counters while the thing being measured was running.
+
+**Why — two independent facts about Release builds that §1cz did not account for.**
+
+1. **Release disables the UART stdio driver outright.** `main.c` had `#ifndef NDEBUG → stdio_uart_init()` / `#else → stdio_set_driver_enabled(&stdio_uart, false)`. Every Release build therefore has exactly one stdio sink: USB CDC (`pico_enable_stdio_usb(… 1)` is unconditional in `CMakeLists.txt`). All of `[u2macraw]` / `[busdiag]` / `[u2diag]` went to USB.
+2. **In Release, USB and the Apple bus are mutually exclusive *by design*.** `ReleaseUpdateBusUsbGate()` sets `g_release_bus_emulation_enabled = IsAppleConnected() && !stdio_usb_connected()`, and `GetAppleBusBlocking()` in `a2bus.h` reacts to it by spinning **without draining the listener FIFO**:
+
+```c
+while (!g_release_bus_emulation_enabled) { tight_loop_contents(); }
+```
+
+So plugging USB stops core 1 servicing bus cycles entirely — not just storage, but the U2 emulation too. This is deliberate (USB console vs bus mode), not a defect. Combined with (1) it makes a Release diagnostic build self-defeating: reading the log requires the exact condition that disables what the log measures. The user's report — "if USB is connected, storage does not work" — is this gate, and the two remedies they identified (log to UART, or allow USB and storage together) are the only two options.
+
+**What we did — the UART option.** For `MF_BUS_DIAG` builds only:
+
+- `main.c`: the UART-disable is now `#if defined(NDEBUG) && !MF_BUS_DIAG`, so a diag build calls `stdio_uart_init()` + `setbuf(stdout, NULL)` exactly like Debug. UART 115200; the diag output is three lines every 10 s, so baud is not a constraint here (contrast §1cz, where the Debug `[u2m]` firehose saturated the same UART).
+- `main.c`: both `stdio_usb_init()` calls are `#if !MF_BUS_DIAG`. Confirmed with `nm` that the linker drops `stdio_usb_init` from `pico2_diag` entirely — USB is power-only, and TinyUSB never enumerates, so there is also no 1 ms `tud_task` timer or USB IRQ adding jitter to the measurement.
+- `misc.c`: the gate reads a new `release_usb_console_active()` which returns `false` under `MF_BUS_DIAG`. This keeps `g_release_bus_emulation_enabled = IsAppleConnected()`, so **a USB cable plugged in for power no longer halts the bus loop**, and it avoids querying TinyUSB state that was never initialized.
+
+**What we did not do — the "USB and storage together" option.** Relaxing the gate for normal Release builds was rejected for now: the gate is load-bearing and its removal would put USB IRQs, a 1 ms `tud_task` alarm, and a potentially blocking `stdio_usb_out_chars` (up to `PICO_STDIO_USB_STDOUT_TIMEOUT_US`) alongside the ~140 ns chunk-1 deadline from §1cx. Doing that *while* trying to measure that deadline would confound the experiment. It stays a separate piece of work.
+
+**Takeaway.** Any future Release-based diagnostic build must log over UART. Release has no other usable sink, and reaching for USB switches the firmware into a mode where the bus loop is stopped by design.
+
+**References:** `pico/main.c` (UART init guard, both `stdio_usb_init` guards), `pico/misc.c` / `pico/misc.h` (`release_usb_console_active`, `ReleaseUpdateBusUsbGate`, `g_release_bus_emulation_enabled`), `pico/a2bus.h` (`GetAppleBusBlocking` gate spin), `pico/CMakeLists.txt` (`MF_BUS_DIAG`, `pico_enable_stdio_usb`); §1cx, §1cz.
+
+---
+
+## 1db. First `MF_BUS_DIAG` capture: H2 (prefetch turnaround) is dead; the failure is upstream of the bus (2026-09-01)
+
+**Capture:** `Serial Saved Output.txt`, 24 report windows (~4 min), Pico 2 W, `pico2_diag`. Session: a web page loaded with issues, downloads did not work, wget did not connect.
+
+### Result 1 — the bus delivery path is clean. H2 is eliminated.
+
+```
+[busdiag] c0c7_reads=38807 behind=0 (0 ppm) fifo_hw=0 rxstall=7
+```
+
+**`behind=0` over 38,807 `$C0C7` reads, and `fifo_hw=0`** — the listener FIFO was *never* observed non-empty after core 1 published chunk 1. Core 1 always wins the ~140 ns turnaround. Combined with §1cx (poll gate removed) this **closes H2**, and with it the proposed `a2bus_rp2350.pio` TX-FIFO rewrite: **do not build it.** That was the most expensive item on the list and it is now off it.
+
+`data_oow` reached **4** and then froze — 4 reads in the 8 KiB RX region outside socket 0's `0x6000+4096` window, all in two adjacent windows, then never again. Real but tiny, and it stopped before the session wedged, so it is not the mechanism behind a sustained failure. H3 is not the main event.
+
+Geometry itself is **correct**: `RMSR=0x06` → s0 4 KiB @ `0x6000`, s1 2 KiB @ `0x7000`, s2/s3 1 KiB @ `0x7800`/`0x7C00`, totalling exactly 8 KiB. `MR=0x03` (indirect + auto-increment). ip65 init completed normally.
+
+### Result 2 — `rxstall` was mis-measured (my bug)
+
+RXSTALL is **sticky**, and §1cz harvested it *once per 10 s report*. So `g_bus_rxstall` could only ever increment by 1 per window: `rxstall=7` means "7 of 24 windows contained at least one dropped cycle", not "7 dropped cycles" — it cannot distinguish one drop from millions. Also, **5 of the 7 occurred while `c0c7_reads` was still 0**, i.e. before any U2 traffic; those are consistent with the Release bus gate (§1da) spinning in `GetAppleBusBlocking()` *without draining the FIFO*, which necessarily overflows it and sets RXSTALL. Fixed: the flag is now checked and cleared **per bus cycle**, still after the prefetch publish so it costs no deadline.
+
+### Result 3 — the counters could not see the actual failure
+
+The revealing line is the steady state at the end:
+
+```
+[busdiag] c0c7_reads=38807 …          (~6,000 reads per 10 s window, sustained)
+[u2diag]  … MR=0x03 ptr=0x0428
+[u2macraw] tx_q=0 tx_q_drop=0 lo_err=0 pbuf_fail=0
+```
+
+`ptr` is `u2_data_address`, and **`0x0428` is socket 0's `Sn_RX_RD`** (`S0_BASE 0x0400 + 0x28`). It sits there, unchanged, for the last six windows (60 s) while the host issues ~600 `$C0C7` reads per second. That is a **6502 poll loop spinning on the receive pointer for data that never comes** — entirely consistent with "wget did not connect at all". Note the host is *not* reading frame data: a draining host would show `ptr` walking through `0x6000–0x6FFF`.
+
+So the defect is **upstream of the bus transport**, in whether frames ever reach the ring — and §1cy/§1cz instrumented only the delivery path. The `[u2macraw]` counters are TX-queue-only (`tx_q`, `tx_q_drop`, `lo_err`, `pbuf_fail`) with no success counter, so all-zero there is uninformative rather than reassuring.
+
+**What we added** (all `MF_BUS_DIAG`, in `U2_DiagReport`): `rx_push` (frames written to the ring), `rx_drop` (ring full / frame too big), `rx_filt` (rejected by the `Sn_MR` MAC filter — §1az added this filter, and an over-tight filter would produce exactly this silence), `recv` / `send` (`Sn_CR` commands from the 6502), plus a per-socket line with `Sn_MR`, `Sn_SR`, buffer geometry, `Sn_RX_RD`, `sn_rx_wr` and live `Sn_RX_RSR`. One capture now separates: nothing arriving from Wi-Fi (`rx_push=0`), arriving but filtered (`rx_filt` climbing), arriving but discarded (`rx_drop`), or arriving and ignored by the host (`rx_push` climbing with `rsr` growing and `recv` flat).
+
+**Takeaway.** §1cy framed this as three hypotheses all located on the bus path. The data says the bus path is fine and the question was scoped too narrowly. `behind=0` is a solid, reusable result; the rest of the investigation should move to the RX ingest path.
+
+**References:** `Serial Saved Output.txt`; `pico/busloop.c` (per-cycle RXSTALL), `pico/uthernet2.c` (`g_u2_rx_push` / `g_u2_rx_drop` / `g_u2_rx_filtered` / `g_u2_recv_cmd` / `g_u2_send_cmd`, expanded `U2_DiagReport`), `pico/uthernet2.h`; §1cx, §1cy, §1cz, §1az.
+
+---
+
+## 1db-2. USB serial console is a required feature, not just a debug sink (2026-09-01)
+
+**What.** §1da removed `stdio_usb_init()` from `MF_BUS_DIAG` builds. That was wrong: **USB serial is the offline storage upload/download console**, used to check config and move images before the card is installed in the IIc. Removing it broke a real workflow.
+
+**Why the original fix over-reached.** The problem §1da actually needed to solve was that connecting USB *halts the bus loop* (`ReleaseUpdateBusUsbGate()` → `g_release_bus_emulation_enabled=false` → `GetAppleBusBlocking()` spins without draining the FIFO). Killing USB stdio was one way to stop the gate tripping, but it treated a console the user depends on as if it were only a log sink.
+
+**What we did.** `stdio_usb_init()` is restored unconditionally. Only the *gate input* stays neutered in diag builds (`release_usb_console_active()` returns false under `MF_BUS_DIAG`), so:
+
+| Situation | `IsAppleConnected()` | Bus emulation | USB console |
+|---|---|---|---|
+| On the bench, USB powered | false | off | **`UserTerminal()` runs** — offline storage works |
+| Installed in the IIc, USB plugged | true | **on** — storage + U2 work | not entered |
+
+This works because `main()` already guards the terminal with `stdio_usb_connected() && !IsAppleConnected()`, so the Apple check — not the gate — is what keeps the terminal out of bus mode. Diagnostics go to UART, so nothing needs USB to be readable. Verified in the `pico2_diag` disassembly: two `stdio_usb_init` call sites and one `stdio_uart_init`, i.e. both consoles live.
+
+**Residual risk, accepted:** with the gate keyed on `IsAppleConnected()` alone, an installed card with USB attached now runs TinyUSB (USB IRQs + 1 ms `tud_task`) concurrently with the bus loop, which §1da avoided. `behind=0` in the same-generation capture suggests headroom, and `behind` will detect it if that changes.
+
+**References:** `pico/main.c` (both `stdio_usb_init` sites, `UserTerminal()` guards), `pico/misc.c` (`release_usb_console_active`); §1da.
+
+---
+
+## 1dc. Rolled back to the §1cx baseline; §1cx was never committed (2026-09-01)
+
+**What.** The card stopped being detected by the IIc entirely ("megaflash now not found"). At the user's direction we returned the tree to the last state with known-good behaviour — §1cx, where the RECV stalls were cured — to confirm that result reproduces before re-adding any instrumentation.
+
+**The important discovery: §1cx exists only in the working tree.** `HEAD` (`04f798d cleanup`) still contains `u2_poll_counter` and `U2_Poll()`. Every improvement from §1cx onward was uncommitted and interleaved with the §1cy–§1db diagnostics in the same files. A careless `git checkout` would have destroyed the one fix we know works. **Any future rollback request must check this first.**
+
+**Preservation.** `git diff` of all nine touched sources saved to `u2-diag-instrumentation.patch` at the repo root; `git apply u2-diag-instrumentation.patch` restores the full instrumented state. No commits were made. `pico/pico2_diag/` was deleted so the instrumented UF2 cannot be flashed by mistake.
+
+**How the split was done.** §1cx touched only `busloop.c`, `uthernet2.c`, `uthernet2.h`, `uthernet2_net.cpp`. Everything in `CMakeLists.txt`, `busloop.h`, `main.c`, `misc.c`, `misc.h` was introduced by §1cy–§1db, so those five were reverted wholesale with `git checkout` — which removes `MF_BUS_DIAG`, the Release-UART change, and the bus-gate change in one step. The eight `#if MF_BUS_DIAG` blocks in the remaining four files were then removed by hand. Verified two ways: `rg MF_BUS_DIAG` returns nothing, and the residual diff against HEAD is exactly the three §1cx changes (poll-counter deletion, `U2_Poll` → `u2_core0_net_wake_pending`, `U2_BUS_RAM` on the hot path). `nm` on `pico2_release` confirms no diag symbols and `U2_RequestCore0NetPoll` at `0x20001dc8`, i.e. SRAM-resident as §1cx intends.
+
+**Suspects for the detection failure, to be re-added one at a time rather than as a block.** We do not know which change caused it, and the rollback deliberately removed all of them at once:
+
+1. **Per-cycle `MF_BUS_DIAG` work in `BusLoop`** — an APB `flevel` read plus an `fdebug` read/write on U2 cycles. Placed after the chunk-1 publish (§1cz) so it should not affect the prefetch deadline, but it is still work added to the hot loop.
+2. **UART stdio enabled in a Release build** (§1da) — this makes every previously-invisible `printf` in Release actually emit and *block* on a 115200 UART. Release normally has no UART sink at all, so any unconditional `printf` on a startup or hot path that was silently discarded before now costs real time. This is the least-examined of the three.
+3. **The §1db-2 gate change** — keying `g_release_bus_emulation_enabled` on `IsAppleConnected()` alone. This is the only change that alters behaviour *when USB is attached*, and it is the first time TinyUSB has ever run concurrently with the bus loop in Release. If the failure was observed with a USB cable connected, start here.
+
+**Takeaway.** Three separate mechanisms were bundled into one test build, so a single regression report cannot attribute the fault. Re-introduce them individually, confirming detection after each.
+
+**References:** `u2-diag-instrumentation.patch`; `pico/busloop.c`, `pico/uthernet2.c`, `pico/uthernet2.h`, `pico/uthernet2_net.cpp` (§1cx residue); §1cx, §1cz, §1da, §1db-2.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -2604,7 +2828,13 @@ So “same firmware, no checksums in the VM” proves **ip65/Contiki + a correct
 | Apple readback for U2 | `busloop.c` U2 branch, `a2bus.h` | **`registers.r[4..7]`** → **`i32[1]`** chunk **1** → **`UpdateMegaFlashRegisters(1,…)`**; RP2350 waits for IRQ0 before update (§1d) so SM1 presents the merged byte on the next cycle |
 | U2 read data path | `busloop.c`, `a2bus.h` | U2 read byte must update **chunk 1** (SM1), not chunk 0 |
 | RP2350 U2 vs PIO IRQ 0 | `busloop.c` §1d | U2 branch must wait for IRQ 0 clear before `UpdateMegaFlashRegisters(1,…)` (same as main loop); skipping caused bad C0C4–C0C7 reads |
-| U2 `[u2m]` monitor | `u2_monitor.c`, `build-debug.sh` §1e | Debug-only queued UART trace; flush from `U2_Poll`; bus + socket + net hooks |
+| U2 `[u2m]` monitor | `u2_monitor.c`, `build-debug.sh` §1e | Debug-only queued UART trace; flush from `U2_Poll`; bus + socket + net hooks. **§1cz: at 115200 the 48-event flush blocks core 0 for ~330 ms/iteration and starves lwIP → TCP connects fail. Debug is not valid for connectivity or bus timing.** |
+| Bus-path counters (`behind`/`rxstall`/`data_oow`) | §**1cz**, `CMakeLists.txt` `MF_BUS_DIAG`, `busloop.c`, `uthernet2.c` | Enable in **Release**: `-DCMAKE_BUILD_TYPE=Release -DMF_BUS_DIAG=1` (`pico2_diag`). Sample **after** `UpdateMegaFlashRegisters(1,…)`; RXSTALL harvested on core 0 (sticky) so the bus path stays clean |
+| **§1cx is UNCOMMITTED** | §**1dc**, `u2-diag-instrumentation.patch` | `HEAD` `04f798d` still has `u2_poll_counter`/`U2_Poll()`. The only copy of the known-good no-stalls state is the **working tree** — check before any `git checkout`. Instrumented state preserved in the root patch file |
+| **H2 prefetch turnaround — CLOSED** | §**1db**, `Serial Saved Output.txt` | `behind=0` / `fifo_hw=0` over **38,807** `$C0C7` reads ⇒ core 1 always meets the ~140 ns chunk-1 deadline. **Do not do the `a2bus_rp2350.pio` TX-FIFO rewrite.** `data_oow=4` (tiny, stopped early) ⇒ H3 not the main event |
+| RX ingest visibility | §**1db**, `uthernet2.c` `U2_DiagReport` | `rx_push` / `rx_drop` / `rx_filt` / `recv` / `send` + per-socket `Sn_MR`/`Sn_SR`/`rd`/`wr`/`rsr`. Added because the bus-path counters could not see a host poll loop parked on `Sn_RX_RD` (`ptr=0x0428`) with no data arriving |
+| USB serial = storage console | §**1db-2**, `main.c`, `misc.c` | **Not just a log sink** — offline upload/download before install. `stdio_usb_init()` always called; only the *gate input* is neutered under `MF_BUS_DIAG`, so bench USB → `UserTerminal()`, installed + USB → bus stays live |
+| Release stdio sink / USB-vs-bus gate | §**1da**, `main.c`, `misc.c`, `a2bus.h` | Release **disables `stdio_uart`** → USB CDC is the only sink; and `GetAppleBusBlocking()` **spins without draining the FIFO** while `!g_release_bus_emulation_enabled`, which `ReleaseUpdateBusUsbGate()` clears whenever USB is connected. So **USB kills storage + U2 by design**. `MF_BUS_DIAG` builds: UART enabled, `stdio_usb_init()` **not called** (linker drops it), gate ignores USB → USB is power-only |
 | A0–A3, nDEVSEL pulls | `a2bus_rp2040.pio`, `a2bus_rp2350.pio` | A2=GPIO8, A3=GPIO9, no pulls; nDEVSEL pull-up on; data bus pull-up |
 | Build SDK path | `cmakeall.sh`, `CMakeLists.txt` | Script passes `-DPICO_SDK_PATH`; `CMakeLists.txt` uses **`$HOME/pico-sdk`** when env or `-D` unset (§4); SDK is same git repo on all host architectures |
 | Host CMake | `build-env.sh`, `cmakeall.sh`, `build-both.sh`, `build-debug.sh` | **`CMAKE_BIN`**: `/opt/homebrew/bin/cmake` → `/usr/local/bin/cmake` → **`PATH`**; **`CMAKE`** env override |
@@ -2618,6 +2848,7 @@ So “same firmware, no checksums in the VM” proves **ip65/Contiki + a correct
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
 | Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
+| Board bring-up `[hwdiag]` | §**25**, `hwdiag.c`, `docs/Debug-mode.md` §3 | Debug-only 1 Hz PHI0/nDEVSEL/cycle/ID/`CMD_GETDEVINFO` report + ACT LED blink. For boards the IIc does not see. Release no-ops. Thomas 6502 Serial Port 1 debug does **not** cover this |
 | Pico W USB path + IPC | `main.c` §7i | When **`!appleConnected`** at boot, **`core0Loop()`** is skipped; **`PicoW_ServiceCore0IpcAndNetwork(0)`** must still run so Test WiFi / TFTP FIFO + **`NetworkPump_PollOnce`** are serviced |
 | Release USB vs Apple bus | `main.c`, `misc.c`, `a2bus.h` §7j | **`NDEBUG`**: bus emulation only when Apple **and** no USB host; USB terminal only when USB **and** no Apple; Debug builds exempt |
 | CYW43 init + LED | `misc.c`, `udptask.cpp`, `network_pump.cpp` §7k | **`InitPicoLed`** calls **`cyw43_arch_init()`**; **`InitCyw43()`** / **`NetworkPump::Init()`** must not call **`cyw43_arch_init_*`** again — use **`cyw43_is_initialized`** and only **`cyw43_arch_enable_sta_mode()`** |
@@ -3218,5 +3449,21 @@ This is intentionally conservative: the common case remains unchanged, but the c
 **Takeaway:** Previews are authoritative for “how it looks under each palette.” Binary HGR is loadable; DLGR/DHGR still need a small 6502 blitter for soft-switch + memory layout.
 
 **References:** `pico/assets/apple2-logo/`, `render_apple2_logo.py`, `megaflash_apple2_modes_sheet.png`.
+
+---
+
+## 25. Hardware bring-up: `[hwdiag]` when the IIc does not see MegaFlash (2026-09-01)
+
+**What:** Newly assembled boards are not found by the Apple. GAL and 74LVC level shifters were swapped for known-good parts with no change. Need a way to see *which electrical stage* failed.
+
+**Why Thomas’ original debug is not enough:** The 6502 `DEBUG EQU TRUE` path (`firmware/buildflags.inc`) prints SmartPort/ProDOS calls on IIc Serial Port 1 — only after MegaFlash already answered. Pico Debug UART printed heap/WiFi/U2, not PHI0, nDEVSEL, or captured `$C0Cx` cycles. Detection is two `$C0C3` reads XOR `$FF` plus `CMD_GETDEVINFO` (`firmware/megaflash.s` `chkmegaflash` / `chkmegaflashex`). None of that runs if nDEVSEL never reaches the Pico.
+
+**What we did:** Debug-only `[hwdiag]` (`pico/hwdiag.c`): 1 Hz UART line + ACT LED blink. Core 1 increments cycle/nibble/write/`CMD_GETDEVINFO` counters in the existing bus loops (inline, no `printf` on the hot path). Core 0 samples GPIO levels without stealing PIO pins (`gpio_get` only — `IsAppleConnected()` is *not* called from the poll because it `gpio_init`s PHI0). Release compiles the hooks to no-ops.
+
+**What we didn’t do:** Did not re-enable `MF_BUS_DIAG` / `pico2_diag` (rolled back in §1dc). Did not add a separate UF2; a Debug image is the vehicle.
+
+**Takeaway:** `cyc=0` with `phi0=TGL` means the GAL is not selecting the Pico (A4–A15 / GP20), not the chips already swapped. `cmd10>0` with the Apple still saying not found means the return data path.
+
+**References:** `pico/hwdiag.c`, `docs/Debug-mode.md` §3, `firmware/megaflash.s`, `gal/megaflash_gal16.pld`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

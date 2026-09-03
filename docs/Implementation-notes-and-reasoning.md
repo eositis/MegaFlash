@@ -2911,6 +2911,31 @@ Both numbers fall out of one constant. This is the strongest correlation obtaine
 
 The `data_oow = 4` observation is weak evidence for (B), since under (A) it must be exactly zero. Under (B) there is a further consequence worth noting: once the host's `Sn_RX_RD` exceeds `0x6FFF`, our `rd & 0x0FFF` aliases it back to the *start* of the ring, which would wreck the RSR/occupancy math and manufacture exactly the "impossible header" conditions that §1cj/§1cq were built to paper over. That would make this one root cause behind a whole family of symptoms.
 
+### RESULT: REFUTED. The 4 KiB geometry was already correct
+
+The `-DU2_RX_SOCK0_8K=1` image was **dramatically worse**, not better: *"connections fail to setup or get reset by peer. web page download might start, but does not complete. request sends, but does not hear response. many attempts, but only once got a partial contiki page load. did not even get to wget."*
+
+That is the **(A)** outcome, and it is decisive in both directions:
+
+- Under **(B)** — ip65 relying on the chip's `0x8000` auto-wrap and treating socket 0 as an 8 KiB ring — forcing 8 KiB would have made both sides *agree* and the corruption would have disappeared. It did the opposite. **(B) is dead.**
+- Under **(A)** — ip65 splitting its reads at the socket boundary it derived from the `RMSR` it wrote — forcing the producer to 8 KiB introduces a brand-new disagreement: our producer walks `0x6000`–`0x7FFF` while ip65 wraps every 4 KiB, and `rd & 0x1FFF` vs the host's 4 KiB pointers wrecks the RSR math. Total breakage, exactly as observed. **(A) confirmed: ip65 manages the socket-boundary wrap itself, and our 4 KiB producer geometry agrees with it.**
+
+**H3 is dead. Do not re-enable this; the code has been removed** (the option was a footgun that produces a badly broken card). The baseline `optionB/megaflash-optionB-pico2w.uf2` is unaffected — the knob defaulted to 0.
+
+### What the failed experiment nevertheless taught us
+
+Two things worth more than the hypothesis that died:
+
+1. **The *character* of the symptom is now diagnostic.** A real, persistent geometry mismatch looks like the 8 KiB build: sessions that will not establish, resets by peer, nothing completing. The actual bug looks nothing like that — the session is healthy, the download progresses, TCP retransmits, and **one frame in every few is rejected for a bad checksum**. That is a **byte-level, one-off defect**, not a structural pointer disagreement. Any future hypothesis must predict *isolated single-frame damage on an otherwise healthy stream*.
+2. **The 4 KiB periodicity may still be real, with a different mechanism.** Under (A), the socket-boundary split is the one moment ip65 re-points the address register *mid-frame* (writes to `$C0C5`/`$C0C6` between DATA reads). That happens exactly once per 4 KiB — the same period — so the frequency match may be pointing at the **re-point sequence** rather than at the ring layout. Note `busloop.c` already refreshes the prefetch (`registers.r[7] = U2_PeekDataPort()`) after *every* U2 access including address writes, so simple prefetch staleness is already handled; this is a lead, not a conclusion.
+
+### Superseded: the test that was built
+
+Unify the two boundaries by giving socket 0 the entire 8 KiB RX region (`-DU2_RX_SOCK0_8K=1`) so the producer wrap and the auto-increment wrap are the same boundary. **Built, tested, refuted, removed** — see the RESULT above. Retained here only as the record of the dead end.
+
+<details>
+<summary>Original rationale (kept for the record)</summary>
+
 ### Decisive test: unify the two boundaries
 
 Rather than add more logging, make the disagreement impossible by construction — give socket 0 the entire 8 KiB RX region so the producer wrap (`0x8000`→`0x6000`) and the auto-increment wrap (`0x8000`→`0x6000`) are the *same boundary*. Gated by `-DU2_RX_SOCK0_8K=1`; RMSR readback stays honest, only internal geometry changes. MACRAW uses socket 0 only, so nothing else is affected.
@@ -2918,7 +2943,61 @@ Rather than add more logging, make the disagreement impossible by construction �
 - **Checksum errors vanish** ⇒ (B) confirmed; then decide the fidelity-correct fix.
 - **Checksum errors persist** ⇒ (A); H3 is dead and geometry is exonerated.
 
-**References:** `pico/uthernet2.c` (`u2_apply_socket_sizes`, `u2_push_rx_macraw`, `auto_increment`, `read_value`, `u2_rx_used_bytes`), `pico/w5100_regs.h` (`W5100_RX_BASE`, `W5100_MEM_SIZE`, `W5100_RMSR`); §1cf, §1cj, §1cq, §1cx, §1db, §1df.
+</details>
+
+**References:** `pico/uthernet2.c` (`u2_apply_socket_sizes`, `u2_push_rx_macraw`, `auto_increment`, `read_value`, `u2_rx_used_bytes`), `pico/w5100_regs.h` (`W5100_RX_BASE`, `W5100_MEM_SIZE`, `W5100_RMSR`); §1cf, §1cj, §1cq, §1cx, §1db, §1df, §1dh.
+
+---
+
+## 1dh. Stop guessing: audit what we served against what the host says it consumed (2026-09-03)
+
+§1dg burned a flash cycle on a hypothesis about ip65's behaviour that could have been *measured* instead. The remaining live hypothesis, **H1 (dropped bus cycle)**, is stated in the code itself:
+
+```142:148:pico/busloop.c
+      /* Nothing else may run here. The a2bus SM serves the next $C0C7 read straight from
+       * rxf_putget ~90 ns after nDEVSEL falls, so any work on this path can make the 6502 latch
+       * the previous byte (or overflow the 4-deep listener FIFO, which drops the cycle so
+       * u2_data_address never advances). Either duplicates a byte and shifts the rest of the
+       * frame — the every-3rd/6th-packet checksum failures of §1cx. */
+```
+
+A dropped cycle duplicates one byte and shifts the remainder of the frame — **isolated single-frame damage on an otherwise healthy stream**, which is exactly the symptom character §1dg established. So H1 is the hypothesis that fits.
+
+### The measurement is free, because the host already tells us the answer
+
+The host declares how many bytes it believes it consumed: it advances `Sn_RX_RD` by exactly that count before issuing `RECV`. And `read_value()` observes every genuine `$C0C7` DATA read. If the 4-deep `a2buslistener` FIFO discards a cycle, we never see that read and `u2_data_address` never advances — so:
+
+> **observed in-window DATA reads < host's `Sn_RX_RD` advance, and the deficit is precisely the number of lost bus cycles.**
+
+No inference, no correlation, no log archaeology. `-DU2_RX_AUDIT=1` prints every 10 s:
+
+```
+[u2audit] frames=N ok=N SHORT=N over=N skip=N lost=N last=D def1=N def2=N def3=N def4=N def5+=N
+```
+
+| field | meaning |
+|---|---|
+| `ok` | reads observed == `Sn_RX_RD` advance — clean delivery |
+| **`SHORT`** | `0 < observed < advance` ⇒ **dropped cycles; H1 proven** |
+| `over` | observed > advance — host re-read bytes / stale address |
+| `skip` | `observed == 0 < advance` — driver discarded a frame unread (**legitimate**, and separated out precisely so it can't be miscounted as a drop) |
+| `lost` | total byte deficit across all `SHORT` frames |
+| `def1..def5+` | histogram of per-frame deficit; a FIFO drop should sit at **`def1`** |
+
+**Predicted if H1 is true:** `SHORT` climbs at roughly the rate of the corrupt packets — one per 3–6 frames — with the deficit concentrated in `def1`, and `lost ≈ SHORT`.
+**If `SHORT` stays 0** while wget still reports bad checksums, then every byte was *counted* correctly and the corruption is in the byte *values* — the fault moves to the PIO/prefetch delivery path (the 6502 latching a stale `rxf_putget` byte), and H1 dies too.
+
+### Implementation notes
+
+- The tally is one range check plus one increment, inlined into `read_value()` (already `__time_critical_func`, so RAM-resident). Deliberately **plain `static inline`, not `U2_BUS_RAM`** — pinning it separately would force a `noinline` call onto the ~90 ns hot path, which is the very thing under investigation.
+- The comparison runs in the `RECV` handler, *before* the `sn_rx_rd` shadow is republished, because at that instant `sn_rx_rd` still holds the previous committed RD.
+- The prefetch path (`U2_PeekDataPort` → `read_value_at`) bypasses the counter, so speculative peeks are never counted as host reads.
+- **Release build on purpose.** The Debug monitor's blocking UART perturbs the exact bus timing being measured (§1cz/§1de), so the audit is gated on `U2_RX_AUDIT` rather than `NDEBUG` and its 10 s print sits outside the `#ifndef NDEBUG` block in `U2_Net_ServicePoll`.
+- Release disables UART stdio and a connected USB console gates the bus loop off entirely (§1da), so USB cannot be the sink. `U2_Init` re-runs `stdio_uart_init()` when `U2_RX_AUDIT` is set — kept in `uthernet2.c` so `main.c` needs no change. **Capture on UART at 115200; leave USB unplugged.**
+
+**Image:** `optionB/megaflash-optionB-RXAUDIT-pico2w.uf2` (Release, pico2_w).
+
+**References:** `pico/uthernet2.c` (`u2_audit_note_read`, `read_value`, `write_socket_register` RECV case, `U2_RxAuditReport`, `U2_Init`), `pico/uthernet2.h`, `pico/uthernet2_net.cpp` (`U2_Net_ServicePoll`), `pico/CMakeLists.txt` (`U2_RX_AUDIT`), `pico/busloop.c`; §1cx, §1da, §1db, §1de, §1dg.
 
 ---
 

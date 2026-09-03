@@ -43,6 +43,16 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
 /** Byte the W5100 would return on the next read of the DATA port ($C0C7) at current ptr/MR (no increment). */
 uint8_t U2_PeekDataPort(void);
 
+#if U2_RX_AUDIT
+/**
+ * §1dh RX delivery audit. Print the running comparison between the bytes the host committed
+ * (Sn_RX_RD advance at each RECV) and the $C0C7 DATA reads we actually served. A non-zero
+ * SHORT count proves the a2buslistener FIFO is discarding bus cycles (H1); lost gives the byte
+ * total and the def* histogram how many cycles went missing per frame. Core 0 only.
+ */
+void U2_RxAuditReport(void);
+#endif
+
 /** Copy SHAR (0x0009–0x000E) from `mac` — used so ip65 DHCP/MACRAW uses the same SA as CYW43 STA. */
 void U2_SetStationMacFromBytes(const uint8_t mac[6]);
 

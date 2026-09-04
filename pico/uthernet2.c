@@ -193,6 +193,27 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
   return (uint16_t)d;
 }
 
+#if U2_RX_AUDIT
+/* #region agent log
+ * H7 vs H9, measured with one comparison each on paths that already compare the address.
+ *
+ * u2_aud_ring_end is socket 0's first address past the ring (receive_base + receive_size), cached
+ * so auto_increment costs a single compare against a global rather than a struct walk.
+ *
+ * hit_end : auto_increment carried the address off the end of the ring. If this tracks the number
+ *           of wrapping frames, the host really does read past the end (H7).
+ * repoint : the host wrote an address register while the address was already past the ring end,
+ *           i.e. it noticed and re-pointed. Counted in the *write* path, off the read hot path.
+ *
+ * The distinction decides the fix. hit_end>0 with repoint==0 means the host consumed 2 foreign
+ * bytes and the ring must wrap at the socket boundary. hit_end>0 *with* repoint>0 means the host
+ * re-pointed and discarded them, so the 2-byte deficit is benign and the checksum fault is
+ * elsewhere (H9) — in which case wrapping would duplicate 2 bytes and make things worse. */
+static uint16_t u2_aud_ring_end;
+volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
+/* #endregion */
+#endif
+
 static inline uint16_t u2_size_from_rmsr_field(uint8_t field) {
   return (uint16_t)(1u << (10 + (field & 3u))); /* 1K,2K,4K,8K */
 }
@@ -230,6 +251,13 @@ static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
     base = (uint16_t)(base + assigned);
     val >>= 2;
   }
+#if U2_RX_AUDIT
+  /* #region agent log — cache socket 0's ring end so auto_increment needs one compare, not a
+   * struct walk, on the ~90 ns read path. */
+  if (is_rx)
+    u2_aud_ring_end = (uint16_t)(u2_sockets[0].receive_base + u2_sockets[0].receive_size);
+  /* #endregion */
+#endif
 }
 
 static void u2_reset(void) {
@@ -392,6 +420,12 @@ static void U2_BUS_RAM(auto_increment)(void) {
     u2_data_address++;
     if (u2_data_address == W5100_RX_BASE || u2_data_address == W5100_MEM_SIZE)
       u2_data_address -= 0x2000;
+#if U2_RX_AUDIT
+    /* #region agent log — H7: did the address just walk off the end of socket 0's ring? */
+    else if (u2_data_address == u2_aud_ring_end)
+      g_u2_aud_hit_end++;
+    /* #endregion */
+#endif
   }
 }
 
@@ -424,15 +458,6 @@ static volatile uint32_t u2_audit_evt_w, u2_audit_evt_r;
 volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_gap_20ms,
                   g_u2_core0_gap_100ms, g_u2_core0_polls;
 
-/* H7: the 2 bytes the audit found missing at every wrap. If the host's DATA reads run off the end
- * of socket 0's ring, they land in 0x7000+ (socket 1's region, never written by the producer) and
- * the frame is delivered with 2 foreign bytes in it. Record the actual addresses so the claim is
- * localized rather than inferred. */
-volatile uint32_t g_u2_oow_reads;
-#define U2_OOW_MAX 16u
-static uint16_t u2_oow_addr[U2_OOW_MAX];
-static volatile uint32_t u2_oow_w, u2_oow_r;
-
 /* H8 control: how many frames crossed the ring end in total, matched or not. If every wrapping
  * frame is short, the fault is structural; if only some are, it is a race. */
 volatile uint32_t g_u2_audit_wrap_total;
@@ -441,23 +466,16 @@ volatile uint32_t g_u2_audit_wrap_total;
  * (U2_PeekDataPort -> read_value_at) deliberately bypasses this, so peeks are never counted.
  * Plain `static inline` (no U2_BUS_RAM): it inlines into read_value, which is already
  * RAM-resident, so pinning it separately would only force a noinline call on the hot path. */
+/* §1di: reverted to exactly this form after the added out-of-window branch broke ip65 detection
+ * ("device not found" — the failure mode busloop.c documents for extra work on this path). The
+ * budget before the a2bus SM latches the next byte is ~90 ns, i.e. roughly a dozen cycles, so
+ * this is all the hot path can afford. Address evidence is gathered in auto_increment and the
+ * address-register write path instead, both of which already compare the address. */
 static inline void u2_audit_note_read(uint16_t addr) {
   const u2_socket_t *s = &u2_sockets[0];
   uint16_t sz = s->receive_size;
-  if (!sz)
-    return;
-  if ((uint16_t)(addr - s->receive_base) < sz) {
+  if (sz && (uint16_t)(addr - s->receive_base) < sz)
     u2_audit_reads++;
-  } else if (addr >= W5100_RX_BASE) {
-    /* H7: a DATA read inside the RX memory region but outside socket 0's ring — i.e. past the
-     * ring end, where the producer never writes. Capture the address itself. */
-    g_u2_oow_reads++;
-    uint32_t w = u2_oow_w;
-    if (w - u2_oow_r < U2_OOW_MAX) {
-      u2_oow_addr[w % U2_OOW_MAX] = addr;
-      __atomic_store_n(&u2_oow_w, w + 1u, __ATOMIC_RELEASE);
-    }
-  }
 }
 #endif
 
@@ -1074,26 +1092,13 @@ void U2_RxAuditReport(void) {
                              g_u2_audit_deficit[0]),
              (unsigned)u2_sockets[0].receive_base, (unsigned)u2_sockets[0].receive_size);
 
-  /* H7/H8: the addresses the host actually read past the ring end, plus the wrapping-frame
-   * total so short/wrap_total shows whether the fault is structural or a race. */
-  {
-    uint32_t r = u2_oow_r;
-    uint32_t w = __atomic_load_n(&u2_oow_w, __ATOMIC_ACQUIRE);
-    if (w - r > 8u)
-      w = r + 8u;
-    U2_DBG_LOG("H7", "uthernet2.c:read_value", "reads past ring end",
-               "\"oow_reads\":%lu,\"wrap_total\":%lu,\"short\":%lu,\"captured\":%lu",
-               (unsigned long)g_u2_oow_reads, (unsigned long)g_u2_audit_wrap_total,
-               (unsigned long)g_u2_audit_short, (unsigned long)(w - r));
-    while (r != w) {
-      U2_DBG_LOG("H7", "uthernet2.c:read_value", "oow addr",
-                 "\"addr\":%u,\"addr_hex\":\"0x%04X\",\"rx_end\":%u",
-                 (unsigned)u2_oow_addr[r % U2_OOW_MAX], (unsigned)u2_oow_addr[r % U2_OOW_MAX],
-                 (unsigned)(u2_sockets[0].receive_base + u2_sockets[0].receive_size));
-      r++;
-    }
-    u2_oow_r = r;
-  }
+  /* H7 vs H9: did the address walk off the ring end, and did the host notice and re-point?
+   * wrap_total is the control — short/wrap_total shows whether the fault is structural. */
+  U2_DBG_LOG("H7", "uthernet2.c:auto_increment", "ring-end crossings",
+             "\"hit_end\":%lu,\"repoint\":%lu,\"wrap_total\":%lu,\"short\":%lu,\"ring_end\":%u",
+             (unsigned long)g_u2_aud_hit_end, (unsigned long)g_u2_aud_repoint,
+             (unsigned long)g_u2_audit_wrap_total, (unsigned long)g_u2_audit_short,
+             (unsigned)u2_aud_ring_end);
 
   /* H4: is core 0 being starved (blocking UART writes) long enough to stall Contiki? */
   U2_DBG_LOG("H4", "uthernet2.c:U2_RxAuditReport", "core0 service gaps",
@@ -1204,6 +1209,14 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
       }
       break;
     case U2_C0X_ADDRESS_HIGH:
+#if U2_RX_AUDIT
+      /* #region agent log — H7/H9: re-pointing while already past the ring end means the host
+       * noticed and will discard whatever it read there. Write path, so off the read hot path. */
+      if (u2_aud_ring_end && u2_data_address >= u2_aud_ring_end &&
+          u2_data_address < (uint16_t)(u2_aud_ring_end + 0x1000u))
+        g_u2_aud_repoint++;
+      /* #endregion */
+#endif
       u2_data_address = (uint16_t)((data << 8) | (u2_data_address & 0x00FF));
       break;
     case U2_C0X_ADDRESS_LOW:

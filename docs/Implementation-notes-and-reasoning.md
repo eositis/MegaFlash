@@ -3088,6 +3088,65 @@ wget's bulk stream absorbs it — matching the operator's report that wget is fi
 
 ---
 
+## 1dj. The instrumentation itself broke detection; hot-path budget is ~3 instructions (2026-09-03)
+
+**Symptom:** after the §1di follow-up image, *"uthernet ii network device is not found any more."*
+
+**Cause:** self-inflicted, and exactly the failure mode `busloop.c` already warns about — *"can
+corrupt $C0C4–$C0C7 read data and break ip65 W5100 RTR probe → 'Device not found'"*. The §1di
+capture added an out-of-window branch plus a ring write with an atomic store to
+`u2_audit_note_read`, which is inlined into `read_value` on **every** `$C0C7` DATA read. That read
+must complete inside the ~90 ns before the a2bus SM latches the next byte — roughly a dozen cycles
+at 150 MHz.
+
+Measured on the ELF, `read_value` instruction counts:
+
+| build | insns | delta vs baseline |
+|---|---|---|
+| `U2_RX_AUDIT=0` (shipping baseline) | 9 | — |
+| §1di capture build (**broke detection**) | 28 | **+19** |
+| §1dj rework (this one) | 12 | **+3** |
+
+The audit that produced the good §1di data was the `sz && (addr - base) < sz` one-liner; the extra
+branch roughly tripled the function. **Working rule for this path: instrumentation must stay within
+a few instructions of baseline, and anything with a store, an atomic, or a second branch belongs
+somewhere else.**
+
+### H8 (accounting artifact) — REJECTED without new instrumentation
+
+Re-reading the §1di data settles it: `over = 0` across 201 frames. If the 2 reads had merely been
+attributed to a neighbouring RECV interval, that neighbour would have shown `seen == advance + 2`,
+i.e. an `over` of exactly 2. Not one frame did. So the 2 reads are **not counted anywhere**, which
+means they genuinely landed outside socket 0's ring window. H8 is dead; the loss is real.
+
+### The remaining fork, and why it decides the fix
+
+- **H7** — the host reads 2 bytes past the ring end and *consumes* them. Those come from `0x7000+`,
+  which the producer never writes, so 2 foreign bytes land mid-frame → bad checksum. Fix: wrap the
+  address at the socket ring boundary.
+- **H9** — the host reads 2 bytes past the end, *notices, re-points, and discards them*. Then the
+  2-byte deficit is **benign bookkeeping** and the checksum fault is something else entirely. In
+  this case wrapping would make the host read the same 2 bytes twice and **duplicate** them —
+  strictly worse.
+
+These are indistinguishable from the §1di data, which is why no fix has landed. Two counters, each
+one comparison, on paths that already compare the address:
+
+- `hit_end` in `auto_increment` (which already compares against `0x6000`/`0x8000`): the address
+  carried off the ring end. Compared against a cached `u2_aud_ring_end` global to avoid a struct
+  walk on the hot path.
+- `repoint` in the `ADDRESS_HIGH` **write** handler — off the read-critical path entirely: the host
+  wrote an address register while already past the ring end.
+
+`hit_end ≈ wrap_total` with `repoint == 0` ⇒ **H7**, and the one-line boundary wrap is correct.
+`hit_end > 0` with `repoint ≈ hit_end` ⇒ **H9**, the deficit is a red herring, and the checksum hunt
+moves to the byte-value/delivery path with the wrap left alone.
+
+**References:** `pico/uthernet2.c` (`u2_audit_note_read`, `auto_increment`, `u2_apply_socket_sizes`,
+`U2_HandleBusAccess` address-write path), `pico/busloop.c` (the ~90 ns warning); §1cx, §1di.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

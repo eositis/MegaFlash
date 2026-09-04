@@ -680,6 +680,29 @@ static void u2_socket_discard_rx(int socket_i) {
   __atomic_store_n(&s->sn_rx_rd, physical_rd, __ATOMIC_RELEASE); /* keep core-0 shadow coherent (§1cf) */
 }
 
+/* Compile-time escape hatch for the §1dp wrap-compatibility layout below. Set to 0 to store
+ * records strictly the way a real W5100 would, which is correct against the datasheet but leaves
+ * ip65/Contiki corrupting one frame per RX ring wrap. */
+#ifndef U2_MACRAW_WRAP_COMPAT
+#define U2_MACRAW_WRAP_COMPAT 1
+#endif
+
+/* True when the 2 bytes immediately past socket i's RX ring belong to nobody: inside the RX block
+ * and outside every other socket's ring. The §1dp layout parks 2 record bytes there, so it must
+ * not run when another socket could read them back as its own buffer. */
+static int u2_rx_spill_is_free(int i) {
+  const uint16_t end = (uint16_t)(u2_sockets[i].receive_base + u2_sockets[i].receive_size);
+  if ((uint32_t)end + 1u >= (uint32_t)W5100_MEM_SIZE)
+    return 0;
+  for (int j = 0; j < W5100_NUM_SOCKETS; j++) {
+    if (j == i || u2_sockets[j].receive_size == 0)
+      continue;
+    if ((uint16_t)(end - u2_sockets[j].receive_base) < u2_sockets[j].receive_size)
+      return 0;
+  }
+  return 1;
+}
+
 /* Push MACRAW frame: 2-byte length (big-endian) then frame data. */
 static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS || !data) return;
@@ -733,13 +756,49 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   /* W5100 MACRAW RX length field is reported as frame_len + 2 in many drivers,
    * which then subtract 2 before reading frame bytes. */
   uint16_t wire_len = (uint16_t)(len + 2u);
-  u2_memory[base + (wr & mask)] = (uint8_t)(wire_len >> 8);
-  wr++;
-  u2_memory[base + (wr & mask)] = (uint8_t)wire_len;
-  wr++;
-  for (uint16_t k = 0; k < len; k++) {
-    u2_memory[base + (wr & mask)] = data[k];
+
+  /* §1dp: place the record so the ip65/Contiki read pattern lands correctly across the ring end.
+   *
+   * That driver asks w5100_data_request() how much it may read before re-pointing and gets
+   * MIN(Sn_RX_RSR, addr_limit - addr) = `first`. It then reads the 2-byte MACRAW header *plus*
+   * `first` more, i.e. first+2 bytes from a window only `first` wide, so it runs 2 bytes past the
+   * socket boundary; and it re-points to ring offset 0, a target computed from `first` rather than
+   * from the first+2 bytes it actually consumed. Measured identically on four wraps
+   * (burst = 2 + first, exact). Both halves are the driver's, not ours: our Sn_RX_RD, Sn_RX_RSR,
+   * MACRAW header, producer wrap and auto-increment all match the datasheet and the independent
+   * a2fpga core (§1dp), and no auto-increment behaviour can repair a displaced re-point target.
+   *
+   * So lay the two bytes it over-reads where it will actually look for them — just past the ring —
+   * and start the remainder at offset 0 with the byte it expects there. Sn_RX_WR still advances by
+   * the full record, so Sn_RX_RSR/Sn_RX_RD arithmetic is untouched and the next record still
+   * begins at (off + total) & mask, exactly where the host's own Sn_RX_RD lands; the 2 ring bytes
+   * between the tail and that point are simply skipped and never read.
+   *
+   * A *correct* driver would be broken by this, so it is confined to the case where nothing else
+   * can observe the two bytes past the ring. */
+  const uint16_t off0 = (uint16_t)(wr & mask);
+  const uint16_t first = (uint16_t)(size - off0);
+  const int shim = U2_MACRAW_WRAP_COMPAT && total > first && u2_rx_spill_is_free(socket_i);
+  if (shim) {
+    /* Contiguous run of first+2 bytes from off0, spilling 2 bytes past the ring end. */
+    uint8_t *p = &u2_memory[base + off0];
+    p[0] = (uint8_t)(wire_len >> 8);
+    p[1] = (uint8_t)wire_len;
+    for (uint16_t k = 0; k + 2u < (uint16_t)(first + 2u); k++)
+      p[k + 2u] = data[k];
+    /* Remainder from ring offset 0, starting at the byte the driver expects to find there. */
+    for (uint16_t k = first; k < len; k++)
+      u2_memory[base + (uint16_t)(k - first)] = data[k];
+    wr = (uint16_t)(wr + total);
+  } else {
+    u2_memory[base + (wr & mask)] = (uint8_t)(wire_len >> 8);
     wr++;
+    u2_memory[base + (wr & mask)] = (uint8_t)wire_len;
+    wr++;
+    for (uint16_t k = 0; k < len; k++) {
+      u2_memory[base + (wr & mask)] = data[k];
+      wr++;
+    }
   }
   u2_rx_wr_store(s, wr);
 #if UTHERNET2_DEBUG

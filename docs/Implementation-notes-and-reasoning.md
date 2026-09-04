@@ -3591,6 +3591,60 @@ reason. The displacement lives in the re-point target, which we do not control.
 
 ---
 
+## 1dq. FIX: lay wrapping MACRAW records where the driver actually reads them (2026-09-03)
+
+Applying option 2 from §1dp. The corruption is the driver's, but no auto-increment behaviour can
+repair it, so the only lever we hold is *where the producer puts the bytes*.
+
+### What the driver does, and what we now write
+
+On a straddling record the driver reads `first + 2` bytes contiguously from `off0` (running 2 past
+the ring end), then re-points to ring offset 0 and reads the rest. So:
+
+| record bytes | old (W5100-exact) location | new location |
+|---|---|---|
+| `[0 .. first-1]` | `base+off0 .. base+size-1` | unchanged |
+| `[first], [first+1]` | ring offsets 0, 1 | **`base+size`, `base+size+1`** (just past the ring) |
+| `[first+2 ..]` | ring offsets 2, 3, … | **ring offsets 0, 1, …** |
+
+Both of the driver's reads then land on the right bytes.
+
+`Sn_RX_WR` still advances by the full record, so `Sn_RX_RSR` / `Sn_RX_RD` arithmetic is completely
+untouched and the next record still begins at `(off0 + total) & mask` — for the captured wrap that
+is offset 20, exactly where the host's own `Sn_RX_RD` pointed (`rd=4116, rd_off=20`). The 2 ring
+bytes between the tail and that point are skipped and never read.
+
+### Verified against the measured read pattern
+
+Simulating the producer layout against the exact four-times-measured driver pattern over 4000
+random `(off0, length)` pairs:
+
+```
+shim=False   corrupt 778/4000   (19.5 %)
+shim=True    corrupt   0/4000
+```
+
+19.5 % is the predicted wrap rate for these frame sizes and matches the reported "every 3rd, or
+6th packet". The fix takes it to zero in simulation.
+
+### Guard
+
+This deliberately diverges from the W5100 and **would corrupt a correct driver**, so it is confined
+to the case where nothing else can observe the 2 bytes past the ring: `u2_rx_spill_is_free()`
+requires them to be inside the RX block and outside every other socket's ring. With socket 0 the
+only MACRAW socket that always holds; if another socket is opened over that region the code falls
+back to the exact W5100 layout automatically. `U2_MACRAW_WRAP_COMPAT=0` disables it outright.
+
+Producer path only — no bus-path cost, and `read_value` is untouched.
+
+**Instrumentation is deliberately left in place** so the next capture can be compared against
+§1dk–§1dp: `short` and `def2` should now stay at 0 while `wrap_total` keeps climbing.
+
+**References:** `pico/uthernet2.c` (`u2_push_rx_macraw`, `u2_rx_spill_is_free`,
+`U2_MACRAW_WRAP_COMPAT`); §1dp.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

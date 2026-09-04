@@ -4,6 +4,26 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-09-04
+
+- **Operator confirmed fixed:** first-connect and checksum errors both resolved (further soak testing planned). Commit fix state; Release bump next.
+
+- **§1dz — PSM + 60 B pad did not get a SYN-ACK.** Five 1026 SYNs `len=60` `da=2cbbf0`, **zero** `dir=in`/`rx` TCP. Removed PM2-off. Kept TX pad. Incremental NAT 1026→41226 (RFC 1624) to re-test the 1026 black hole without the old full-checksum rewrite. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1dy — port NAT REJECTED.** Capture: 50178 SYNs (NAT of 1026) still get no SYN-ACK; 1027/1028 handshake in 26 ms. Removed `u2_pnat_*`. MACRAW now turns off CYW43 PM2 and pads TX to 60 B (W5100-like). Wrap shim did fire (`shim:1`). Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1dx — checksums persisted because the wrap shim never fired.** RMSR `0x06` assigns sock1 2 KiB at `0x7000`, so `u2_rx_spill_is_free()` always returned 0. Now skip CLOSED neighbours. FIRSTCONN UART `wrap` lines: expect `shim:1` on each ring wrap; wget checksums should drop. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1dw — ISS rewrite REJECTED.** 1026 SYN `seq=48346951` still **zero SYN-ACK**. 1027/1028 are Contiki (retry always works); **wget never connects** — the later 1026 SYN burst is wget, same black hole. Operator correction: do not call 1028 wget. Removed ISS shim; map host 1026 → wire 50178. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1dv — first-connect 4-tuple confirmed.** Contiki `192.168.0.213:1026 → :80` SYN seq=0 ×3, **zero SYN-ACK**; retry `:1027` seq=12 SYN-ACK in 27 ms then HTTP. wget `:1030` seq=44 connects in 25 ms then Apple RST after payload. Single IP `.213` (not dual-IP). Shim: rewrite ISS 0 on the wire, translate ACKs (`u2_iss_tx`/`u2_iss_rx`). Keep `tcp4` logs. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1du — W5100 OPEN/SEND is the wrong layer for first-connect.** Dump 3: app OPEN at 38134, ARP+DNS succeed, first TCP SYN at 49675, SYN-ACK only at 69781 to **dport 1027**, then HTTP GET. Every SEND enqueued and hit `linkoutput`. wget was invisible because dump 3 set `u2_fc_done`. Matches §1cs (1026 unanswered, 1027 works) on a STA MAC that still has two IPv4 addresses. Pivoted instrumentation to one TCP 4-tuple line at the radio (`u2_fc_tcp`); no more timed dumps. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1dt — first-connection trace was looking at the retry because it only armed on a successful MACRAW `TXQ`.** Second capture: OPEN at t=43012, 24 RECVs draining ambient frames, first TXQ at 65944 (ARP then DNS then SYN to :80 with 2.3/4.9 s retransmits). Operator reports that is the *retry*; wget produced no UART at all. Cause: `u2_fc_arm()` ran only after `U2_Net_SendMacraw` accepted a frame, so a failed first attempt that never SENDs never dumps; wget that never SENDs is invisible. Re-armed on OPEN/SENDCR, log TXSKIP (empty TX window / wrong Sn_SR / oversize), circular 96-event ring, `armed` line from core 0 within a poll of OPEN, dumps at 8/20/40 s without stopping until the last. RXOK filtered to ARP/TCP/DNS only so a SYN-ACK or RST is visible. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+---
+
 ## 2026-09-01
 
 - **Board bring-up `[hwdiag]` (planned):** Reverted the unplanned first cut, then added Debug-only 1 Hz `[hwdiag]` (PHI0, nDEVSEL, captured `$C0Cx` cycles, `$C0C3`/`CMD_GETDEVINFO`) plus ACT LED blink. Release hooks are no-ops; `MF_BUS_DIAG` not revived. `pico/hwdiag.c`, `docs/Debug-mode.md` §3, implementation notes §25.

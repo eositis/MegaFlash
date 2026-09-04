@@ -68,6 +68,8 @@ void U2_RxAuditReport(void);
 void u2_fc_note(uint8_t code, uint32_t a, uint32_t b);
 void u2_fc_arm(void);
 void U2_FirstConnPoll(void);
+void u2_fc_tcp(const char *dir, const uint8_t *d, uint16_t len);
+uint32_t u2_fc_l4(const uint8_t *d, uint16_t len);
 uint32_t U2_NetDiagState(void);   /* CYW43/netif/hook/link readiness bits */
 uint32_t U2_NetDiagStaMac24(void);
 #endif

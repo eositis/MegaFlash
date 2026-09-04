@@ -212,19 +212,25 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
 static uint16_t u2_aud_ring_end;
 volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
 
-/* hit_end == repoint == wrap_total == short exactly, at every sample: on every wrapping frame the
- * address runs off the ring end, the host reads 2 bytes there, then re-points. Since total reads
- * (in-window + 2) == advance, the host read the right *count* of bytes but 2 of them came from
- * 0x7000+ where the producer never writes, and it re-pointed 2 bytes into the record's tail.
+/* §1dl. The re-point target came back as ring_base + 0 on 3 of 3 captures, which kills the
+ * one-line "wrap the address at the ring end" fix: the host would read the first 2 wrapped bytes
+ * at the boundary and then re-read them after re-pointing, duplicating 2 bytes instead of losing
+ * 2. Counters cannot separate the remaining candidates, so trace the pointer instead.
  *
- * One detail still decides whether wrapping the address at the ring boundary is a fix or a new
- * bug: the re-point TARGET. If the host re-points to ring_base+2 it has already accounted for the
- * 2 bytes it consumed, so wrapping hands it the correct bytes and the frame is whole. If it
- * re-points to ring_base+0, wrapping would make it read those 2 bytes twice and the frame stays
- * broken. Captured on the *write* path only — nothing added to the read hot path. */
-static uint8_t u2_aud_tgt_arm;
-volatile uint16_t g_u2_aud_tgt[4];
-volatile uint32_t g_u2_aud_tgt_n;
+ * Every address-register write is recorded as (address, total reads so far). The gap in the read
+ * count between consecutive entries is how many bytes the host pulled from that pointer position,
+ * so the pair reconstructs the exact access pattern with nothing added to the read hot path.
+ *
+ * The buffer overwrites freely until the address reaches the ring end, then records U2_TRC_TAIL
+ * more entries and freezes — so the dump straddles one real wrap with its lead-in intact, rather
+ * than showing the unrelated first 32 writes after boot. */
+#define U2_TRC_MAX 32u
+#define U2_TRC_TAIL 10u
+static volatile uint32_t u2_trc[U2_TRC_MAX];
+static volatile uint32_t u2_trc_w;      /* free-running write index; & (U2_TRC_MAX-1) to index */
+static volatile uint32_t u2_trc_freeze; /* 0 = running, else entries left before freezing */
+static volatile uint8_t u2_trc_done;
+static uint8_t u2_trc_dumped; /* core 0 only */
 /* #endregion */
 #endif
 
@@ -435,9 +441,13 @@ static void U2_BUS_RAM(auto_increment)(void) {
     if (u2_data_address == W5100_RX_BASE || u2_data_address == W5100_MEM_SIZE)
       u2_data_address -= 0x2000;
 #if U2_RX_AUDIT
-    /* #region agent log — H7: did the address just walk off the end of socket 0's ring? */
-    else if (u2_data_address == u2_aud_ring_end)
+    /* #region agent log — H7: did the address just walk off the end of socket 0's ring? Arms the
+     * pointer trace so the dump captures a real wrap rather than the first writes after boot. */
+    else if (u2_data_address == u2_aud_ring_end) {
       g_u2_aud_hit_end++;
+      if (!u2_trc_freeze && !u2_trc_done)
+        u2_trc_freeze = U2_TRC_TAIL;
+    }
     /* #endregion */
 #endif
   }
@@ -453,7 +463,11 @@ volatile uint32_t g_u2_audit_lost_bytes;  /* total deficit across all "short" fr
 volatile int32_t  g_u2_audit_last_delta;  /* observed - advance, most recent mismatch */
 volatile uint32_t g_u2_audit_deficit[9];  /* histogram of deficits 1..8, [0] = 9+ */
 volatile uint32_t g_u2_audit_wrapped;     /* mismatches whose consumed range crossed the ring end (H6) */
-static volatile uint32_t u2_audit_reads;  /* in-window DATA reads since last RECV */
+/* Core 1 exclusively: the bus path increments it, the RECV handler reads it, and the pointer
+ * trace snapshots it. Core 0 only ever sees it already packed into u2_trc, so it does not need
+ * to be volatile — and dropping volatile keeps the increment off the hot path's load/store
+ * round trip (§1dl). */
+static uint32_t u2_audit_reads;
 
 /* Per-mismatch detail. printf() must never run on the bus path, so core 1 only fills this ring
  * and core 0 drains it in U2_RxAuditReport (§1di). */
@@ -476,20 +490,18 @@ volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_gap_20ms
  * frame is short, the fault is structural; if only some are, it is a race. */
 volatile uint32_t g_u2_audit_wrap_total;
 
-/* Count only real host $C0C7 reads that land inside socket 0's RX ring. The prefetch path
- * (U2_PeekDataPort -> read_value_at) deliberately bypasses this, so peeks are never counted.
- * Plain `static inline` (no U2_BUS_RAM): it inlines into read_value, which is already
- * RAM-resident, so pinning it separately would only force a noinline call on the hot path. */
-/* §1di: reverted to exactly this form after the added out-of-window branch broke ip65 detection
- * ("device not found" — the failure mode busloop.c documents for extra work on this path). The
- * budget before the a2bus SM latches the next byte is ~90 ns, i.e. roughly a dozen cycles, so
- * this is all the hot path can afford. Address evidence is gathered in auto_increment and the
- * address-register write path instead, both of which already compare the address. */
+/* Count every real host $C0C7 read. The prefetch path (U2_PeekDataPort -> read_value_at)
+ * deliberately bypasses this, so peeks are never counted.
+ *
+ * §1dl: the window test that used to be here is GONE, and that is the point. Counting only reads
+ * inside socket 0's ring made reads *past* the ring end invisible — precisely the quantity under
+ * investigation — so a 2-byte deficit could not be told apart from 2 reads served from 0x7000.
+ * Counting unconditionally makes the total comparable against the Sn_RX_RD advance directly, and
+ * it is strictly *cheaper* than the windowed form (no struct load, no compare, no branch), so the
+ * ~90 ns hot path gets faster than the build that already detected correctly. */
 static inline void u2_audit_note_read(uint16_t addr) {
-  const u2_socket_t *s = &u2_sockets[0];
-  uint16_t sz = s->receive_size;
-  if (sz && (uint16_t)(addr - s->receive_base) < sz)
-    u2_audit_reads++;
+  (void)addr;
+  u2_audit_reads++;
 }
 #endif
 
@@ -1114,18 +1126,24 @@ void U2_RxAuditReport(void) {
              (unsigned long)g_u2_audit_wrap_total, (unsigned long)g_u2_audit_short,
              (unsigned)u2_aud_ring_end);
 
-  /* H9 decider: where the host re-points to after over-reading the ring end. base+2 means
-   * wrapping the address is the fix; base+0 means wrapping would duplicate 2 bytes. */
-  U2_DBG_LOG("H9", "uthernet2.c:U2_HandleBusAccess", "repoint targets",
-             "\"n\":%lu,\"base\":%u,\"t0\":%u,\"t1\":%u,\"t2\":%u,\"t3\":%u,"
-             "\"off0\":%d,\"off1\":%d,\"off2\":%d,\"off3\":%d",
-             (unsigned long)g_u2_aud_tgt_n, (unsigned)u2_sockets[0].receive_base,
-             (unsigned)g_u2_aud_tgt[0], (unsigned)g_u2_aud_tgt[1],
-             (unsigned)g_u2_aud_tgt[2], (unsigned)g_u2_aud_tgt[3],
-             (int)g_u2_aud_tgt[0] - (int)u2_sockets[0].receive_base,
-             (int)g_u2_aud_tgt[1] - (int)u2_sockets[0].receive_base,
-             (int)g_u2_aud_tgt[2] - (int)u2_sockets[0].receive_base,
-             (int)g_u2_aud_tgt[3] - (int)u2_sockets[0].receive_base);
+  /* §1dl pointer trace. Emitted once, only after it has frozen around a real ring-end crossing,
+   * as one entry per line so a long dump cannot stall core 0 in a single printf. Each entry is
+   * "off" = pointer as a ring offset (negative/large means outside socket 0's ring) and "reads" =
+   * cumulative host DATA reads at that instant; consecutive reads deltas give the burst length. */
+  if (u2_trc_done && !u2_trc_dumped) {
+    u2_trc_dumped = 1;
+    uint32_t total = u2_trc_w < U2_TRC_MAX ? u2_trc_w : U2_TRC_MAX;
+    uint32_t start = u2_trc_w - total;
+    uint16_t base = u2_sockets[0].receive_base;
+    for (uint32_t k = 0; k < total; k++) {
+      uint32_t e = u2_trc[(start + k) & (U2_TRC_MAX - 1u)];
+      uint16_t a = (uint16_t)(e & 0xFFFFu);
+      U2_DBG_LOG("H10", "uthernet2.c:U2_HandleBusAccess", "pointer trace",
+                 "\"i\":%lu,\"addr\":%u,\"off\":%d,\"reads\":%u,\"ring_end\":%u",
+                 (unsigned long)k, (unsigned)a, (int)a - (int)base,
+                 (unsigned)(e >> 16), (unsigned)u2_aud_ring_end);
+    }
+  }
 
   /* H4: is core 0 being starved (blocking UART writes) long enough to stall Contiki? */
   U2_DBG_LOG("H4", "uthernet2.c:U2_RxAuditReport", "core0 service gaps",
@@ -1240,10 +1258,8 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
       /* #region agent log — H7/H9: re-pointing while already past the ring end means the host
        * noticed and will discard whatever it read there. Write path, so off the read hot path. */
       if (u2_aud_ring_end && u2_data_address >= u2_aud_ring_end &&
-          u2_data_address < (uint16_t)(u2_aud_ring_end + 0x1000u)) {
+          u2_data_address < (uint16_t)(u2_aud_ring_end + 0x1000u))
         g_u2_aud_repoint++;
-        u2_aud_tgt_arm = 1; /* capture the target once the low byte lands */
-      }
       /* #endregion */
 #endif
       u2_data_address = (uint16_t)((data << 8) | (u2_data_address & 0x00FF));
@@ -1251,14 +1267,13 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
     case U2_C0X_ADDRESS_LOW:
       u2_data_address = (uint16_t)((data << 0) | (u2_data_address & 0xFF00));
 #if U2_RX_AUDIT
-      /* #region agent log — the completed re-point target (see note at u2_aud_tgt). */
-      if (u2_aud_tgt_arm) {
-        u2_aud_tgt_arm = 0;
-        uint32_t n = g_u2_aud_tgt_n;
-        if (n < 4u) {
-          g_u2_aud_tgt[n] = u2_data_address;
-          g_u2_aud_tgt_n = n + 1u;
-        }
+      /* #region agent log — pointer trace, see note at u2_trc. Write path only. */
+      if (!u2_trc_done) {
+        uint32_t w = u2_trc_w;
+        u2_trc[w & (U2_TRC_MAX - 1u)] = ((uint32_t)u2_audit_reads << 16) | u2_data_address;
+        u2_trc_w = w + 1u;
+        if (u2_trc_freeze && --u2_trc_freeze == 0u)
+          u2_trc_done = 1;
       }
       /* #endregion */
 #endif

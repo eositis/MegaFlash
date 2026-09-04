@@ -3214,6 +3214,77 @@ address-write path, `U2_RxAuditReport`); §1cx, §1dg, §1dh, §1di, §1dj.
 
 ---
 
+## 1dl. The re-point target kills the one-line fix; the read counter was blind to the reads in question (2026-09-03)
+
+Third capture (167 records, 205 RECVs). The §1dk decider returned the *unfavourable* answer, and
+re-reading the code with it invalidated part of §1dk's reasoning.
+
+### Measured
+
+`hit_end == repoint == wrap_total == short` reproduced exactly a third time (3/3/3/3, `def2=3`,
+`over=0`), so the structural finding is solid. The new probe:
+
+| re-point | target | ring base | offset |
+|---|---|---|---|
+| 1 | 24576 | 24576 | **0** |
+| 2 | 24576 | 24576 | **0** |
+| 3 | 24576 | 24576 | **0** |
+
+**3 of 3 at `ring_base + 0`.** Per §1dk's own criterion this is the branch where wrapping
+`auto_increment` at the ring boundary is *not* the fix: the host would take the first 2 wrapped
+bytes at the boundary and then re-read those same 2 bytes after re-pointing to base, duplicating 2
+bytes instead of losing 2. The frame stays corrupt, just differently. **Not applied.**
+
+### Why §1dk over-claimed, and the instrumentation defect behind it
+
+§1dk asserted the host reads 2 bytes at `0x7000`–`0x7001`. The evidence does not support that.
+`hit_end` fires inside `auto_increment`, which runs *after* a data-port access, so the address
+arriving at `0x7000` only proves the host read the last in-ring byte at `0x6FFF`. Whether it then
+read *at* `0x7000` or parked there and re-pointed is not distinguished.
+
+The reason it could not be distinguished is a flaw in the audit itself: `u2_audit_note_read()`
+counted only reads **inside** socket 0's ring. Reads past the ring end were silently uncounted, so
+"host read 2 fewer bytes" and "host read 2 bytes from outside the ring" produced *identical*
+counters. The audit was blind to precisely the quantity being measured.
+
+That also matters because a real W5100 would return socket 1's buffer contents at `0x7000` just as
+we do, so a driver that genuinely read there would be broken on real hardware too. The pressure is
+therefore on the "read 2 fewer" branch, and a fix built on §1dk's assumption would have been wrong.
+
+### Producer cleared
+
+Checked before adding instrumentation. `u2_push_rx()` and `u2_push_rx_macraw()` both address the
+ring as `u2_memory[base + (wr & mask)]` per byte, so the write side wraps correctly and cannot be
+placing the tail 2 bytes off. No change made.
+
+### Changes
+
+1. **`u2_audit_note_read()` now counts every host DATA read**, window test removed. The total is
+   directly comparable to the `Sn_RX_RD` advance, so reads past the ring end can no longer hide.
+   `u2_audit_reads` also lost `volatile` (core 1 exclusively; core 0 only sees it packed into the
+   trace). Net cost is 4 instructions — a literal load, load, add, store — comparable to the build
+   that detected correctly, and the windowed form it replaces was no cheaper.
+2. **Bounded pointer trace** replacing the answered re-point probe. Each address-register write
+   records `(address, cumulative reads)`; the delta in read count between consecutive entries is
+   how many bytes the host pulled from that pointer position, which reconstructs the access
+   pattern exactly. It overwrites freely until the address reaches the ring end, then takes 10 more
+   entries and freezes, so the 32-entry dump straddles one real wrap with its lead-in intact
+   instead of showing the first writes after boot. Write path only; core 0 emits it once, one entry
+   per line so a long dump cannot stall core 0 inside a single `printf`.
+
+### What the trace decides
+
+- Pointer parks at ring end with **no** intervening reads, then re-points to base — the host reads
+  the right bytes and the 2-byte gap is in the `Sn_RX_RD` advance, i.e. our RSR/RD accounting hands
+  it a length 2 larger than the record.
+- Pointer sits past ring end **with 2 reads charged to it** — the host really does read foreign
+  bytes, and the ring must wrap at the socket boundary despite the re-point target.
+
+**References:** `pico/uthernet2.c` (`u2_audit_note_read`, `auto_increment`, `U2_HandleBusAccess`
+address-write path, `u2_trc`, `U2_RxAuditReport`); §1dg, §1dh, §1di, §1dj, §1dk.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

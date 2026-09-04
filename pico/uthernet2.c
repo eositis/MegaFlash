@@ -216,8 +216,8 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
  *   H14  RXDIVERT with legacy=1      -> a native MegaFlash operation (NTP) owned STA ingress.
  *   H15  RXFULL                      -> the ring was unsized or full when the first reply landed.
  */
-#define U2_FC_MAX 64
-#define U2_FC_PER_CODE 8
+#define U2_FC_MAX 96
+#define U2_FC_PER_CODE 24
 typedef struct {
   uint32_t t_ms, a, b;
   uint8_t code;
@@ -231,6 +231,10 @@ void u2_fc_note(uint8_t code, uint32_t a, uint32_t b) {
   if (u2_fc_done)
     return;
   uint8_t c = (uint8_t)(code & 15u);
+  /* RXOK is the only high-rate event; ignore it until the host starts transmitting so ambient
+   * broadcast traffic cannot spend the ring before the exchange under investigation begins. */
+  if (c == 9u && !u2_fc_open_us)
+    return;
   /* Per-code budget: ambient broadcast traffic would otherwise fill the ring with RXOK and crowd
    * out the one MFDROP or TXFAIL that actually answers the question. */
   if (u2_fc_seen[c] >= U2_FC_PER_CODE)
@@ -249,6 +253,32 @@ void u2_fc_note(uint8_t code, uint32_t a, uint32_t b) {
 void u2_fc_arm(void) {
   if (!u2_fc_open_us)
     u2_fc_open_us = time_us_64();
+}
+
+/* Pack the layer-3/4 identity of a raw Ethernet frame so a SYN can be told from a SYN-ACK from a
+ * RST in the trace. First capture armed on OPEN and budgeted RXOK at 8, which ambient broadcast
+ * traffic exhausted ~2 s before the host's first transmit, leaving the inbound half of the actual
+ * exchange invisible. Ethertype alone was not enough anyway: the DNS query was answered (the SYN
+ * followed 139 ms later), so RX delivery works in general and the question is now specifically
+ * what came back for the SYN.
+ *   bits 31..24  IPv4 protocol (0 when not IPv4)
+ *   bits 23..16  TCP flags     (0 when not TCP)
+ *   bits 15..0   TCP/UDP destination port, else the ethertype */
+static uint32_t u2_fc_l4(const uint8_t *d, uint16_t len) {
+  if (len < 14)
+    return 0;
+  uint16_t et = (uint16_t)(((uint16_t)d[12] << 8) | d[13]);
+  if (et != 0x0800u || len < 34)
+    return et;
+  uint8_t ihl = (uint8_t)((d[14] & 0x0Fu) * 4u);
+  uint8_t proto = d[23];
+  uint32_t v = (uint32_t)proto << 24;
+  uint16_t l4 = (uint16_t)(14u + ihl);
+  if ((proto == 6u || proto == 17u) && len >= (uint16_t)(l4 + 4u))
+    v |= (uint32_t)(((uint16_t)d[l4 + 2] << 8) | d[l4 + 3]);
+  if (proto == 6u && len >= (uint16_t)(l4 + 14u))
+    v |= (uint32_t)d[l4 + 13] << 16; /* TCP flags: 0x02 SYN, 0x12 SYN-ACK, 0x04 RST */
+  return v;
 }
 /* #endregion */
 #endif
@@ -793,7 +823,7 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
     if (!is_broadcast && !is_ours) {
 #if U2_FIRSTCONN
       /* #region agent log — H11 smoking gun: what we dropped, and what SHAR was at the time. */
-      u2_fc_note(8, ((uint32_t)data[12] << 8) | data[13],
+      u2_fc_note(8, u2_fc_l4(data, len),
                  ((uint32_t)dm[3] << 16) | ((uint32_t)dm[4] << 8) | dm[5]);
       /* #endregion */
 #endif
@@ -811,7 +841,7 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
   }
 #if U2_FIRSTCONN
   /* #region agent log — H11/H12 control: frames that did pass the filter and reach the ring. */
-  u2_fc_note(9, len, (len >= 14) ? (((uint32_t)data[12] << 8) | data[13]) : 0u);
+  u2_fc_note(9, len, u2_fc_l4(data, len));
   /* #endregion */
 #endif
   uint16_t mask = size - 1;
@@ -968,7 +998,7 @@ static int send_data(int i) {
       if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0) {
 #if U2_FIRSTCONN
         /* #region agent log — H13: bus-side send refused (queue full / not MACRAW). */
-        u2_fc_note(4, (uint32_t)n, (n >= 14) ? (((uint32_t)buf[12] << 8) | buf[13]) : 0u);
+        u2_fc_note(4, (uint32_t)n, u2_fc_l4(buf, (uint16_t)n));
         /* #endregion */
 #endif
         return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
@@ -976,7 +1006,8 @@ static int send_data(int i) {
 #if U2_FIRSTCONN
       /* #region agent log — H13: accepted from the bus. A TXQ with no matching TXWIRE means the
        * host was told the frame went out when it never reached the wire. */
-      u2_fc_note(3, (uint32_t)n, (n >= 14) ? (((uint32_t)buf[12] << 8) | buf[13]) : 0u);
+      u2_fc_arm(); /* the window that matters starts when the host first talks, not at OPEN */
+      u2_fc_note(3, (uint32_t)n, u2_fc_l4(buf, (uint16_t)n));
       /* #endregion */
 #endif
       consumed = (uint16_t)data_len;
@@ -1035,7 +1066,6 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
 #if U2_FIRSTCONN
         /* #region agent log — H12: was the netif input hook actually installed, and was CYW43 up?
          * Also snapshots SHAR right after OPEN so a later SHARW proves ip65 overwrote it (H11). */
-        u2_fc_arm();
         u2_fc_note(1, U2_NetDiagState() | ((uint32_t)mr << 24),
                    ((uint32_t)u2_memory[W5100_SHAR0 + 3] << 16) |
                        ((uint32_t)u2_memory[W5100_SHAR0 + 4] << 8) | u2_memory[W5100_SHAR0 + 5]);
@@ -1105,6 +1135,17 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
       if (!u2_dbg_stall_dumped[i])
 #endif
       U2_MonSockSendRecv(i, 0);
+#if U2_FIRSTCONN
+      /* #region agent log — H17: does the host actually consume what we ring? Pairs each RECV
+       * with the committed Sn_RX_RD and the bytes still unread, so a reply that is ringed but
+       * never taken (RXOK with no following RECV) is distinguishable from one that never arrived
+       * (no RXOK at all). Command-write path, off the read hot path. */
+      u2_fc_note(12,
+                 ((uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_RX_RD0] << 8) |
+                     u2_memory[(address & 0xFF00) + W5100_SN_RX_RD1],
+                 u2_rx_used_bytes_live(i));
+      /* #endregion */
+#endif
       /* W5100 semantics: host updates RX_RD to consumed length before RECV.
        * Do not force RX_RD->WR here; that drops unread tail data and breaks
        * shared-access partial reads (notably wget65). */
@@ -1321,11 +1362,11 @@ void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
 void U2_FirstConnPoll(void) {
   if (u2_fc_done || !u2_fc_open_us)
     return;
-  if ((time_us_64() - u2_fc_open_us) < 20000000ull)
+  if ((time_us_64() - u2_fc_open_us) < 15000000ull)
     return;
   u2_fc_done = 1; /* stops recording too, so the dump sees a stable snapshot */
   static const char *const nm[] = {"?",      "OPEN", "SHARW",  "TXQ",  "TXNAK", "TXWIRE",
-                                   "TXFAIL", "RXDIVERT", "MFDROP", "RXOK", "RXFULL", "STAMAC"};
+                                   "TXFAIL", "RXDIVERT", "MFDROP", "RXOK", "RXFULL", "STAMAC", "RECV"};
   uint8_t n = u2_fc_n;
   for (uint8_t k = 0; k < n; k++) {
     uint8_t c = u2_fc[k].code;

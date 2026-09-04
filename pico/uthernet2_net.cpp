@@ -20,7 +20,6 @@
 #include "lwip/ip_addr.h"
 #include "lwip/err.h"
 #include "lwip/netif.h"
-#include "lwip/inet_chksum.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/prot/ip.h"
 #include "pico/multicore.h"
@@ -229,6 +228,73 @@ static void u2_macraw_patch_dhcp_bootp_chaddr(uint8_t *eth, uint16_t len, const 
   eth[udp_off + 7] = 0;
 }
 
+/* §1dz: previous NAT (1026→50178) used a homegrown full TCP checksum; 50178 still got no SYN-ACK,
+ * so we could not tell "path drops 1026" from "we broke the checksum." Incremental RFC 1624
+ * preserves Contiki's already-valid checksum (pcap §1cr). New wire port 41226 so this run is
+ * distinguishable from the 50178 experiment. */
+#define U2_PNAT_HOST 1026u
+#define U2_PNAT_WIRE 41226u
+static uint8_t u2_pnat_used;
+
+static void u2_tcp_csum_replace2(uint8_t *tcp, uint16_t oldv, uint16_t newv) {
+  uint32_t hc = ((uint32_t)tcp[16] << 8) | tcp[17];
+  uint32_t x = (~hc & 0xffffu) + (~(uint32_t)oldv & 0xffffu) + newv;
+  while (x >> 16)
+    x = (x & 0xffffu) + (x >> 16);
+  uint16_t hc2 = (uint16_t)~x;
+  if (hc2 == 0)
+    hc2 = 0xffff;
+  tcp[16] = (uint8_t)(hc2 >> 8);
+  tcp[17] = (uint8_t)hc2;
+}
+
+static int u2_tcp_hdr(uint8_t *eth, uint16_t len, uint8_t **tcp_out) {
+  if (!eth || len < 40 || eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 6)
+    return 0;
+  uint8_t ihl = (uint8_t)((eth[14] & 0x0Fu) * 4u);
+  uint16_t off = (uint16_t)(14u + ihl);
+  if (len < (uint16_t)(off + 20u))
+    return 0;
+  *tcp_out = eth + off;
+  return 1;
+}
+
+static void u2_pnat_tx(uint8_t *eth, uint16_t len) {
+  uint8_t *tcp;
+  if (!u2_tcp_hdr(eth, len, &tcp))
+    return;
+  uint16_t sport = (uint16_t)(((uint16_t)tcp[0] << 8) | tcp[1]);
+  if ((tcp[13] & 0x12u) == 0x02u && sport == U2_PNAT_HOST)
+    u2_pnat_used = 1;
+  if (!u2_pnat_used || sport != U2_PNAT_HOST)
+    return;
+  uint16_t oc = (uint16_t)(((uint16_t)tcp[16] << 8) | tcp[17]);
+  tcp[0] = (uint8_t)(U2_PNAT_WIRE >> 8);
+  tcp[1] = (uint8_t)U2_PNAT_WIRE;
+  u2_tcp_csum_replace2(tcp, U2_PNAT_HOST, U2_PNAT_WIRE);
+#if U2_FIRSTCONN
+  /* #region agent log */
+  printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H47\","
+         "\"location\":\"uthernet2_net.cpp:u2_pnat_tx\",\"message\":\"pnat\","
+         "\"timestamp\":%llu,\"data\":{\"oc\":%u,\"nc\":%u}}\n",
+         (unsigned long long)(time_us_64() / 1000u), (unsigned)oc,
+         (unsigned)(((uint16_t)tcp[16] << 8) | tcp[17]));
+  /* #endregion */
+#endif
+}
+
+static void u2_pnat_rx(uint8_t *eth, uint16_t len) {
+  uint8_t *tcp;
+  if (!u2_pnat_used || !u2_tcp_hdr(eth, len, &tcp))
+    return;
+  uint16_t dport = (uint16_t)(((uint16_t)tcp[2] << 8) | tcp[3]);
+  if (dport != U2_PNAT_WIRE)
+    return;
+  tcp[2] = (uint8_t)(U2_PNAT_HOST >> 8);
+  tcp[3] = (uint8_t)U2_PNAT_HOST;
+  u2_tcp_csum_replace2(tcp, U2_PNAT_WIRE, U2_PNAT_HOST);
+}
+
 static void set_status(int i, uint8_t s) {
   if (i >= 0 && i < U2_NET_MAX_SOCKETS)
     sockets[i].status = s;
@@ -407,6 +473,23 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
       uint8_t buf[U2_MACRAW_MAX_FRAME];
       u16_t len = (u16_t)pbuf_copy_partial(p, buf, p->tot_len, 0);
       if (len > 0) {
+#if U2_FIRSTCONN
+        /* #region agent log — H40/H54: SYN at netif, and ICMP that would explain a silent SYN. */
+        if (len >= 34 && buf[12] == 0x08 && buf[13] == 0x00) {
+          uint8_t ihl = (uint8_t)((buf[14] & 0x0Fu) * 4u);
+          uint16_t off = (uint16_t)(14u + ihl);
+          if (buf[23] == 6 && len >= (uint16_t)(off + 14u) && (buf[off + 13] & 0x02u))
+            u2_fc_tcp("in", buf, len);
+          else if (buf[23] == 1 && len >= (uint16_t)(off + 2u))
+            printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H54\","
+                   "\"location\":\"uthernet2_net.cpp:wrapper\",\"message\":\"icmp\","
+                   "\"timestamp\":%llu,\"data\":{\"type\":%u,\"code\":%u,\"len\":%u}}\n",
+                   (unsigned long long)(time_us_64() / 1000u), (unsigned)buf[off],
+                   (unsigned)buf[off + 1], (unsigned)len);
+        }
+        /* #endregion */
+#endif
+        u2_pnat_rx(buf, len);
         U2_MonNetRxMacraw(0, len);
         push_rx_macraw_cb(0, buf, len);
       }
@@ -522,7 +605,10 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
 #endif
     return false;
   }
-  struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
+  /* W5100 MAC pads TX to 60 bytes (excl. FCS). CYW43 sends the pbuf length as-is, so 54–58
+   * byte SYNs leave as Ethernet runts unless we pad here. */
+  const uint16_t send_len = (len < 60u) ? 60u : len;
+  struct pbuf *p = pbuf_alloc(PBUF_RAW, send_len, PBUF_RAM);
   if (!p) {
     u2_macraw_tx_pbuf_fail++;
 #if U2_FIRSTCONN
@@ -533,11 +619,13 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
     return false;
   }
   memcpy(p->payload, data, len);
+  if (send_len > len)
+    memset((uint8_t *)p->payload + len, 0, (size_t)(send_len - len));
   uint8_t *eth = (uint8_t *)p->payload;
 #if U2_ETH_HEADER_TRACE
-  u2_eth_trace_tap("core0-pre", eth, len);
+  u2_eth_trace_tap("core0-pre", eth, send_len);
 #endif
-  if (len >= 12)
+  if (send_len >= 12)
     memcpy(eth + 6, netif->hwaddr, 6);
   /* ARP sender-hardware-address normalization: ip65's own MAC is the WIZnet OUI (00:08:DC:..),
    * so an ARP request/reply carries that inside the payload even though we rewrite the Ethernet
@@ -548,8 +636,14 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   if (len >= 28 && eth[12] == 0x08 && eth[13] == 0x06)
     memcpy(eth + 22, netif->hwaddr, 6);
   u2_macraw_patch_dhcp_bootp_chaddr(eth, len, netif->hwaddr);
+  u2_pnat_tx(eth, len);
 #if U2_ETH_HEADER_TRACE
-  u2_eth_trace_tap("core0-post", eth, len);
+  u2_eth_trace_tap("core0-post", eth, send_len);
+#endif
+#if U2_FIRSTCONN
+  /* #region agent log — H25: TCP 4-tuple at the radio, after SA/ARP patches. */
+  u2_fc_tcp("tx", eth, send_len);
+  /* #endregion */
 #endif
   U2_SetStationMacFromBytes(netif->hwaddr);
   err_t err = netif->linkoutput(netif, p);
@@ -566,7 +660,7 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   U2_MonNetMacrawTx(i, len);
 #if U2_FIRSTCONN
   /* #region agent log — H13: frame actually reached the wire. Pair with TXQ. */
-  u2_fc_note(5, len, (len >= 14) ? (((uint32_t)data[12] << 8) | data[13]) : 0u);
+  u2_fc_note(5, len, u2_fc_l4(data, len));
   /* #endregion */
 #endif
   return true;
@@ -653,6 +747,7 @@ void U2_Net_Close(int i) {
     }
   } else if (s->type == PCB_MACRAW) {
     u2_macraw_tx_queue_clear();
+    u2_pnat_used = 0;
   }
   s->type = PCB_NONE;
   s->status = W5100_SN_SR_CLOSED;

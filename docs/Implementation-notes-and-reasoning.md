@@ -3758,12 +3758,261 @@ layer 4.
 
 ---
 
+## 1dt. The first-connection trace never saw the first connection (2026-09-04)
+
+Operator: the log shows the retry, not the initial Contiki connect; wget never appears.
+
+### What this capture actually contains
+
+Dump fired 15 s after the **first successful `TXQ`**, at t_ms 80944. Events:
+
+```
+43012  OPEN + STAMAC     net still 0x037f, SHAR = STA
+43064–58474  RECV ×24    budget exhausted draining the ring; no TX yet
+65944  TXQ/TXWIRE 42     ARP
+66588  TXQ 83            UDP dport 53 (DNS)
+66895  TXQ 58            TCP SYN flags=0x02 dport 80
+69207, 74168             SYN retransmits (+2.3 s, +4.9 s)
+```
+
+That is a TCP handshake that is **not** completing in the logged window — the same SYN RTO pattern as §1ds. Ambient UDP (NetBIOS 137, etc.) filled the RXOK budget again, so a SYN-ACK or RST would have been invisible even if it arrived.
+
+There is **only one OPEN** and **no TX at all for 23 s after OPEN**. The failing first click therefore did not enqueue a MACRAW frame. wget, which never reaches SEND, never arms the dump, so it produces zero UART.
+
+### Why the instrumentation missed it
+
+`u2_fc_arm()` ran only inside the `U2_Net_SendMacraw` success path. Hypotheses H22–H24 (SEND issued but empty TX window, wrong Sn_SR, oversize drop, or no SEND at all) cannot appear in a trace that requires a successful enqueue to exist.
+
+Arming on TXQ also meant the 15 s one-shot closed around the *retry's* handshake, which is what the operator received.
+
+### Re-aimed again (still no bus-path cost)
+
+- Arm on **any Sn_CR OPEN** and on **Sn_CR SEND**, not on TXQ. Core 0 prints a single `armed` line on the next poll so wget that OPENs and dies is still on the serial capture.
+- New events: `SENDCR` (host issued SEND), `TXSKIP` reason 1=tx size 0 / 2=empty window / 3=oversize / 4=Sn_SR not MACRAW-UDP-ESTABLISHED, `CLOSE`.
+- Circular 96-event ring; OPEN/SEND/TX/CLOSE are never budget-dropped.
+- RXOK only for ARP, TCP, and DNS (UDP sport or dport 53).
+- Dumps at 8 s, 20 s, and 40 s after arm; recording continues until the last dump.
+- `read_value` untouched.
+
+### Hypotheses this should now discriminate
+
+| id | mechanism | signature |
+|---|---|---|
+| H22 | First attempt SENDs with an empty TX window or tx size 0 | `SENDCR` then `TXSKIP` a=1 or 2, no `TXQ` |
+| H23 | First attempt SEND while Sn_SR is not MACRAW | `TXSKIP` a=4, status in bits 15–8 |
+| H24 | First attempt never issues OPEN or SEND (device/init fail) | no `armed` line at all for wget |
+| H16 | SYN on the wire, nothing useful back | `TXQ` SYN, no `RXOK` TCP 0x12 |
+| H21 | RST back | `RXOK` TCP flags 0x04 |
+
+**References:** `pico/uthernet2.c` (`u2_fc_arm`, `U2_FirstConnPoll`, `send_data` TXSKIP); §1ds.
+
+---
+
+## 1du. First-connect is not a missing W5100 SEND — it is an unanswered TCP 4-tuple (2026-09-04)
+
+Operator: capture shows other connections, not the first; wget never registers; Contiki records app start but first connect does nothing until retry. That is the right reading of the *W5100 command* stream, and it means **OPEN/SEND was the wrong layer**.
+
+### What dump 3 actually contains
+
+App start at t=38134 (`armed` + MACRAW OPEN). For 10 s the host only RECVs ARP. Then:
+
+```
+48549  SEND ARP
+49071  SEND DNS UDP/53          reply 49545 (DNS works on the first try)
+49675  SEND TCP SYN dport 80    (first connect)
+51674  SYN retx  +2.0 s
+56605  SYN retx  +4.9 s
+65216  SYN retx  +8.6 s
+69762  SYN
+69781  RX TCP SYN-ACK dport 1027   (+19 ms after last SYN)
+70100  TX ACK+PSH 178 B to :80     HTTP GET
+70123  RX 784 B ACK                page data
+```
+
+Every `SENDCR` has a matching `TXQ`/`TXWIRE`. There is **no TXSKIP**. The first button press *does* send; the UI just sits there because **no SYN-ACK returns for ~20 s**. The SYN-ACK that finally arrives is addressed to **ephemeral 1027**, which is the historical retry port (§1cs: 1026 ISN 0 never answered, 1027 handshakes in 16 ms). Outbound SYN **source** port was not in the old `u2_fc_l4` packing (only dest 80), so 1026 vs 1027 was invisible.
+
+wget produced no UART because dump 3 set `u2_fc_done` 40 s after Contiki OPEN, then dropped every later event.
+
+### Wrong place, named
+
+W5100 `Sn_CR` cannot explain a DNS success followed by TCP silence. The radio already accepted the SYNs (`TXWIRE`). The peer (or the AP in front of a dual-IP STA) does not answer the first 4-tuple. STA MAC `88:a2:9e:48:22:7a` still carries lwIP's DHCP address **and** Contiki's `.234` (§1ct); SNAT was reverted in §1cv because Contiki can be a server.
+
+### Instrumentation pivot
+
+- Stop the 8/20/40 s ring dumps (they froze the logger and can block core 0 during the handshake).
+- One NDJSON line per TCP segment at `linkoutput` / ring push: dir, src/dst IPv4, sport/dport, flags, seq. That is H25 (1026 ISN 0 vs 1027 retry) without touching the bus path.
+- Logger never sets `u2_fc_done`, so wget after Contiki still records.
+
+**References:** this capture dump 3; §1cs–§1cv; `u2_fc_tcp`.
+
+---
+
+## 1dv. CONFIRMED: first connect is `sport 1026` `seq=0` with zero SYN-ACK (2026-09-04)
+
+First capture that includes both Contiki and wget TCP 4-tuples. DNS/ARP not involved.
+
+### Contiki
+
+| t_ms | dir | sport | flags | seq | result |
+|---|---|---|---|---|---|
+| 92719 | tx | **1026** | SYN | **0** | |
+| 95112 | tx | 1026 | SYN | 0 | +2.4 s RTO |
+| 100036 | tx | 1026 | SYN | 0 | +4.9 s |
+| (none) | rx | 1026 | — | — | **no SYN-ACK ever** |
+| 109209 | tx | **1027** | SYN | **12** | retry |
+| 109236 | rx | 1027 | SYN-ACK | | **+27 ms** |
+| 109564 | tx | 1027 | ACK+PSH 178 | GET | page load |
+
+`sip=c0a800d5` = 192.168.0.213 (STA/lwIP address — Contiki is not on a second IP in this run). `dip=423b6d1a` = 66.59.109.26.
+
+1026 SYNs continue in the background (110851, 132935, 150031…) for the whole capture. H25 confirmed. Dual-IP SNAT (§1ct) is the wrong lever here: there is only one IPv4.
+
+### wget
+
+`sport 1030` `seq=44` SYN-ACK in 25 ms, GET 192 B, two 784 B segments, then Apple **RST** (`flags=20`). wget's *connect* is not the 1026 problem; the RST after payload is the older checksum/abort path.
+
+### Fix
+
+Rewrite ISS 0 on SYN-only to a nonzero wire ISN and translate ACKs back so Contiki still sees seq 0. Retransmits of the same 4-tuple reuse the same delta. Cleared on MACRAW close. `u2_fc_tcp` stays: next run must show 1026 SYN with `seq≠0` and an `rx` SYN-ACK to 1026. If seq is rewritten and 1026 still gets no SYN-ACK, the remaining hypothesis is the **port** 1026 4-tuple itself.
+
+**References:** `u2_iss_tx` / `u2_iss_rx` in `pico/uthernet2_net.cpp`; this serial capture.
+
+---
+
+## 1dw. ISS rewrite rejected; the black hole is source port 1026 (2026-09-04)
+
+Post-§1dv capture: first SYN is `sport 1026` `seq=48346951` (the ISS shim did rewrite 0). Four SYNs, **still no SYN-ACK**. Next `1027` `seq=18` SYN-ACK in 27 ms (GET 178, page data). Then `1028` `seq=25` SYN-ACK in 25 ms, GET 192, Apple RST.
+
+**Operator correction:** wget never connects (wait ~1 min, power off). **1028 is a Contiki retry, not wget.** Contiki retry always works. The later 1026 SYN burst (t=94204–112284) is the wget attempt — same 1026 black hole, no SYN-ACK.
+
+H25-as-ISN-0 is **rejected**. Remaining: something on the path drops **TCP source port 1026**. Contiki and wget both start there; 1027/1028 (retries) are answered.
+
+**What we did:** removed the ISS translator. Map host sport 1026 → wire **50178** (`49152+1026`) on SYN and on the rest of that flow; reverse dport on RX. Contiki still binds 1026. `tcp4` after rewrite should show the first SYN as sport 50178 and an `rx` SYN-ACK (logged after reverse as dport 1026).
+
+**References:** `u2_pnat_tx` / `u2_pnat_rx` in `pico/uthernet2_net.cpp`.
+
+---
+
+## 1dx. Wrap shim never ran: RMSR 0x06 puts socket 1 at the spill address (2026-09-04)
+
+Port-NAT made wget run. Checksums stayed on the same 1st/3rd/6th-following-packet beat, which is
+still one bad MACRAW record per 4 KiB wrap (§1dp). The §1dq producer layout was compiled in, but
+`u2_rx_spill_is_free()` required the two bytes past sock0's ring (`0x7000`/`0x7001`) to sit
+**outside every other socket's assigned RX window**.
+
+ip65 writes RMSR `0x06`: sock0 = 4 KiB at `0x6000` (end `0x7000`), sock1 = 2 KiB at `0x7000`.
+The overlap test `(end - sock1.base) < sock1.size` is `0 < 2048`, so the guard always failed and
+every wrap used datasheet wrapping — exactly the layout the driver mis-reads.
+
+**What we did:** treat a neighbour as occupying the spill region only when its `Sn_SR` is not
+`CLOSED`. ip65/Contiki never OPEN sock1 in this path, so the shim can park the over-read bytes
+where the host actually looks. If sock1 is later opened over that region, we fall back to W5100
+layout. `U2_MACRAW_WRAP_COMPAT=0` still disables the shim outright.
+
+**Takeaway:** assigned RMSR geometry is not the same as a live reader. Guarding against a CLOSED
+socket's buffer made the compatibility layout a no-op on the only configuration we validate.
+
+**References:** `pico/uthernet2.c` `u2_rx_spill_is_free`, `u2_push_rx_macraw`; §1dq, §1dp.
+
+---
+
+## 1dy. Port NAT rejected; first-connect is not source port 1026 (2026-09-04)
+
+UART `Serial Saved Output.txt` after the §1dw image. Operator: wget still cannot connect; NAT is present and first-connect still fails.
+
+### What this capture shows
+
+| t_ms | event |
+|---|---|
+| 46666–62738 | four **TX SYNs** `sport 50178` (NAT of 1026) `seq=0` — **zero SYN-ACK** |
+| 50227 | wrap shim **did** fire (`shim:1`, `spill:1`, `s1sr:0`, `rmsr:6`) on a 92 B frame |
+| 71044 / 71070 | **1027** SYN then SYN-ACK in **26 ms**, HTTP GET, page data (wrap at 71433, `shim:1`) |
+| 79389 | **1028** SYN-ACK in 27 ms, GET 192, two 784 B, wrap `shim:1`, then Apple **RST** |
+| 92373– | wget: **50178 SYN seq=0** again, **zero SYN-ACK** |
+
+SIP is `192.168.0.213` (STA). Dual-IP SNAT is irrelevant here, as in §1dv.
+
+### Rejected
+
+- **Source-port 1026 as the black hole.** The wire port was **50178**. Same silence as 1026. 1027/1028 still handshake in ~25 ms. The discriminator is **first TCP 4-tuple after OPEN**, not the number 1026.
+- **ISS=0** (§1dv) and **port NAT** (§1dw) are both one-off rewrites of that first 4-tuple. Neither produced a SYN-ACK.
+
+H30 (shim never ran) is **confirmed as the old checksum no-op**, and **fixed in this image** (`shim:1`). It does **not** explain first-connect: DNS already worked, and 1027 completed a wrapped HTTP burst.
+
+### Integration gap vs a real Uthernet II
+
+A W5100 has an always-on PHY and pads TX to 60 bytes. We inject raw frames into CYW43:
+
+- **PM2** (`CYW43_PERFORMANCE_PM`) still sleeps the 43439 after **200 ms** idle. The 6502 spends far longer than that between DNS RX and the first SYN. A real card does not sleep. Unicast SYN-ACKs can die in AP buffering / STA sleep while UDP DNS (tight TX→RX) succeeds.
+- **58-byte SYNs** (`len:58` in every tcp4 SYN) are Ethernet runts. The W5100 MAC pads; `linkoutput` did not.
+
+### What we did
+
+- **Removed** `u2_pnat_*` (rejected).
+- While socket 0 is MACRAW: `cyw43_wifi_pm(CYW43_NONE_PM)`; restore `CYW43_DEFAULT_PM` on close.
+- Pad MACRAW TX to **60 bytes**.
+- Keep the wrap shim. Log inbound SYN/SYN-ACK at the netif hook as `dir=in` (before MF) vs `dir=rx` (into the ring).
+
+**Takeaway:** stop rewriting Contiki’s 4-tuple. Make the radio path behave like a wired W5100 (awake + legal frames), then see whether 1026 gets a SYN-ACK.
+
+**References:** this UART; `u2_macraw_psm_sync`, `u2_send_macraw_core0` pad; §1cs, §1dv, §1dw.
+
+---
+
+## 1dz. PSM off + 60 B pad: still zero inbound TCP (2026-09-04)
+
+UART after §1dy. One Contiki connect, no retry.
+
+```
+psm off=1 at 35863
+tx SYN 1026 seq=0 len=60 da=2cbbf0   at 47073, 49565, 54495, 63133, 79147
+dir=in: none    dir=rx: none    icmp: none
+wrap 63 B shim=1 at 81235
+```
+
+**H40 REJECTED:** PSM was already off; no SYN-ACK reached `netif->input`.
+**H41 REJECTED as first-connect cause:** frames were 60 B; still silence. Pad kept (W5100 MAC pads TX).
+**H42 REJECTED:** no `in` means MF never saw a SYN-ACK.
+**H43 CONFIRMED:** CYW43 did not deliver any TCP to the host during the whole RTO.
+
+`da=2cbbf0` is the VMware gateway (`00:0c:29:2c:bb:f0`). L2 dest is correct. DNS already worked.
+
+**Removed** MACRAW `CYW43_NONE_PM` (H40). **Kept** 60 B TX pad.
+
+§1dw NAT used a full TCP checksum rewrite; if that was wrong, 50178 was never a valid test of “path drops 1026.” This image remaps **1026→41226** with **RFC 1624 incremental** checksum (Contiki’s checksum stays valid) and logs ICMP plus wrap `et`/`pr`.
+
+| id | if true |
+|---|---|
+| H47 | first SYN `sport:41226` then `in`/`rx` SYN-ACK in ~25 ms |
+| H54 | `icmp` lines during the SYN RTO |
+| H43 still | `sport:41226` and still no `in` — not the port, firmware/path eats the first 4-tuple |
+
+**References:** this UART; `u2_tcp_csum_replace2`.
+
+---
+
+## 1ea. Operator confirmation: first-connect and checksums resolved (2026-09-04)
+
+Operator: Contiki connects on the first try; checksum errors gone. Further soak testing planned; treat both defects as **closed** for this release.
+
+**Kept in production path (U2_FIRSTCONN=0):**
+- MACRAW wrap layout when spill is free (§1dq / §1dx — skip CLOSED neighbour rings).
+- Incremental host sport **1026 → 41226** with RFC 1624 checksum update (§1dz).
+- MACRAW TX pad to **60 bytes**.
+
+**Not in Release binary:** `U2_FIRSTCONN` / `U2_RX_AUDIT` instrumentation (CMake defaults 0).
+
+**References:** wrap shim + `u2_pnat_*` + TX pad in `pico/uthernet2.c` / `uthernet2_net.cpp`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
 | U2 address range | `defines.h`, `busloop.c` | C0x4–C0x7 only; no GPIO slot select |
-| ip65 DHCP / MACRAW MAC | §1j, `uthernet2_net.cpp` | **STA netif** (`CYW43_ITF_STA`) for TX/RX hook/SA; **SHAR** + Ethernet **SA** + DHCP **`chaddr`** + **UDP** csum; **`tcp_bind`**(**Sn_PORT**) before **CONNECT** |
+| First-connect | §1ea, `u2_pnat_*` | Confirmed: incremental 1026→41226 + 60 B TX pad; PSM rejected |
+| MACRAW wrap checksums | §1ea, §1dq/§1dx | Confirmed: spill layout when neighbour CLOSED; shim fires (`shim:1`) |
 | AppleWin vs Pico U2 | §1i, AppleWin `Uthernet2.cpp` `IO_C0` / `MemReadFloatingBus` | AppleWin: **synchronous** slot I/O in one emulated step. Pico: **FIFO + PIO prefetch + IRQ0** (§1d §1f). AppleWin port = **`addr & 0x03`** on full slot page; MegaFlash U2 path only **`addr` 4–7**; **`$C0C8+`** not mirrored (ACIA reservation, §1b) — PIO **chunk = A3:A2** |
 | ip65 W5100 probe + SHAR | `uthernet2.c` §`u2_reset`, §1c | RTR $07/$D0 + RMSR/TMSR $06 for `w5100.s` probe; default SHAR = `00:08:DC:A2:A2:A2` (matches `w5100.s`) so RMSR=$06 short path does not leave `cfg_mac` all-zero |
 | Two DATA reads both $07 | §1f, `uthernet2.c` `auto_increment` | Pointer only advances when **MR** has **AI** ($02); **$03** = IND+AI; **$00** after reset or **$01** → no increment, second read still RTR0 |

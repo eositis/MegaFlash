@@ -217,13 +217,13 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
  *   H15  RXFULL                      -> the ring was unsized or full when the first reply landed.
  */
 #define U2_FC_MAX 96
-#define U2_FC_PER_CODE 24
+#define U2_FC_PER_CODE 16
 typedef struct {
   uint32_t t_ms, a, b;
   uint8_t code;
 } u2_fc_evt_t;
 static u2_fc_evt_t u2_fc[U2_FC_MAX];
-static volatile uint8_t u2_fc_n, u2_fc_done;
+static volatile uint8_t u2_fc_n, u2_fc_w, u2_fc_full, u2_fc_done, u2_fc_dumps, u2_fc_arm_print;
 static uint8_t u2_fc_seen[16];
 static volatile uint64_t u2_fc_open_us;
 
@@ -231,28 +231,31 @@ void u2_fc_note(uint8_t code, uint32_t a, uint32_t b) {
   if (u2_fc_done)
     return;
   uint8_t c = (uint8_t)(code & 15u);
-  /* RXOK is the only high-rate event; ignore it until the host starts transmitting so ambient
-   * broadcast traffic cannot spend the ring before the exchange under investigation begins. */
-  if (c == 9u && !u2_fc_open_us)
-    return;
-  /* Per-code budget: ambient broadcast traffic would otherwise fill the ring with RXOK and crowd
-   * out the one MFDROP or TXFAIL that actually answers the question. */
-  if (u2_fc_seen[c] >= U2_FC_PER_CODE)
-    return;
-  u2_fc_seen[c]++;
-  uint8_t n = u2_fc_n;
-  if (n >= U2_FC_MAX)
-    return;
-  u2_fc[n].t_ms = (uint32_t)(time_us_64() / 1000u);
-  u2_fc[n].code = c;
-  u2_fc[n].a = a;
-  u2_fc[n].b = b;
-  u2_fc_n = (uint8_t)(n + 1u);
+  /* Budget only noisy RX-side codes. OPEN/SEND/TX/CLOSE must never be dropped: the previous
+   * capture's RECV budget of 24 filled the ring 23 s before the first TXQ, and arming on TXQ
+   * meant a failed first attempt that never SENDs produced no UART at all (wget included). */
+  if (c == 7u || c == 8u || c == 9u || c == 12u) {
+    if (u2_fc_seen[c] >= U2_FC_PER_CODE)
+      return;
+    u2_fc_seen[c]++;
+  }
+  uint8_t w = u2_fc_w;
+  u2_fc[w].t_ms = (uint32_t)(time_us_64() / 1000u);
+  u2_fc[w].code = c;
+  u2_fc[w].a = a;
+  u2_fc[w].b = b;
+  u2_fc_w = (uint8_t)((w + 1u) % U2_FC_MAX);
+  if (u2_fc_n < U2_FC_MAX)
+    u2_fc_n++;
+  else
+    u2_fc_full = 1;
 }
 
 void u2_fc_arm(void) {
-  if (!u2_fc_open_us)
-    u2_fc_open_us = time_us_64();
+  if (u2_fc_open_us)
+    return;
+  u2_fc_open_us = time_us_64();
+  u2_fc_arm_print = 1; /* print from core 0; OPEN/SEND run on the bus core */
 }
 
 /* Pack the layer-3/4 identity of a raw Ethernet frame so a SYN can be told from a SYN-ACK from a
@@ -264,7 +267,7 @@ void u2_fc_arm(void) {
  *   bits 31..24  IPv4 protocol (0 when not IPv4)
  *   bits 23..16  TCP flags     (0 when not TCP)
  *   bits 15..0   TCP/UDP destination port, else the ethertype */
-static uint32_t u2_fc_l4(const uint8_t *d, uint16_t len) {
+uint32_t u2_fc_l4(const uint8_t *d, uint16_t len) {
   if (len < 14)
     return 0;
   uint16_t et = (uint16_t)(((uint16_t)d[12] << 8) | d[13]);
@@ -279,6 +282,29 @@ static uint32_t u2_fc_l4(const uint8_t *d, uint16_t len) {
   if (proto == 6u && len >= (uint16_t)(l4 + 14u))
     v |= (uint32_t)d[l4 + 13] << 16; /* TCP flags: 0x02 SYN, 0x12 SYN-ACK, 0x04 RST */
   return v;
+}
+
+/* Keep only ARP, TCP, and DNS (UDP sport or dport 53). Ambient NetBIOS/DHCP ate the RXOK budget
+ * last run and hid whether a SYN-ACK or RST came back. */
+static int u2_fc_rx_keep(const uint8_t *d, uint16_t len) {
+  if (len < 14)
+    return 0;
+  uint16_t et = (uint16_t)(((uint16_t)d[12] << 8) | d[13]);
+  if (et == 0x0806u)
+    return 1;
+  if (et != 0x0800u || len < 34)
+    return 0;
+  uint8_t ihl = (uint8_t)((d[14] & 0x0Fu) * 4u);
+  uint8_t proto = d[23];
+  if (proto == 6u)
+    return 1;
+  if (proto == 17u && len >= (uint16_t)(14u + ihl + 4u)) {
+    uint16_t off = (uint16_t)(14u + ihl);
+    uint16_t sport = (uint16_t)(((uint16_t)d[off] << 8) | d[off + 1]);
+    uint16_t dport = (uint16_t)(((uint16_t)d[off + 2] << 8) | d[off + 3]);
+    return (sport == 53u || dport == 53u);
+  }
+  return 0;
 }
 /* #endregion */
 #endif
@@ -788,15 +814,21 @@ static void u2_socket_discard_rx(int socket_i) {
 #define U2_MACRAW_WRAP_COMPAT 1
 #endif
 
-/* True when the 2 bytes immediately past socket i's RX ring belong to nobody: inside the RX block
- * and outside every other socket's ring. The §1dp layout parks 2 record bytes there, so it must
- * not run when another socket could read them back as its own buffer. */
+/* True when parking 2 record bytes just past socket i's RX ring cannot be observed as another
+ * socket's live RX. RMSR 0x06 gives sock0 4 KiB at 0x6000 and sock1 2 KiB at 0x7000, so the
+ * spill addresses *are* inside sock1's assigned ring — but ip65/Contiki never OPEN sock1, and
+ * the illegal host read is exactly those two bytes. Treating a CLOSED neighbour as occupying
+ * the spill region made §1dq a no-op: every wrap used W5100-exact wrapping and checksums stayed
+ * on the 1st/3rd/6th following packet. Skip CLOSED sockets; if a neighbour is actually open
+ * over that region, fall back to datasheet layout. */
 static int u2_rx_spill_is_free(int i) {
   const uint16_t end = (uint16_t)(u2_sockets[i].receive_base + u2_sockets[i].receive_size);
   if ((uint32_t)end + 1u >= (uint32_t)W5100_MEM_SIZE)
     return 0;
   for (int j = 0; j < W5100_NUM_SOCKETS; j++) {
     if (j == i || u2_sockets[j].receive_size == 0)
+      continue;
+    if (u2_memory[u2_sockets[j].register_address + W5100_SN_SR] == W5100_SN_SR_CLOSED)
       continue;
     if ((uint16_t)(end - u2_sockets[j].receive_base) < u2_sockets[j].receive_size)
       return 0;
@@ -840,8 +872,10 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
     return;
   }
 #if U2_FIRSTCONN
-  /* #region agent log — H11/H12 control: frames that did pass the filter and reach the ring. */
-  u2_fc_note(9, len, u2_fc_l4(data, len));
+  /* #region agent log — H16/H21/H25: TCP at the ring, plus ARP/DNS still counted. */
+  if (u2_fc_rx_keep(data, len))
+    u2_fc_note(9, len, u2_fc_l4(data, len));
+  u2_fc_tcp("rx", data, len);
   /* #endregion */
 #endif
   uint16_t mask = size - 1;
@@ -898,7 +932,26 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
    * can observe the two bytes past the ring. */
   const uint16_t off0 = (uint16_t)(wr & mask);
   const uint16_t first = (uint16_t)(size - off0);
-  const int shim = U2_MACRAW_WRAP_COMPAT && total > first && u2_rx_spill_is_free(socket_i);
+  const int spill = u2_rx_spill_is_free(socket_i);
+  const int shim = U2_MACRAW_WRAP_COMPAT && total > first && spill;
+#if U2_FIRSTCONN
+  /* #region agent log */
+  if (total > first) {
+    printf("{\"sessionId\":\"a36369\",\"runId\":\"cksum\",\"hypothesisId\":\"H30\","
+           "\"location\":\"uthernet2.c:u2_push_rx_macraw\",\"message\":\"wrap\","
+           "\"timestamp\":%llu,\"data\":{\"shim\":%d,\"spill\":%d,\"off0\":%u,\"first\":%u,"
+           "\"total\":%u,\"len\":%u,\"end\":%u,\"s1sz\":%u,\"s1sr\":%u,\"rmsr\":%u,"
+           "\"et\":%u,\"pr\":%u}}\n",
+           (unsigned long long)(time_us_64() / 1000u), shim, spill, (unsigned)off0,
+           (unsigned)first, (unsigned)total, (unsigned)len,
+           (unsigned)(base + size), (unsigned)u2_sockets[1].receive_size,
+           (unsigned)u2_memory[u2_sockets[1].register_address + W5100_SN_SR],
+           (unsigned)u2_memory[W5100_RMSR],
+           (unsigned)(len >= 14 ? ((uint16_t)data[12] << 8) | data[13] : 0),
+           (unsigned)(len >= 24 && data[12] == 0x08 && data[13] == 0x00 ? data[23] : 0));
+  }
+  /* #endregion */
+#endif
   if (shim) {
     /* Contiguous run of first+2 bytes from off0, spilling 2 bytes past the ring end. */
     uint8_t *p = &u2_memory[base + off0];
@@ -930,7 +983,15 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
 static int send_data(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t buf_size = s->transmit_size;
+#if U2_FIRSTCONN
+  /* #region agent log — H22: first attempt may issue SEND and still put nothing on the wire. */
+  if (buf_size == 0) {
+    u2_fc_note(14, 1, (uint32_t)i);
+    return 0;
+  }
+#else
   if (buf_size == 0) return 0;
+#endif
   uint16_t mask = buf_size - 1;
   const uint8_t *r = &u2_memory[s->register_address];
   uint16_t rd_full = read_net16(r + W5100_SN_TX_RD0);
@@ -939,7 +1000,14 @@ static int send_data(int i) {
   uint16_t wr = wr_full & mask;
   int data_len = (int)wr - (int)rd;
   if (data_len < 0) data_len += buf_size;
+#if U2_FIRSTCONN
+  if (data_len == 0) {
+    u2_fc_note(14, 2, (uint32_t)i);
+    return 0;
+  }
+#else
   if (data_len == 0) return 0;
+#endif
   uint16_t base = s->transmit_base;
   uint16_t consumed = (uint16_t)data_len; /* bytes to advance Sn_TX_RD past */
   uint8_t status = U2_Net_GetStatus(i);
@@ -988,6 +1056,9 @@ static int send_data(int i) {
        * never replied, §1ci). Drop this frame but still retire the full host TX window so the
        * pointers re-sync and Sn_TX_FSR recovers. */
       U2_MonNetMacrawTx(i, 0); /* len=0 paired with an OVERSIZE ptrs line == desync drop */
+#if U2_FIRSTCONN
+      u2_fc_note(14, 3, (uint32_t)data_len);
+#endif
       consumed = (uint16_t)data_len;
     } else {
       int n = data_len;
@@ -1006,13 +1077,19 @@ static int send_data(int i) {
 #if U2_FIRSTCONN
       /* #region agent log — H13: accepted from the bus. A TXQ with no matching TXWIRE means the
        * host was told the frame went out when it never reached the wire. */
-      u2_fc_arm(); /* the window that matters starts when the host first talks, not at OPEN */
       u2_fc_note(3, (uint32_t)n, u2_fc_l4(buf, (uint16_t)n));
       /* #endregion */
 #endif
       consumed = (uint16_t)data_len;
     }
   }
+#if U2_FIRSTCONN
+  else {
+    /* #region agent log — H22: SEND while Sn_SR is not UDP/ESTABLISHED/MACRAW; TX_RD still advances. */
+    u2_fc_note(14, 4u | ((uint32_t)status << 8), (uint32_t)data_len);
+    /* #endregion */
+  }
+#endif
   /* Advance TX_RD by the bytes actually consumed (full host-visible pointer progression;
    * only ring indexing is masked). */
   uint16_t new_rd = (uint16_t)(rd_full + consumed);
@@ -1037,6 +1114,13 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
     int i = (address >> 8) - 0x04;
     switch (value) {
     case W5100_SN_CR_OPEN: {
+#if U2_FIRSTCONN
+      /* #region agent log — H22: arm on OPEN so wget that never SENDs still produces a dump. */
+      u2_fc_arm();
+      u2_fc_note(1, ((uint32_t)i << 16) | u2_memory[(address & 0xFF00) + W5100_SN_MR],
+                 (uint32_t)U2_NetDiagState());
+      /* #endregion */
+#endif
       uint8_t mr = u2_memory[(address & 0xFF00) + W5100_SN_MR];
       uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
@@ -1064,12 +1148,8 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
         int ok = (U2_Net_OpenMacraw(i) == 0);
         U2_MonSockOpen(i, mr, port, ok);
 #if U2_FIRSTCONN
-        /* #region agent log — H12: was the netif input hook actually installed, and was CYW43 up?
-         * Also snapshots SHAR right after OPEN so a later SHARW proves ip65 overwrote it (H11). */
-        u2_fc_note(1, U2_NetDiagState() | ((uint32_t)mr << 24),
-                   ((uint32_t)u2_memory[W5100_SHAR0 + 3] << 16) |
-                       ((uint32_t)u2_memory[W5100_SHAR0 + 4] << 8) | u2_memory[W5100_SHAR0 + 5]);
-        u2_fc_note(11, 0, U2_NetDiagStaMac24());
+        /* #region agent log — H12: MACRAW-specific OPEN detail (hook + SHAR). */
+        u2_fc_note(11, (uint32_t)ok, U2_NetDiagStaMac24());
         /* #endregion */
 #endif
         if (ok) {
@@ -1119,11 +1199,22 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
     case W5100_SN_CR_CLOSE:
     case W5100_SN_CR_DISCON:
       U2_MonSockClose(i);
+#if U2_FIRSTCONN
+      u2_fc_note(15, (uint32_t)i, (uint32_t)value);
+#endif
       U2_Net_Close(i);
       u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
       break;
     case W5100_SN_CR_SEND:
       U2_MonSockSendRecv(i, 1);
+#if U2_FIRSTCONN
+      /* #region agent log — H22: the host issued SEND even if send_data later no-ops. */
+      u2_fc_arm();
+      u2_fc_note(13, (uint32_t)i | ((uint32_t)U2_Net_GetStatus(i) << 8) |
+                         ((uint32_t)u2_sockets[i].transmit_size << 16),
+                 0);
+      /* #endregion */
+#endif
       if (send_data(i) != 0) {
         U2_RequestCore0NetPoll();
         return;
@@ -1353,33 +1444,43 @@ void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
 
 #if U2_FIRSTCONN
 /* #region agent log — §1dr one-shot dump; see the note at u2_fc_note for why it fires once. */
-#define U2_FC_LOG(fmt_, ...)                                                                       \
-  printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H11\","             \
-         "\"location\":\"uthernet2.c:u2_fc_note\",\"message\":\"first-connection trace\","         \
-         "\"timestamp\":%llu,\"data\":{" fmt_ "}}\n",                                              \
-         (unsigned long long)(time_us_64() / 1000u), __VA_ARGS__)
-
 void U2_FirstConnPoll(void) {
-  if (u2_fc_done || !u2_fc_open_us)
-    return;
-  if ((time_us_64() - u2_fc_open_us) < 15000000ull)
-    return;
-  u2_fc_done = 1; /* stops recording too, so the dump sees a stable snapshot */
-  static const char *const nm[] = {"?",      "OPEN", "SHARW",  "TXQ",  "TXNAK", "TXWIRE",
-                                   "TXFAIL", "RXDIVERT", "MFDROP", "RXOK", "RXFULL", "STAMAC", "RECV"};
-  uint8_t n = u2_fc_n;
-  for (uint8_t k = 0; k < n; k++) {
-    uint8_t c = u2_fc[k].code;
-    U2_FC_LOG("\"i\":%u,\"t_ms\":%lu,\"ev\":\"%s\",\"a\":\"%08lx\",\"b\":\"%08lx\"", (unsigned)k,
-              (unsigned long)u2_fc[k].t_ms, (c < (sizeof(nm) / sizeof(nm[0]))) ? nm[c] : "?",
-              (unsigned long)u2_fc[k].a, (unsigned long)u2_fc[k].b);
+  if (u2_fc_arm_print && u2_fc_open_us) {
+    u2_fc_arm_print = 0;
+    printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H22\","
+           "\"location\":\"uthernet2.c:u2_fc_arm\",\"message\":\"armed\","
+           "\"timestamp\":%llu,\"data\":{\"t_ms\":%lu}}\n",
+           (unsigned long long)(time_us_64() / 1000u),
+           (unsigned long)(u2_fc_open_us / 1000u));
   }
-  U2_FC_LOG("\"summary\":1,\"events\":%u,\"truncated\":%d,\"shar\":\"%02x%02x%02x%02x%02x%02x\","
-            "\"net\":\"%08lx\",\"stamac\":\"%06lx\"",
-            (unsigned)n, (int)(n >= U2_FC_MAX), u2_memory[W5100_SHAR0 + 0],
-            u2_memory[W5100_SHAR0 + 1], u2_memory[W5100_SHAR0 + 2], u2_memory[W5100_SHAR0 + 3],
-            u2_memory[W5100_SHAR0 + 4], u2_memory[W5100_SHAR0 + 5],
-            (unsigned long)U2_NetDiagState(), (unsigned long)U2_NetDiagStaMac24());
+}
+
+/* One line per TCP segment at the radio edge (core 0). H25: first unanswered flow is a 4-tuple
+ * (typically sport 1026 ISN 0) on the shared STA MAC; retry is a new sport. W5100 OPEN/SEND is
+ * the wrong layer — dump 3 already showed ARP+DNS immediately and SYN-ACK only after ~20 s, to
+ * dest port 1027. */
+void u2_fc_tcp(const char *dir, const uint8_t *d, uint16_t len) {
+  if (!d || len < 40 || d[12] != 0x08 || d[13] != 0x00 || d[23] != 6)
+    return;
+  uint8_t ihl = (uint8_t)((d[14] & 0x0Fu) * 4u);
+  uint16_t off = (uint16_t)(14u + ihl);
+  if (len < (uint16_t)(off + 14u))
+    return;
+  uint16_t sport = (uint16_t)(((uint16_t)d[off] << 8) | d[off + 1]);
+  uint16_t dport = (uint16_t)(((uint16_t)d[off + 2] << 8) | d[off + 3]);
+  uint8_t flags = d[off + 13];
+  uint32_t seq = ((uint32_t)d[off + 4] << 24) | ((uint32_t)d[off + 5] << 16) |
+                 ((uint32_t)d[off + 6] << 8) | d[off + 7];
+  uint32_t sip = ((uint32_t)d[26] << 24) | ((uint32_t)d[27] << 16) | ((uint32_t)d[28] << 8) | d[29];
+  uint32_t dip = ((uint32_t)d[30] << 24) | ((uint32_t)d[31] << 16) | ((uint32_t)d[32] << 8) | d[33];
+  printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H25\","
+         "\"location\":\"uthernet2.c:u2_fc_tcp\",\"message\":\"tcp4\","
+         "\"timestamp\":%llu,\"data\":{\"dir\":\"%s\",\"sip\":\"%08lx\",\"dip\":\"%08lx\","
+         "\"sport\":%u,\"dport\":%u,\"flags\":%u,\"seq\":%lu,\"len\":%u,"
+         "\"da\":\"%02x%02x%02x\"}}\n",
+         (unsigned long long)(time_us_64() / 1000u), dir, (unsigned long)sip, (unsigned long)dip,
+         (unsigned)sport, (unsigned)dport, (unsigned)flags, (unsigned long)seq, (unsigned)len,
+         (unsigned)d[3], (unsigned)d[4], (unsigned)d[5]);
 }
 /* #endregion */
 #endif

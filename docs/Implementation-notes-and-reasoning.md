@@ -3147,6 +3147,73 @@ moves to the byte-value/delivery path with the wrap left alone.
 
 ---
 
+## 1dk. Root cause found: the host reads 2 bytes past the ring end and consumes them (2026-09-03)
+
+Second `U2_RX_AUDIT` capture (123 records, 424 socket-0 RECVs, ~380 s). The two probes came back
+with a perfect correlation — at **every** sample, across the whole run:
+
+```
+hit_end == repoint == wrap_total == short
+```
+
+ending at `8 == 8 == 8 == 8`, with `def2=8` and `over=0`. Not one wrapping frame escaped, and
+nothing else ever failed.
+
+### What that proves
+
+1. **`wrap_total == hit_end`** — every frame whose data crosses the ring end causes
+   `auto_increment` to carry the address off the end. The host does **not** pre-split its read at
+   the boundary; it relies on the pointer and only reacts afterwards.
+2. **`hit_end == repoint`** — every crossing is followed by the host writing the address registers.
+   It notices and re-points.
+3. **`wrap_total == short`, deficit always exactly 2** — the arithmetic closes:
+
+   > in-window reads (`seen`) + 2 out-of-window reads == `advance` == `frame_len + 2`
+
+   The host issued exactly the right *number* of reads for the record, but **2 of them were served
+   from `0x7000`–`0x7001`** — socket 1's region, which the producer never writes — and it never
+   read the 2 real bytes sitting at the wrapped ring base. **Two bytes of every wrapping frame are
+   foreign data. That is the bad checksum.**
+
+`over = 0` across 424 frames also re-confirms this is not a bookkeeping artifact (§1dj): had those
+2 reads simply been credited to an adjacent RECV, that neighbour would have shown `advance + 2`.
+
+### Rate check against the reported symptom
+
+Every wrapping frame is corrupt, so the corruption rate is just the wrap rate: one per 4 KiB of RX.
+With 784-byte frames that is `4096/786 ≈ 5.2` → **one bad frame in ~5**, and with full-MTU frames
+`4096/1516 ≈ 2.7` → **one in ~3**. That is the operator's "every 3rd, or 6th packet" exactly. The
+observed 8/424 (1.9 %) in this run is lower only because wget never started, so there was little
+bulk traffic and few large frames — consistent, not contradictory.
+
+### Reconciling with §1dg
+
+§1dg forced `receive_size` to 8192, which moved the **producer's** wrap, the RSR arithmetic, and the
+host's `rd & mask` relationship all at once — a far larger change than the actual defect, and it
+broke everything. The real defect is narrow: `auto_increment()` wraps only at `0x6000`/`0x8000`, so
+it does not wrap at the **active socket's** ring end. Nothing about the producer or the buffer sizes
+is wrong.
+
+### One detail still gates the fix
+
+The obvious fix is to wrap the address at the socket ring boundary. Whether that is a fix or a new
+bug depends on the host's **re-point target**:
+
+- target `ring_base + 2` — the host has already accounted for the 2 bytes it consumed, so wrapping
+  hands it the correct wrapped bytes and the record is assembled whole. **Fix works.**
+- target `ring_base + 0` — the host intends to re-read from the start of the wrapped tail, so
+  wrapping would make it read those 2 bytes twice, duplicating them and leaving the frame broken.
+  **Fix would be wrong**, and the correct change is elsewhere.
+
+Captured on the address-register **write** path only (`u2_aud_tgt`), armed on the `ADDRESS_HIGH`
+write and recorded once the low byte lands. `read_value` stays at 12 instructions versus 9 for the
+audit-free baseline — unchanged from §1dj, so the detection regression is not re-introduced.
+
+**References:** `pico/uthernet2.c` (`auto_increment`, `u2_audit_note_read`, `U2_HandleBusAccess`
+address-write path, `U2_RxAuditReport`); §1cx, §1dg, §1dh, §1di, §1dj.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

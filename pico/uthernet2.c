@@ -211,6 +211,20 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
  * elsewhere (H9) — in which case wrapping would duplicate 2 bytes and make things worse. */
 static uint16_t u2_aud_ring_end;
 volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
+
+/* hit_end == repoint == wrap_total == short exactly, at every sample: on every wrapping frame the
+ * address runs off the ring end, the host reads 2 bytes there, then re-points. Since total reads
+ * (in-window + 2) == advance, the host read the right *count* of bytes but 2 of them came from
+ * 0x7000+ where the producer never writes, and it re-pointed 2 bytes into the record's tail.
+ *
+ * One detail still decides whether wrapping the address at the ring boundary is a fix or a new
+ * bug: the re-point TARGET. If the host re-points to ring_base+2 it has already accounted for the
+ * 2 bytes it consumed, so wrapping hands it the correct bytes and the frame is whole. If it
+ * re-points to ring_base+0, wrapping would make it read those 2 bytes twice and the frame stays
+ * broken. Captured on the *write* path only — nothing added to the read hot path. */
+static uint8_t u2_aud_tgt_arm;
+volatile uint16_t g_u2_aud_tgt[4];
+volatile uint32_t g_u2_aud_tgt_n;
 /* #endregion */
 #endif
 
@@ -1100,6 +1114,19 @@ void U2_RxAuditReport(void) {
              (unsigned long)g_u2_audit_wrap_total, (unsigned long)g_u2_audit_short,
              (unsigned)u2_aud_ring_end);
 
+  /* H9 decider: where the host re-points to after over-reading the ring end. base+2 means
+   * wrapping the address is the fix; base+0 means wrapping would duplicate 2 bytes. */
+  U2_DBG_LOG("H9", "uthernet2.c:U2_HandleBusAccess", "repoint targets",
+             "\"n\":%lu,\"base\":%u,\"t0\":%u,\"t1\":%u,\"t2\":%u,\"t3\":%u,"
+             "\"off0\":%d,\"off1\":%d,\"off2\":%d,\"off3\":%d",
+             (unsigned long)g_u2_aud_tgt_n, (unsigned)u2_sockets[0].receive_base,
+             (unsigned)g_u2_aud_tgt[0], (unsigned)g_u2_aud_tgt[1],
+             (unsigned)g_u2_aud_tgt[2], (unsigned)g_u2_aud_tgt[3],
+             (int)g_u2_aud_tgt[0] - (int)u2_sockets[0].receive_base,
+             (int)g_u2_aud_tgt[1] - (int)u2_sockets[0].receive_base,
+             (int)g_u2_aud_tgt[2] - (int)u2_sockets[0].receive_base,
+             (int)g_u2_aud_tgt[3] - (int)u2_sockets[0].receive_base);
+
   /* H4: is core 0 being starved (blocking UART writes) long enough to stall Contiki? */
   U2_DBG_LOG("H4", "uthernet2.c:U2_RxAuditReport", "core0 service gaps",
              "\"polls\":%lu,\"gap_max_us\":%lu,\"gap_gt5ms\":%lu,\"gap_gt20ms\":%lu,"
@@ -1213,14 +1240,28 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
       /* #region agent log — H7/H9: re-pointing while already past the ring end means the host
        * noticed and will discard whatever it read there. Write path, so off the read hot path. */
       if (u2_aud_ring_end && u2_data_address >= u2_aud_ring_end &&
-          u2_data_address < (uint16_t)(u2_aud_ring_end + 0x1000u))
+          u2_data_address < (uint16_t)(u2_aud_ring_end + 0x1000u)) {
         g_u2_aud_repoint++;
+        u2_aud_tgt_arm = 1; /* capture the target once the low byte lands */
+      }
       /* #endregion */
 #endif
       u2_data_address = (uint16_t)((data << 8) | (u2_data_address & 0x00FF));
       break;
     case U2_C0X_ADDRESS_LOW:
       u2_data_address = (uint16_t)((data << 0) | (u2_data_address & 0xFF00));
+#if U2_RX_AUDIT
+      /* #region agent log — the completed re-point target (see note at u2_aud_tgt). */
+      if (u2_aud_tgt_arm) {
+        u2_aud_tgt_arm = 0;
+        uint32_t n = g_u2_aud_tgt_n;
+        if (n < 4u) {
+          g_u2_aud_tgt[n] = u2_data_address;
+          g_u2_aud_tgt_n = n + 1u;
+        }
+      }
+      /* #endregion */
+#endif
       break;
     case U2_C0X_DATA_PORT:
       write_value(data);

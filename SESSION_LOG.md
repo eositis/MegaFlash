@@ -6,6 +6,8 @@ This project’s local log. One log per project; stored in the project root.
 
 ## 2026-09-04
 
+- **Release V1.2.4-eo (0x0024):** `cmakeall.sh` Release pico_w + pico2_w; `U2_FIRSTCONN=0` / `U2_RX_AUDIT=0` (no NDJSON symbols). Artifacts: `pico/_releases/V1.2.4-eo/`, `optionB/megaflash-optionB-pico2w.uf2`.
+
 - **Operator confirmed fixed:** first-connect and checksum errors both resolved (further soak testing planned). Commit fix state; Release bump next.
 
 - **§1dz — PSM + 60 B pad did not get a SYN-ACK.** Five 1026 SYNs `len=60` `da=2cbbf0`, **zero** `dir=in`/`rx` TCP. Removed PM2-off. Kept TX pad. Incremental NAT 1026→41226 (RFC 1624) to re-test the 1026 black hole without the old full-checksum rewrite. Image: `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.

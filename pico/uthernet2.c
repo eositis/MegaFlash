@@ -234,6 +234,12 @@ volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
 #define U2_TRC_MAX 64u
 #define U2_TRC_TAIL 20u
 #define U2_TRC_HIGH 0x10000u
+/* §1dn: paired with each entry, the LIVE Sn_RX_RD the host can see at that instant. Both captured
+ * wraps split as if the record began 2 bytes before the pointer the host had just written, so the
+ * question is whether our Sn_RX_RD agrees with that pointer or trails it by 2. Equal means the
+ * driver's split is its own arithmetic; short by 2 means our RD lags the record start and the
+ * defect is ours. Read straight out of u2_memory because that is exactly what the host reads. */
+static volatile uint16_t u2_trc_rd[U2_TRC_MAX];
 static volatile uint32_t u2_trc[U2_TRC_MAX];
 static volatile uint32_t u2_trc_w;      /* free-running write index; & (U2_TRC_MAX-1) to index */
 static volatile uint32_t u2_trc_freeze; /* 0 = running, else entries left before freezing */
@@ -246,9 +252,11 @@ static uint32_t u2_audit_reads; /* defined with the audit counters below */
 static void U2_BUS_RAM(u2_trc_note)(uint32_t kind) {
   if (u2_trc_done)
     return;
-  uint32_t w = u2_trc_w;
-  u2_trc[w & (U2_TRC_MAX - 1u)] = ((uint32_t)(u2_audit_reads & 0x7FFFu) << 17) | kind | u2_data_address;
-  u2_trc_w = w + 1u;
+  uint32_t w = u2_trc_w & (U2_TRC_MAX - 1u);
+  u2_trc[w] = ((uint32_t)(u2_audit_reads & 0x7FFFu) << 17) | kind | u2_data_address;
+  u2_trc_rd[w] = (uint16_t)(((uint16_t)u2_memory[0x0400 + W5100_SN_RX_RD0] << 8)
+                            | u2_memory[0x0400 + W5100_SN_RX_RD1]);
+  u2_trc_w++;
   if (u2_trc_freeze && --u2_trc_freeze == 0u)
     u2_trc_done = 1;
 }
@@ -1161,10 +1169,17 @@ void U2_RxAuditReport(void) {
     for (uint32_t k = 0; k < total; k++) {
       uint32_t e = u2_trc[(start + k) & (U2_TRC_MAX - 1u)];
       uint16_t a = (uint16_t)(e & 0xFFFFu);
+      uint16_t rd = u2_trc_rd[(start + k) & (U2_TRC_MAX - 1u)];
+      uint16_t msk = (uint16_t)(u2_sockets[0].receive_size - 1u);
+      /* rd_off is the host-visible Sn_RX_RD as a ring offset; skew is pointer minus rd_off, the
+       * §1dn decider. Consistent skew of 2 on the pointer the host writes means our RD trails the
+       * record start; skew 0 means the driver's own split arithmetic is 2 late. */
       U2_DBG_LOG("H10", "uthernet2.c:U2_HandleBusAccess", "pointer trace",
-                 "\"i\":%lu,\"reg\":\"%s\",\"addr\":%u,\"off\":%d,\"reads\":%u,\"ring_end\":%u",
+                 "\"i\":%lu,\"reg\":\"%s\",\"addr\":%u,\"off\":%d,\"reads\":%u,"
+                 "\"rd\":%u,\"rd_off\":%u,\"skew\":%d,\"ring_end\":%u",
                  (unsigned long)k, (e & U2_TRC_HIGH) ? "hi" : "lo", (unsigned)a,
-                 (int)a - (int)base, (unsigned)(e >> 17), (unsigned)u2_aud_ring_end);
+                 (int)a - (int)base, (unsigned)(e >> 17), (unsigned)rd, (unsigned)(rd & msk),
+                 (int)(a - base) - (int)(rd & msk), (unsigned)u2_aud_ring_end);
     }
   }
 

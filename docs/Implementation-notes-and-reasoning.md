@@ -3360,6 +3360,75 @@ address-write path, `U2_RxAuditReport`); §1dh–§1dl.
 
 ---
 
+## 1dn. Both wraps split as if the record began 2 bytes earlier than the pointer (2026-09-03)
+
+Tracing both address registers (§1dm) made the driver's loop legible and produced a second wrap to
+compare against the first.
+
+### The loop, now unambiguous
+
+Pointer sets are always `hi` then `lo`, so the `hi` entry shows a transient address with the old
+low byte and the `lo` entry shows the settled target. Per frame: point at Sn_RX_RSR, point at the
+record, read the **entire record including its 2-byte MACRAW header** in one burst, write
+Sn_RX_RD, issue RECV. Record starts tile exactly with the read counts — 3413 (+62) → 3475 (+65) →
+3540 (+65) → 3605 (+786) → 295 — which confirms the pointer is the record start and the burst is
+the whole record.
+
+### The wrap, entries 42–46
+
+| entry | reg | address | ring offset | reads |
+|---|---|---|---|---|
+| 43 | lo | 28181 | 3605 | 0 |
+| 44 | **hi** | 24578 | **2** | 493 |
+| 45 | lo | 24576 | **0** | 493 |
+| 46 | hi | 1061 (register) | – | 786 |
+
+Entry 44 is the payoff of tracing the high write. The burst ended with the address at `0x7002`, so
+the `hi` write of `0x60` alone produced `0x6002` — ring offset 2, exactly the correct resume point.
+The host then wrote `lo = 0x00`, moving it to offset 0. So the re-point to offset 0 is deliberate
+and not an artifact of only seeing one register.
+
+### The signature is identical across both captures
+
+| record start | correct split | host split | burst 1 ends | host split as if start were |
+|---|---|---|---|---|
+| 3383 | 713 / 73 | **715 / 71** | offset 4098 = end + 2 | 3381 = start − 2 |
+| 3605 | 491 / 295 | **493 / 293** | offset 4098 = end + 2 | 3603 = start − 2 |
+
+Both times the total is exactly 786 and matches the `Sn_RX_RD` advance, and both times burst 1
+overshoots the ring end by 2 while burst 2 comes up 2 short. **The host splits as if the record
+began 2 bytes before the pointer it just wrote.**
+
+### Why no fix yet, again
+
+The split is 2 late relative to the pointer, so no auto-increment behaviour reconciles it. Wrapping
+at the socket boundary would make burst 1 correct but leaves burst 2 starting at offset 0 when it
+should start at offset 2 — still duplicating 2 bytes and still dropping the record's last 2. Since
+a real W5100 returns socket 1's buffer at `0x7000` just as we do, a driver doing this unaided would
+fail on real hardware, so the driver is very likely working from a value we hand it.
+
+### The decider
+
+`size − 493 = 3603` and `size − 715 = 3381` are both exactly `pointer − 2`. If the driver derives
+its split from `Sn_RX_RD` — which it must, as that is the only record-position value it reads — then
+either our `Sn_RX_RD` trails the record start by 2 (our defect, and the split is correct), or it
+agrees with the pointer (the split is the driver's own arithmetic).
+
+So each trace entry now also carries the **live `Sn_RX_RD`**, read straight from `u2_memory` because
+that is precisely the byte pair the host reads, reported as `rd`, `rd_off`, and
+`skew = pointer_off − rd_off`:
+
+- **`skew == 2` on the pointer the host writes** — our RD lags the record start, the driver is
+  right, and the fix belongs in our RD/header accounting.
+- **`skew == 0`** — RD agrees with the pointer and the 2-byte error is in the driver's split, which
+  redirects the search to what else it reads (Sn_RX_RSR, the header value we store, RMSR).
+
+Write path only; `read_value` stays at 14 instructions, unchanged from §1dm.
+
+**References:** `pico/uthernet2.c` (`u2_trc_note`, `u2_trc_rd`, `U2_RxAuditReport`); §1dh–§1dm.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

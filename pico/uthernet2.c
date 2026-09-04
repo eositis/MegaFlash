@@ -12,7 +12,7 @@
 #include "pico/time.h"
 #include <stdio.h>
 #include <string.h>
-#if U2_RX_AUDIT
+#if U2_RX_AUDIT || U2_FIRSTCONN
 #include "pico/stdio.h"
 #include "pico/stdio_uart.h"
 #endif
@@ -50,6 +50,9 @@
  * comes out BELOW the host's Sn_RX_RD advance, and the deficit is exactly the number of lost
  * cycles. Frames the driver discards without reading show up as seen==0 (counted separately as
  * "skip") so they cannot be mistaken for drops. */
+#ifndef U2_FIRSTCONN
+#define U2_FIRSTCONN 0
+#endif
 #ifndef U2_RX_AUDIT
 #define U2_RX_AUDIT 0
 #endif
@@ -192,6 +195,63 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
     d += (int)size;
   return (uint16_t)d;
 }
+
+#if U2_FIRSTCONN
+/* #region agent log
+ * §1dr first-connection trace.
+ *
+ * Symptom: the first connection after a socket OPEN always fails and an immediate retry always
+ * succeeds. What decides that is the *order* of a handful of rare events around the first
+ * exchange, not any per-cycle detail, so record those events into a small ring at a few
+ * instructions each and print the whole thing exactly once, 20 s after the first OPEN. By then
+ * the first connection has long since failed, so the print cannot perturb what it is measuring —
+ * it was the *periodic* multi-line dump under U2_RX_AUDIT that stopped wget running at all.
+ *
+ * Hypotheses this separates:
+ *   H11  MFDROP with shar != stamac  -> the MF filter is eating the first unicast reply because
+ *        ip65 rewrote SHAR after OPEN put the STA MAC there.
+ *   H12  OPEN with hook=0            -> the netif input hook was never installed, so no RX at all.
+ *   H13  TXQ with no matching TXWIRE -> the first frame was accepted from the bus but never
+ *        reached the wire (queue full, pbuf, linkoutput, CYW43 not ready).
+ *   H14  RXDIVERT with legacy=1      -> a native MegaFlash operation (NTP) owned STA ingress.
+ *   H15  RXFULL                      -> the ring was unsized or full when the first reply landed.
+ */
+#define U2_FC_MAX 64
+#define U2_FC_PER_CODE 8
+typedef struct {
+  uint32_t t_ms, a, b;
+  uint8_t code;
+} u2_fc_evt_t;
+static u2_fc_evt_t u2_fc[U2_FC_MAX];
+static volatile uint8_t u2_fc_n, u2_fc_done;
+static uint8_t u2_fc_seen[16];
+static volatile uint64_t u2_fc_open_us;
+
+void u2_fc_note(uint8_t code, uint32_t a, uint32_t b) {
+  if (u2_fc_done)
+    return;
+  uint8_t c = (uint8_t)(code & 15u);
+  /* Per-code budget: ambient broadcast traffic would otherwise fill the ring with RXOK and crowd
+   * out the one MFDROP or TXFAIL that actually answers the question. */
+  if (u2_fc_seen[c] >= U2_FC_PER_CODE)
+    return;
+  u2_fc_seen[c]++;
+  uint8_t n = u2_fc_n;
+  if (n >= U2_FC_MAX)
+    return;
+  u2_fc[n].t_ms = (uint32_t)(time_us_64() / 1000u);
+  u2_fc[n].code = c;
+  u2_fc[n].a = a;
+  u2_fc[n].b = b;
+  u2_fc_n = (uint8_t)(n + 1u);
+}
+
+void u2_fc_arm(void) {
+  if (!u2_fc_open_us)
+    u2_fc_open_us = time_us_64();
+}
+/* #endregion */
+#endif
 
 #if U2_RX_AUDIT
 /* #region agent log
@@ -586,8 +646,19 @@ static void U2_BUS_RAM(write_common_register)(uint16_t address, uint8_t value) {
   if ((address >= W5100_GAR0 && address <= W5100_GAR3) ||
       (address >= W5100_SUBR0 && address <= W5100_SUBR3) ||
       (address >= W5100_SHAR0 && address <= W5100_SHAR5) ||
-      (address >= W5100_SIPR0 && address <= W5100_SIPR3))
+      (address >= W5100_SIPR0 && address <= W5100_SIPR3)) {
     u2_memory[address] = value;
+#if U2_FIRSTCONN
+    /* #region agent log — H11: ip65 writing SHAR *after* OPEN put the STA MAC there would point
+     * the MF filter at a MAC no reply is ever addressed to. Fires on the last SHAR byte so the
+     * logged value is the complete address. Common-register write path, not the read hot path. */
+    if (address == W5100_SHAR5)
+      u2_fc_note(2, 0,
+                 ((uint32_t)u2_memory[W5100_SHAR0 + 3] << 16) |
+                     ((uint32_t)u2_memory[W5100_SHAR0 + 4] << 8) | u2_memory[W5100_SHAR0 + 5]);
+    /* #endregion */
+#endif
+  }
   else if (address == W5100_RMSR)
     set_rx_sizes(address, value);
   else if (address == W5100_TMSR)
@@ -719,11 +790,30 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
     int is_ours = dm[0] == u2_memory[W5100_SHAR0 + 0] && dm[1] == u2_memory[W5100_SHAR0 + 1] &&
                   dm[2] == u2_memory[W5100_SHAR0 + 2] && dm[3] == u2_memory[W5100_SHAR0 + 3] &&
                   dm[4] == u2_memory[W5100_SHAR0 + 4] && dm[5] == u2_memory[W5100_SHAR0 + 5];
-    if (!is_broadcast && !is_ours)
+    if (!is_broadcast && !is_ours) {
+#if U2_FIRSTCONN
+      /* #region agent log — H11 smoking gun: what we dropped, and what SHAR was at the time. */
+      u2_fc_note(8, ((uint32_t)data[12] << 8) | data[13],
+                 ((uint32_t)dm[3] << 16) | ((uint32_t)dm[4] << 8) | dm[5]);
+      /* #endregion */
+#endif
       return;
+    }
   }
   uint16_t size = s->receive_size;
-  if (size == 0) return;
+  if (size == 0) {
+#if U2_FIRSTCONN
+    /* #region agent log — H15: reply arrived before the host had sized the ring via RMSR. */
+    u2_fc_note(10, len, 0);
+    /* #endregion */
+#endif
+    return;
+  }
+#if U2_FIRSTCONN
+  /* #region agent log — H11/H12 control: frames that did pass the filter and reach the ring. */
+  u2_fc_note(9, len, (len >= 14) ? (((uint32_t)data[12] << 8) | data[13]) : 0u);
+  /* #endregion */
+#endif
   uint16_t mask = size - 1;
   uint16_t base = s->receive_base;
   uint16_t total = (uint16_t)(2 + len);
@@ -875,8 +965,20 @@ static int send_data(int i) {
         buf[j] = u2_memory[base + ((rd + j) & mask)];
       /* Log TX only from core-0 linkoutput (`u2_send_macraw_core0`). A second line here made
        * every SEND look like a duplicate frame; the queue copies once and drains once. */
-      if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0)
+      if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0) {
+#if U2_FIRSTCONN
+        /* #region agent log — H13: bus-side send refused (queue full / not MACRAW). */
+        u2_fc_note(4, (uint32_t)n, (n >= 14) ? (((uint32_t)buf[12] << 8) | buf[13]) : 0u);
+        /* #endregion */
+#endif
         return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
+      }
+#if U2_FIRSTCONN
+      /* #region agent log — H13: accepted from the bus. A TXQ with no matching TXWIRE means the
+       * host was told the frame went out when it never reached the wire. */
+      u2_fc_note(3, (uint32_t)n, (n >= 14) ? (((uint32_t)buf[12] << 8) | buf[13]) : 0u);
+      /* #endregion */
+#endif
       consumed = (uint16_t)data_len;
     }
   }
@@ -930,6 +1032,16 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
       case W5100_SN_MR_MACRAW: {
         int ok = (U2_Net_OpenMacraw(i) == 0);
         U2_MonSockOpen(i, mr, port, ok);
+#if U2_FIRSTCONN
+        /* #region agent log — H12: was the netif input hook actually installed, and was CYW43 up?
+         * Also snapshots SHAR right after OPEN so a later SHARW proves ip65 overwrote it (H11). */
+        u2_fc_arm();
+        u2_fc_note(1, U2_NetDiagState() | ((uint32_t)mr << 24),
+                   ((uint32_t)u2_memory[W5100_SHAR0 + 3] << 16) |
+                       ((uint32_t)u2_memory[W5100_SHAR0 + 4] << 8) | u2_memory[W5100_SHAR0 + 5]);
+        u2_fc_note(11, 0, U2_NetDiagStaMac24());
+        /* #endregion */
+#endif
         if (ok) {
           u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_MACRAW;
 #if UTHERNET2_DEBUG
@@ -1196,6 +1308,42 @@ void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
          "}}\n",                                                                                   \
          (unsigned long long)(time_us_64() / 1000u), __VA_ARGS__)
 
+#endif
+
+#if U2_FIRSTCONN
+/* #region agent log — §1dr one-shot dump; see the note at u2_fc_note for why it fires once. */
+#define U2_FC_LOG(fmt_, ...)                                                                       \
+  printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H11\","             \
+         "\"location\":\"uthernet2.c:u2_fc_note\",\"message\":\"first-connection trace\","         \
+         "\"timestamp\":%llu,\"data\":{" fmt_ "}}\n",                                              \
+         (unsigned long long)(time_us_64() / 1000u), __VA_ARGS__)
+
+void U2_FirstConnPoll(void) {
+  if (u2_fc_done || !u2_fc_open_us)
+    return;
+  if ((time_us_64() - u2_fc_open_us) < 20000000ull)
+    return;
+  u2_fc_done = 1; /* stops recording too, so the dump sees a stable snapshot */
+  static const char *const nm[] = {"?",      "OPEN", "SHARW",  "TXQ",  "TXNAK", "TXWIRE",
+                                   "TXFAIL", "RXDIVERT", "MFDROP", "RXOK", "RXFULL", "STAMAC"};
+  uint8_t n = u2_fc_n;
+  for (uint8_t k = 0; k < n; k++) {
+    uint8_t c = u2_fc[k].code;
+    U2_FC_LOG("\"i\":%u,\"t_ms\":%lu,\"ev\":\"%s\",\"a\":\"%08lx\",\"b\":\"%08lx\"", (unsigned)k,
+              (unsigned long)u2_fc[k].t_ms, (c < (sizeof(nm) / sizeof(nm[0]))) ? nm[c] : "?",
+              (unsigned long)u2_fc[k].a, (unsigned long)u2_fc[k].b);
+  }
+  U2_FC_LOG("\"summary\":1,\"events\":%u,\"truncated\":%d,\"shar\":\"%02x%02x%02x%02x%02x%02x\","
+            "\"net\":\"%08lx\",\"stamac\":\"%06lx\"",
+            (unsigned)n, (int)(n >= U2_FC_MAX), u2_memory[W5100_SHAR0 + 0],
+            u2_memory[W5100_SHAR0 + 1], u2_memory[W5100_SHAR0 + 2], u2_memory[W5100_SHAR0 + 3],
+            u2_memory[W5100_SHAR0 + 4], u2_memory[W5100_SHAR0 + 5],
+            (unsigned long)U2_NetDiagState(), (unsigned long)U2_NetDiagStaMac24());
+}
+/* #endregion */
+#endif
+
+#if U2_RX_AUDIT
 void U2_RxAuditReport(void) {
   /* H1/H2: SHORT>0 proves dropped bus cycles. SHORT==0 while checksums still fail proves every
    * byte was *counted* correctly, moving the fault to the byte values (PIO/prefetch delivery). */
@@ -1280,7 +1428,7 @@ void U2_RxAuditReport(void) {
 #endif
 
 void U2_Init(void) {
-#if U2_RX_AUDIT
+#if U2_RX_AUDIT || U2_FIRSTCONN
   /* The audit must run in a Release build to keep the bus path's normal timing, but Release
    * disables UART stdio (main.c) leaving only USB CDC — and a connected USB console gates the
    * bus loop off entirely (§1da), so USB cannot be the sink here. U2_Init runs immediately after

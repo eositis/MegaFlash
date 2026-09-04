@@ -3645,6 +3645,46 @@ Producer path only — no bus-path cost, and `read_value` is untouched.
 
 ---
 
+## 1dr. New symptom: the first connection after OPEN always fails, the retry always works (2026-09-03)
+
+Reported after the §1dq wrap fix, but explicitly **pre-existing** ("consistent in the last previous
+tests"), so it is a separate defect and not a regression from the shim. Contiki fails its first
+connection and succeeds when the request is resubmitted; wget has no retry, so it just fails.
+
+wget is a fresh program doing a full ip65 init each time, so this is not "first OPEN since boot vs
+second". It is **the first exchange after any OPEN**, which points at something reset or left cold
+by OPEN that one round trip warms up.
+
+### Hypotheses
+
+| id | mechanism | signature in the trace |
+|---|---|---|
+| H11 | ip65 writes SHAR *after* `U2_Net_OpenMacraw` put the STA MAC there, so the MF filter compares replies against a MAC nothing is addressed to and drops them silently. The first successful core-0 TX restores SHAR, which is exactly why a retry works. | `SHARW` after `OPEN`, then `MFDROP` with `b` = STA MAC |
+| H12 | The netif input hook is only installed inside `U2_Net_OpenMacraw` and only when `cyw43_is_initialized && sta->input && !u2_saved_netif_input`. If it is not installed there is no RX at all. | `OPEN` with bit 3 clear, or `RXDIVERT a=2` |
+| H13 | From core 1 `U2_Net_SendMacraw` only *enqueues*; it returns success and `Sn_TX_RD` advances before `linkoutput` has run. If the drain then fails the host believes it sent a frame that never left. | `TXQ` with no matching `TXWIRE`, or `TXFAIL` |
+| H14 | A native MegaFlash operation (NTP via `GetNetworkTime()`) holds `BeginLegacyOperation`, so STA ingress goes to lwIP instead of the ip65 ring. | `RXDIVERT a=1` |
+| H15 | The reply lands before the host has sized the ring via RMSR. | `RXFULL` |
+
+### Instrumentation, and why it is shaped this way
+
+The previous audit build stopped wget running at all, so the constraint here is that the
+measurement must not perturb the thing measured. Three properties:
+
+- **Bounded ring, no printing during the run.** 64 events of `{t_ms, code, a, b}`; the entire dump
+  is emitted **once**, 20 s after the first OPEN, by which time the first connection has long since
+  failed. It was the *periodic* multi-line dump that starved core 0 before.
+- **Per-code budget of 8.** Ambient broadcast traffic would otherwise fill the ring with `RXOK` and
+  crowd out the single `MFDROP` or `TXFAIL` that answers the question.
+- **`read_value` untouched.** `objdump` confirms it is byte-identical (18 bytes) between the clean
+  build and the trace build. §1dj's detection regression was caused by growing that function; the
+  only bus-path addition here is on the common-register *write* path, which is rare and cold.
+
+**References:** `pico/uthernet2.c` (`u2_fc_note`, `u2_fc_arm`, `U2_FirstConnPoll`);
+`pico/uthernet2_net.cpp` (`U2_NetDiagState`, `U2_NetDiagStaMac24`, `u2_send_macraw_core0`,
+`u2_netif_input_wrapper`); `U2_FIRSTCONN` in `pico/CMakeLists.txt`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

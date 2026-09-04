@@ -388,6 +388,13 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
 
   /* Native MegaFlash (NTP/TFTP/TestWifi): lwIP owns STA ingress; do not copy into ip65 ring. */
   if (legacy) {
+#if U2_FIRSTCONN
+    /* #region agent log — H14: a native MegaFlash op (NTP) owns STA ingress, so this frame never
+     * reaches the ip65 ring. Only the diverted cases are recorded; normal deliveries would flood
+     * the trace. */
+    u2_fc_note(7, 1, p->tot_len);
+    /* #endregion */
+#endif
     if (u2_saved_netif_input)
       return u2_saved_netif_input(p, inp);
     pbuf_free(p);
@@ -408,11 +415,43 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
     return ERR_OK;
   }
 
+#if U2_FIRSTCONN
+  /* #region agent log — H12: socket 0 is not MACRAW (or no callback), so ip65 gets nothing. */
+  u2_fc_note(7, 2, p->tot_len);
+  /* #endregion */
+#endif
   if (u2_saved_netif_input)
     return u2_saved_netif_input(p, inp);
   pbuf_free(p);
   return ERR_ARG;
 }
+
+#if U2_FIRSTCONN
+/* #region agent log — §1dr: expose the net-layer readiness bits the bus side cannot see, so the
+ * OPEN event can record whether CYW43, the netif, the input hook and the link were up. */
+uint32_t U2_NetDiagState(void) {
+  struct netif *sta = u2_cyw43_sta_netif();
+  uint32_t v = 0;
+  if (cyw43_is_initialized(&cyw43_state)) v |= 1u;
+  if (sta) v |= 2u;
+  if (sta && sta->input) v |= 4u;
+  if (u2_saved_netif_input) v |= 8u;              /* hook installed */
+  if (sta && sta->hwaddr_len == 6) v |= 16u;
+  if (sta && netif_is_up(sta)) v |= 32u;
+  if (sta && netif_is_link_up(sta)) v |= 64u;
+  if (GetNetworkPump().IsLegacyOperationActive()) v |= 128u;
+  if (sockets[0].type == PCB_MACRAW) v |= 256u;
+  if (push_rx_macraw_cb) v |= 512u;
+  return v;
+}
+
+uint32_t U2_NetDiagStaMac24(void) {
+  struct netif *sta = u2_cyw43_sta_netif();
+  if (!sta || sta->hwaddr_len != 6) return 0;
+  return ((uint32_t)sta->hwaddr[3] << 16) | ((uint32_t)sta->hwaddr[4] << 8) | sta->hwaddr[5];
+}
+/* #endregion */
+#endif
 } // extern "C"
 
 extern "C" {
@@ -475,11 +514,22 @@ static void u2_macraw_tx_drain(void) {
 
 static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   struct netif *netif = u2_cyw43_sta_netif();
-  if (!cyw43_is_initialized(&cyw43_state) || !netif || !netif->linkoutput || netif->hwaddr_len != 6)
+  if (!cyw43_is_initialized(&cyw43_state) || !netif || !netif->linkoutput || netif->hwaddr_len != 6) {
+#if U2_FIRSTCONN
+    /* #region agent log — H13 reason 1: CYW43/netif not ready, frame stays queued. */
+    u2_fc_note(6, 1, len);
+    /* #endregion */
+#endif
     return false;
+  }
   struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
   if (!p) {
     u2_macraw_tx_pbuf_fail++;
+#if U2_FIRSTCONN
+    /* #region agent log — H13 reason 2: pbuf exhaustion. */
+    u2_fc_note(6, 2, len);
+    /* #endregion */
+#endif
     return false;
   }
   memcpy(p->payload, data, len);
@@ -506,9 +556,19 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   pbuf_free(p);
   if (err != ERR_OK) {
     u2_macraw_tx_lo_err++;
+#if U2_FIRSTCONN
+    /* #region agent log — H13 reason 3: the driver rejected the frame (link down / busy). */
+    u2_fc_note(6, 3, len);
+    /* #endregion */
+#endif
     return false;
   }
   U2_MonNetMacrawTx(i, len);
+#if U2_FIRSTCONN
+  /* #region agent log — H13: frame actually reached the wire. Pair with TXQ. */
+  u2_fc_note(5, len, (len >= 14) ? (((uint32_t)data[12] << 8) | data[13]) : 0u);
+  /* #endregion */
+#endif
   return true;
 }
 
@@ -735,6 +795,11 @@ void U2_Net_ServicePoll(void) {
   u2_eth_trace_try_install();
 #endif
   u2_macraw_tx_drain();
+#if U2_FIRSTCONN
+  /* #region agent log — §1dr: one-shot dump, 20 s after the first OPEN. */
+  U2_FirstConnPoll();
+  /* #endregion */
+#endif
 #if U2_RX_AUDIT
   /* #region agent log
    * Deliberately outside the NDEBUG guard: the audit has to run in a Release build so the bus

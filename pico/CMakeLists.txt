@@ -154,6 +154,12 @@ set(U2_MACRAW_COMPAT_DROP_OLDEST "0" CACHE STRING "1=MACRAW RX: discard unread o
 # Forces UART stdio up from U2_Init (Release normally has it off). cmake ... -DU2_RX_AUDIT=1
 set(U2_RX_AUDIT "0" CACHE STRING "1=[u2audit] RX delivery audit: served bytes vs host Sn_RX_RD advance (§1dh)")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_RX_AUDIT=${U2_RX_AUDIT})
+
+# §1dr first-connection trace. Records a bounded set of rare OPEN/SHAR/TX/RX events and prints them
+# ONCE, 20 s after the first socket OPEN, so it cannot perturb the first connection the way the
+# periodic U2_RX_AUDIT dump did (that stopped wget running at all). Also forces UART stdio up.
+set(U2_FIRSTCONN "0" CACHE STRING "1=one-shot first-connection event trace (§1dr)")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_FIRSTCONN=${U2_FIRSTCONN})
 # Debug-build usability (§1de). U2_MonPollFlush printf()s to a *blocking* UART on every core-0
 # iteration, so the stock 128-line budget costs ~10 KB (~0.9 s at 115200) per call and starves
 # NetworkPump_PollOnce — TCP handshakes then time out and the Debug build cannot connect at all,

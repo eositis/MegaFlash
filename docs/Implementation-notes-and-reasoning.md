@@ -3429,6 +3429,81 @@ Write path only; `read_value` stays at 14 instructions, unchanged from §1dm.
 
 ---
 
+## 1do. Our Sn_RX_RD is correct; the datasheet closes the wrap question; RSR is the last unmeasured input (2026-09-03)
+
+Third wrap captured, and the §1dn decider returned a clean answer.
+
+### skew = 0 — our Sn_RX_RD is exactly right
+
+At all three record starts the pointer the host writes equals our `Sn_RX_RD & mask`:
+
+| pointer offset | rd | rd_off | skew |
+|---|---|---|---|
+| 2678 | 2678 | 2678 | **0** |
+| 3464 | 3464 | 3464 | **0** |
+| 154 | 4250 | 154 | **0** |
+
+The third row also shows `Sn_RX_RD` is free-running past the ring size and the host masks it, exactly
+as the datasheet specifies. **The "our RD trails the record start by 2" branch of §1dn is REJECTED**,
+and with it the idea that the fix lives in our RD accounting.
+
+### The split formula, now exact on three wraps
+
+| record start | correct | host | burst1 − 2 | size − rd_off |
+|---|---|---|---|---|
+| 3383 | 713 / 73 | 715 / 71 | 713 | 713 |
+| 3605 | 491 / 295 | 493 / 293 | 491 | 491 |
+| 3464 | 632 / 154 | **634 / 152** | 632 | 632 |
+
+`burst1 = 2 + (size − rd_off)` every time. The host reads the 2-byte header and then a chunk sized
+for the *record* start rather than the post-header position, so it overruns the ring end by exactly
+the header size.
+
+The third wrap also validates the address arithmetic independently: before the re-point the pointer
+sat at `0x7002`, so the `hi` write of `0x60` produced `0x6002` (offset 2). Had the host read only
+632 it would have been at `0x7000` and the same write would have produced offset 0. Confirmed by the
+register case at entry 42, where the address had walked `0x0426 → 0x042A` across the four
+RSR/RX_RD reads and the `hi` write of `0x6D` correctly produced `0x6D2A`.
+
+### The datasheet closes the wrap question
+
+W5100 datasheet, Sn_RX_RD: *"There's a case that it exceeds the RX memory upper-bound of the socket
+while reading. In this case, read the receiving data to the upper-bound, and change the physical
+address to the gSn_RX_BASE. Next, read the rest."* The boundary is the socket's own block and
+**software is responsible for the wrap**. Our `auto_increment` deliberately not wrapping at the
+socket boundary is therefore **correct W5100 behaviour**, the proposed one-line "wrap at the ring
+end" fix is formally wrong, and §1dg's catastrophic failure is retro-explained rather than merely
+observed.
+
+Our MACRAW header is also confirmed correct: we write `len + 2`, matching the datasheet and the
+mainline Linux `w5100.c`, which does `rx_len = get_unaligned_be16(header) - 2`.
+
+### The last unmeasured input
+
+The in-tree ip65 driver (`tools/wget65-verbose/w5100.c`) shows where the chunk size comes from:
+
+```c
+uint16_t addr = get_word(reg[do_send]) & addr_mask[do_send] | addr_basis[do_send];
+set_addr(addr);
+return MIN(size, addr_limit[do_send] - addr);   // size = Sn_RX_RSR
+```
+
+The chunk is `MIN(Sn_RX_RSR, addr_limit − addr)`. Every term is now measured except **`Sn_RX_RSR`**,
+and RSR is derived rather than stored, so it has never appeared in any capture. With
+`addr_limit − addr = 632` a correct driver reads 632; something produced 634. Since our RD is right
+and the limit is fixed by it, RSR is the only remaining input that can move that number.
+
+Each trace entry therefore now carries the live `rsr` and the computed `limit = size − rd_off`
+beside `rd`/`skew`. Note the capture came from Contiki, whose driver differs from this one, so the
+formula is a lead rather than proof — but RSR is an input to any variant of it.
+
+Write path only; `read_value` unchanged at 14 instructions.
+
+**References:** `pico/uthernet2.c` (`u2_trc_note`, `u2_trc_rsr`, `U2_RxAuditReport`);
+`tools/wget65-verbose/w5100.c`; W5100 datasheet §Sn_RX_RD; §1dg, §1dk–§1dn.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

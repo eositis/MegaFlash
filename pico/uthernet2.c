@@ -239,6 +239,11 @@ volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
  * question is whether our Sn_RX_RD agrees with that pointer or trails it by 2. Equal means the
  * driver's split is its own arithmetic; short by 2 means our RD lags the record start and the
  * defect is ours. Read straight out of u2_memory because that is exactly what the host reads. */
+/* §1do: Sn_RX_RSR alongside Sn_RX_RD. ip65's w5100_data_request returns
+ * MIN(Sn_RX_RSR, addr_limit - addr), so the chunk the driver reads before it must re-point is a
+ * function of RSR and RSR alone once the limit is fixed — and RSR is the last value the driver
+ * reads that has never been measured. Computed live because RSR is derived, not stored. */
+static volatile uint16_t u2_trc_rsr[U2_TRC_MAX];
 static volatile uint16_t u2_trc_rd[U2_TRC_MAX];
 static volatile uint32_t u2_trc[U2_TRC_MAX];
 static volatile uint32_t u2_trc_w;      /* free-running write index; & (U2_TRC_MAX-1) to index */
@@ -256,6 +261,7 @@ static void U2_BUS_RAM(u2_trc_note)(uint32_t kind) {
   u2_trc[w] = ((uint32_t)(u2_audit_reads & 0x7FFFu) << 17) | kind | u2_data_address;
   u2_trc_rd[w] = (uint16_t)(((uint16_t)u2_memory[0x0400 + W5100_SN_RX_RD0] << 8)
                             | u2_memory[0x0400 + W5100_SN_RX_RD1]);
+  u2_trc_rsr[w] = u2_rx_used_bytes_live(0);
   u2_trc_w++;
   if (u2_trc_freeze && --u2_trc_freeze == 0u)
     u2_trc_done = 1;
@@ -1176,10 +1182,12 @@ void U2_RxAuditReport(void) {
        * record start; skew 0 means the driver's own split arithmetic is 2 late. */
       U2_DBG_LOG("H10", "uthernet2.c:U2_HandleBusAccess", "pointer trace",
                  "\"i\":%lu,\"reg\":\"%s\",\"addr\":%u,\"off\":%d,\"reads\":%u,"
-                 "\"rd\":%u,\"rd_off\":%u,\"skew\":%d,\"ring_end\":%u",
+                 "\"rd\":%u,\"rd_off\":%u,\"skew\":%d,\"rsr\":%u,\"limit\":%d,\"ring_end\":%u",
                  (unsigned long)k, (e & U2_TRC_HIGH) ? "hi" : "lo", (unsigned)a,
                  (int)a - (int)base, (unsigned)(e >> 17), (unsigned)rd, (unsigned)(rd & msk),
-                 (int)(a - base) - (int)(rd & msk), (unsigned)u2_aud_ring_end);
+                 (int)(a - base) - (int)(rd & msk),
+                 (unsigned)u2_trc_rsr[(start + k) & (U2_TRC_MAX - 1u)],
+                 (int)u2_sockets[0].receive_size - (int)(rd & msk), (unsigned)u2_aud_ring_end);
     }
   }
 

@@ -223,14 +223,35 @@ volatile uint32_t g_u2_aud_hit_end, g_u2_aud_repoint;
  *
  * The buffer overwrites freely until the address reaches the ring end, then records U2_TRC_TAIL
  * more entries and freezes — so the dump straddles one real wrap with its lead-in intact, rather
- * than showing the unrelated first 32 writes after boot. */
-#define U2_TRC_MAX 32u
-#define U2_TRC_TAIL 10u
+ * than showing the unrelated first 32 writes after boot.
+ *
+ * §1dm: BOTH address registers are traced now, tagged by U2_TRC_HIGH. Tracing only the low write
+ * left the trace blind to a HIGH-only re-point — and that is precisely how a driver wraps 0x7000
+ * back to 0x6000, since the low byte is already zero and only the high byte needs to change. An
+ * invisible re-point mid-burst would make a run of reads look contiguous when it is not, which is
+ * enough to invalidate the read-count arithmetic entirely. Doubled the depth to keep the same
+ * number of pointer moves in view. */
+#define U2_TRC_MAX 64u
+#define U2_TRC_TAIL 20u
+#define U2_TRC_HIGH 0x10000u
 static volatile uint32_t u2_trc[U2_TRC_MAX];
 static volatile uint32_t u2_trc_w;      /* free-running write index; & (U2_TRC_MAX-1) to index */
 static volatile uint32_t u2_trc_freeze; /* 0 = running, else entries left before freezing */
 static volatile uint8_t u2_trc_done;
 static uint8_t u2_trc_dumped; /* core 0 only */
+
+static uint32_t u2_audit_reads; /* defined with the audit counters below */
+
+/* Bus (write) path only — never reached from a read. */
+static void U2_BUS_RAM(u2_trc_note)(uint32_t kind) {
+  if (u2_trc_done)
+    return;
+  uint32_t w = u2_trc_w;
+  u2_trc[w & (U2_TRC_MAX - 1u)] = ((uint32_t)(u2_audit_reads & 0x7FFFu) << 17) | kind | u2_data_address;
+  u2_trc_w = w + 1u;
+  if (u2_trc_freeze && --u2_trc_freeze == 0u)
+    u2_trc_done = 1;
+}
 /* #endregion */
 #endif
 
@@ -466,8 +487,7 @@ volatile uint32_t g_u2_audit_wrapped;     /* mismatches whose consumed range cro
 /* Core 1 exclusively: the bus path increments it, the RECV handler reads it, and the pointer
  * trace snapshots it. Core 0 only ever sees it already packed into u2_trc, so it does not need
  * to be volatile — and dropping volatile keeps the increment off the hot path's load/store
- * round trip (§1dl). */
-static uint32_t u2_audit_reads;
+ * round trip (§1dl). Tentatively declared above for u2_trc_note. */
 
 /* Per-mismatch detail. printf() must never run on the bus path, so core 1 only fills this ring
  * and core 0 drains it in U2_RxAuditReport (§1di). */
@@ -493,15 +513,18 @@ volatile uint32_t g_u2_audit_wrap_total;
 /* Count every real host $C0C7 read. The prefetch path (U2_PeekDataPort -> read_value_at)
  * deliberately bypasses this, so peeks are never counted.
  *
- * §1dl: the window test that used to be here is GONE, and that is the point. Counting only reads
- * inside socket 0's ring made reads *past* the ring end invisible — precisely the quantity under
- * investigation — so a 2-byte deficit could not be told apart from 2 reads served from 0x7000.
- * Counting unconditionally makes the total comparable against the Sn_RX_RD advance directly, and
- * it is strictly *cheaper* than the windowed form (no struct load, no compare, no branch), so the
- * ~90 ns hot path gets faster than the build that already detected correctly. */
+ * §1dl dropped the old socket-window test because it hid reads *past* the ring end — the exact
+ * quantity under investigation. But counting unconditionally swept in the Sn_RX_RSR / Sn_RX_RD /
+ * Sn_SR reads the driver does between frames, which put every frame ~5 over and made the
+ * seen-vs-advance comparison useless (122 of 122 "over").
+ *
+ * §1dm keeps both properties with one compare against a constant: the whole 8 KiB RX block starts
+ * at W5100_RX_BASE, so this counts socket 0's ring *and* the region past its end at 0x7000, while
+ * excluding the register file below 0x6000. No struct load, so it is still cheaper than the
+ * original windowed form. */
 static inline void u2_audit_note_read(uint16_t addr) {
-  (void)addr;
-  u2_audit_reads++;
+  if (addr >= W5100_RX_BASE)
+    u2_audit_reads++;
 }
 #endif
 
@@ -1139,9 +1162,9 @@ void U2_RxAuditReport(void) {
       uint32_t e = u2_trc[(start + k) & (U2_TRC_MAX - 1u)];
       uint16_t a = (uint16_t)(e & 0xFFFFu);
       U2_DBG_LOG("H10", "uthernet2.c:U2_HandleBusAccess", "pointer trace",
-                 "\"i\":%lu,\"addr\":%u,\"off\":%d,\"reads\":%u,\"ring_end\":%u",
-                 (unsigned long)k, (unsigned)a, (int)a - (int)base,
-                 (unsigned)(e >> 16), (unsigned)u2_aud_ring_end);
+                 "\"i\":%lu,\"reg\":\"%s\",\"addr\":%u,\"off\":%d,\"reads\":%u,\"ring_end\":%u",
+                 (unsigned long)k, (e & U2_TRC_HIGH) ? "hi" : "lo", (unsigned)a,
+                 (int)a - (int)base, (unsigned)(e >> 17), (unsigned)u2_aud_ring_end);
     }
   }
 
@@ -1263,18 +1286,17 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
       /* #endregion */
 #endif
       u2_data_address = (uint16_t)((data << 8) | (u2_data_address & 0x00FF));
+#if U2_RX_AUDIT
+      /* #region agent log — pointer trace, see note at u2_trc. */
+      u2_trc_note(U2_TRC_HIGH);
+      /* #endregion */
+#endif
       break;
     case U2_C0X_ADDRESS_LOW:
       u2_data_address = (uint16_t)((data << 0) | (u2_data_address & 0xFF00));
 #if U2_RX_AUDIT
-      /* #region agent log — pointer trace, see note at u2_trc. Write path only. */
-      if (!u2_trc_done) {
-        uint32_t w = u2_trc_w;
-        u2_trc[w & (U2_TRC_MAX - 1u)] = ((uint32_t)u2_audit_reads << 16) | u2_data_address;
-        u2_trc_w = w + 1u;
-        if (u2_trc_freeze && --u2_trc_freeze == 0u)
-          u2_trc_done = 1;
-      }
+      /* #region agent log — pointer trace, see note at u2_trc. */
+      u2_trc_note(0);
       /* #endregion */
 #endif
       break;

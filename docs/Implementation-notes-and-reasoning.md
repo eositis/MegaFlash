@@ -3285,6 +3285,81 @@ address-write path, `u2_trc`, `U2_RxAuditReport`); §1dg, §1dh, §1di, §1dj, �
 
 ---
 
+## 1dm. The trace caught a wrap: the host really does read 2 bytes past the ring end (2026-09-03)
+
+The §1dl pointer trace froze around a real wrap and gave the first direct address evidence.
+
+### The captured wrap
+
+Decoding the pointer targets (`0x0426` = Sn_RX_RSR, `0x0428` = Sn_RX_RD, `0x0401` = Sn_CR), the
+driver's per-frame loop is: point at Sn_RX_RSR, read 4 bytes (RSR + RX_RD via auto-increment),
+point at the record inside the ring, read the whole record in one burst, point at Sn_RX_RD, write
+it back, point at Sn_CR, issue RECV. Two non-wrapping frames in the same trace confirm it — offset
+2597 and offset 73, each read as a single 786-byte burst, and the records tile exactly
+(2597 + 786 = 3383).
+
+The wrapping frame, entries 21–24:
+
+| entry | pointer | ring offset | cumulative reads |
+|---|---|---|---|
+| 21 | 27959 | 3383 | 10 |
+| 22 | 24576 | **0** | 725 |
+| 23 | 1064 (Sn_RX_RD) | – | 796 |
+
+```
+burst 1 : 725 - 10 = 715 reads from offset 3383  ->  3383 + 715 = 4098 = ring end + 2
+burst 2 : 796 - 725 = 71 reads from offset 0
+total   : 786 = the Sn_RX_RD advance
+```
+
+**Burst 1 runs 2 bytes past the ring end.** The record needs 713 bytes to the end and a 73-byte
+tail; the host took 715 and then 71. So H7 is confirmed on addresses and counts, not inference:
+the host reads `0x7000`–`0x7001`, which the producer never writes, and the §1dl caution that it
+might merely have parked there is settled.
+
+### Why this still is not enough to fix
+
+The two bursts are self-inconsistent under *any* auto-increment behaviour. Having consumed 715
+record bytes, the host should resume at ring offset 2, but it re-points to offset 0 (confirmed
+again here, and 3/3 in §1dl). Assemble it either way:
+
+- **as built today** — 713 good bytes, 2 foreign bytes, then offsets 0–70: the tail is shifted by
+  2 and offsets 71–72 are never read.
+- **with a socket-boundary wrap** — 713 good bytes, offsets 0–1 correct, then offsets 0–70 again:
+  offsets 0–1 duplicated, 71–72 still never read.
+
+Both are corrupt, so wrapping remains unjustified and is still not applied. A driver that behaves
+this way would fail on a real W5100 too, which returns socket 1's buffer at `0x7000` exactly as we
+do. Something in the sequence is therefore still unobserved.
+
+### The blind spot
+
+`u2_trc` recorded **only** `ADDRESS_LOW` writes. A HIGH-only re-point is invisible to it — and that
+is precisely how a driver would wrap `0x7000` back to `0x6000`, because the low byte is already
+`0x00` and only the high byte needs to change. `g_u2_aud_repoint` counts exactly one HIGH write
+past the ring end per wrap, so at least one such write exists in the captured burst. Any invisible
+re-point inside a run makes contiguous-looking reads non-contiguous and invalidates the arithmetic
+above, which is the most likely explanation for the inconsistency.
+
+### Changes
+
+1. **Trace both address registers**, tagged `hi`/`lo` via `U2_TRC_HIGH`, through a shared
+   `u2_trc_note()` on the write path. Depth doubled to 64 (tail 20) to keep the same number of
+   pointer moves in view now that each move costs two entries.
+2. **Read counting narrowed to the RX block** (`addr >= W5100_RX_BASE`). §1dl's unconditional count
+   swept in the Sn_RX_RSR / Sn_RX_RD / Sn_SR reads between frames, putting every frame about 5
+   over — 122 of 122 frames reported "over" and the seen-vs-advance comparison became useless. One
+   compare against a constant excludes the register file while still counting the region past the
+   ring end at `0x7000`, and with no struct load it stays cheaper than the original windowed form.
+
+Cost on the RX read path is 6 instructions (compare, untaken branch, then load/add/store),
+comparable to the build that detected correctly.
+
+**References:** `pico/uthernet2.c` (`u2_audit_note_read`, `u2_trc_note`, `U2_HandleBusAccess`
+address-write path, `U2_RxAuditReport`); §1dh–§1dl.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

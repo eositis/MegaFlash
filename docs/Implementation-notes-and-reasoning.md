@@ -3504,6 +3504,93 @@ Write path only; `read_value` unchanged at 14 instructions.
 
 ---
 
+## 1dp. ROOT CAUSE: the driver reads the 2-byte MACRAW header without charging it against the bytes-before-wrap budget (2026-09-03)
+
+The RSR capture closes the chain. Fourth wrap, and the smallest numbers yet, which makes it plain.
+
+### The wrap, entries 42–48
+
+```
+i=43 lo  off=4022   rd=4022  rd_off=4022  skew=0  rsr=603  limit=74   <-- pointer set to record start
+i=44 hi  off=2                                     reads=76          <-- 76 reads happened
+i=45 lo  off=0                                     reads=76          <-- re-point to ring base
+i=46 hi  (register)                                reads=94          <-- 18 more reads
+i=48     rd=4116                                                     <-- advance = 94
+```
+
+Record: 94 bytes at offset 4022. `limit = size − rd_off = 74`, `rsr = 603`, so
+`MIN(rsr, limit) = 74`. The correct split is **74 / 20**. The host did **76 / 18**.
+
+```
+burst1 = 2 + MIN(rsr, limit) = 2 + 74 = 76      exact
+4022 + 76 = 4098 = ring end + 2
+```
+
+`burst1 = 2 + limit` now holds on **four** wraps (715/71, 493/293, 634/152, 76/18). The `+2` is the
+MACRAW header, every time.
+
+### Mechanism
+
+The in-tree ip65 driver's `w5100_data_request()` sets the pointer to the record start and returns
+`MIN(Sn_RX_RSR, addr_limit − addr)` — *bytes readable before the caller must re-point*. The caller
+then reads the 2-byte MACRAW header **and** the full returned count, so it consumes
+`2 + limit` bytes from a window only `limit` wide and runs 2 bytes past the socket boundary into
+`0x7000`, which the producer never writes.
+
+Worse, the two halves disagree internally. Having read 76 bytes the next record byte is at ring
+offset 2, but the re-point goes to offset 0 — the target is computed from `limit`, not from what was
+actually read. So the entire tail lands 2 positions late and the record's last 2 bytes are never
+read. For this 94-byte record that is **20 wrong bytes out of a 92-byte payload**, not 2 — which is
+why the frame fails checksum rather than merely being slightly off.
+
+Frequency is the wrap rate, one per 4 KiB: at 786-byte records that is roughly 1 in 5, at full MTU
+roughly 1 in 3 — the reported "every 3rd, or 6th packet".
+
+### Our emulation is not the divergence
+
+Every value the driver consumes has now been measured against the record geometry and checked
+against two independent authorities:
+
+| value | ours | authority |
+|---|---|---|
+| `Sn_RX_RD` | equals the pointer the host writes, `skew = 0` on 6 record starts; free-running, host masks it | datasheet §Sn_RX_RD |
+| auto-increment | wraps only `0x6000→0x4000` and `0x8000→0x6000`, **not** at the socket boundary | datasheet ("read to the upper-bound, and change the physical address to gSn_RX_BASE"); a2fpga `uthernet2.sv` `addr_next` is line-for-line the same |
+| MACRAW header | `len + 2` | datasheet; Linux `w5100.c` (`rx_len = be16(header) − 2`); a2fpga `w5100.c` |
+| `Sn_RX_RSR` | `rx_wr − rd` | a2fpga `macraw_recv()` |
+| producer wrap | `u2_memory[base + (wr & mask)]` per byte | a2fpga splits the write at `rx_size − off` |
+
+The a2fpga core is an independent, working Uthernet II emulation and it agrees with us on all five.
+**The one-line "wrap `auto_increment` at the socket ring boundary" fix is now definitively wrong**,
+and §1dg's catastrophic failure is explained rather than merely observed.
+
+### Why no wrap-side fix can work
+
+Given the driver reads `2 + limit` and then resumes from offset 0, the tail is displaced by 2 under
+*any* auto-increment behaviour:
+
+- **today** — 2 foreign bytes, then the tail 2 positions late.
+- **socket-boundary wrap** — those 2 bytes become correct, but the tail is *still* 2 positions late.
+
+Mirroring `0x7000`–`0x7001` onto ring offsets 0–1 fixes only 2 of the ~20 wrong bytes for the same
+reason. The displacement lives in the re-point target, which we do not control.
+
+### Options (needs a decision, none applied)
+
+1. **Stay hardware-accurate.** Ship nothing; the corruption is the driver's and would occur on real
+   Uthernet II and on a2fpga too.
+2. **Producer-side shim.** When a record straddles the boundary, write its last 2 pre-boundary bytes
+   *past* the ring into `0x7000`–`0x7001` and start the remainder at ring offset 0 shifted by 2.
+   Both driver reads then land correctly. Deliberately diverges from the W5100, and would corrupt a
+   *correct* driver, so it must be conditional on socket 1 being unused.
+3. **Never straddle.** Pad to the boundary with a filler record the host discards. Costs bandwidth
+   and is awkward when fewer than 2 bytes remain.
+
+**References:** `pico/uthernet2.c` (`u2_trc_note`, `u2_trc_rsr`, `auto_increment`,
+`u2_push_rx_macraw`); `tools/wget65-verbose/w5100.c` (`w5100_data_request`); W5100 datasheet
+§Sn_RX_RD; a2fpga `hdl/uthernet2/uthernet2.sv`, `firmware_host/w5100.c`; §1dg, §1dk–§1do.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

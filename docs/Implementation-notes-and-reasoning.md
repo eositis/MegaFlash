@@ -3685,6 +3685,79 @@ measurement must not perturb the thing measured. Three properties:
 
 ---
 
+## 1ds. All five first-connection hypotheses rejected; the failure is TCP-specific (2026-09-04)
+
+### Every hypothesis rejected, with evidence
+
+The `OPEN` event carried `net=0x037f` and `mr=0x44`:
+
+| bit | meaning | value |
+|---|---|---|
+| 0–2 | CYW43 initialised, netif present, `sta->input` set | all set |
+| 3 | **netif input hook installed** | **set** — **H12 rejected** |
+| 4–6 | `hwaddr_len==6`, netif up, link up | all set |
+| 7 | **legacy operation active** | **clear** — **H14 rejected** |
+| 8–9 | `sockets[0].type == PCB_MACRAW`, `push_rx_macraw_cb` | both set |
+
+`shar = 88:a2:9e:48:22:7a`, `stamac = 48:22:7a` — they agree; there is **no `SHARW` event at all**,
+so ip65 never rewrote SHAR after OPEN, and **zero `MFDROP`** against an unused budget of 8.
+**H11 rejected.** No `RXFULL`: **H15 rejected.** Every `TXQ` has a matching `TXWIRE` in the same
+millisecond with no `TXNAK` or `TXFAIL`: **H13 rejected.**
+
+### What the timeline actually says
+
+```
+36273  OPEN
+36463..45679  RXOK x8   ambient; per-code budget exhausted here
+47996  TXQ/TXWIRE  42  ARP
+48593  TXQ/TXWIRE  83  IPv4   DNS query
+48732  TXQ/TXWIRE  58  IPv4   TCP SYN
+51222  TXQ/TXWIRE  58  IPv4   SYN retransmit  (+2.49 s)
+56158  TXQ/TXWIRE  58  IPv4   SYN retransmit  (+4.94 s)
+```
+
+Two conclusions, both strong:
+
+1. **Exponential backoff on a 58-byte IPv4 frame is a TCP SYN retransmit sequence.** The host is
+   sending SYNs and getting nothing it can use.
+2. **The DNS query at 48593 was answered.** ip65 could not have produced the SYN 139 ms later
+   otherwise. So inbound delivery, the MF filter and ring delivery all demonstrably work; the
+   failure is **specific to the TCP handshake**, not to RX in general.
+
+### The instrumentation mistake
+
+The per-code budget of 8, added to stop ambient broadcast traffic flooding the ring, was **spent
+2.3 s before the host's first transmit**, so the entire inbound half of the exchange under
+investigation was invisible. The 20 s window also closed at 56.3 s, before the operator's resend.
+Ethertype alone would not have been enough regardless — distinguishing a SYN-ACK from a RST needs
+layer 4.
+
+### Re-aimed trace
+
+- **Arm on the first host `TXQ`, not on OPEN.** `RXOK` is ignored until the host starts talking, so
+  the ring is spent on the exchange rather than on ambient traffic.
+- **Window 15 s from arming**, which covers the whole SYN retransmit sequence (~7.4 s).
+- **Layer-4 decode** (`u2_fc_l4`): IPv4 protocol in bits 31–24, TCP flags in 23–16, destination
+  port in 15–0. SYN `0x02`, SYN-ACK `0x12`, RST `0x04` are now directly readable.
+- **New `RECV` event** pairing each host RECV with the committed `Sn_RX_RD` and unread bytes, so a
+  reply that is ringed but never consumed is distinguishable from one that never arrived.
+- Budgets 24, ring 96. The rejected hypotheses' probes are **kept as negative controls** — a
+  `SHARW`, `MFDROP` or `TXFAIL` appearing in a later run would be signal.
+- `read_value` remains byte-identical to the clean build (18 bytes).
+
+### Next hypotheses
+
+| id | mechanism | signature |
+|---|---|---|
+| H16 | Nothing comes back for the SYN — our outbound SYN is malformed on the wire, so the peer never replies. `TXWIRE` only proves `linkoutput` accepted it. | no inbound `RXOK` with TCP flags for that port |
+| H17 | The SYN-ACK arrives and is ringed, but the host never consumes it. | `RXOK` flags `0x12` with no following `RECV` |
+| H21 | A RST comes back — something is resetting the connection (e.g. lwIP also answering for the shared IP). | `RXOK` flags `0x04` |
+
+**References:** `pico/uthernet2.c` (`u2_fc_l4`, `u2_fc_note`, `u2_fc_arm`, `U2_FirstConnPoll`,
+`W5100_SN_CR_RECV` case); §1dr.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |

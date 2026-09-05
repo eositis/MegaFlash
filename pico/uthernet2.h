@@ -58,22 +58,6 @@ extern volatile uint32_t g_u2_core0_gap_max_us, g_u2_core0_gap_5ms, g_u2_core0_g
 void U2_RxAuditReport(void);
 #endif
 
-#ifndef U2_FIRSTCONN
-#define U2_FIRSTCONN 0
-#endif
-#if U2_FIRSTCONN
-/* §1dr first-connection trace: the first connection after a socket OPEN always fails while an
- * immediate retry succeeds, so record the rare ordering-sensitive events around it and print them
- * once, well after the failure. See the note at u2_fc_note in uthernet2.c. */
-void u2_fc_note(uint8_t code, uint32_t a, uint32_t b);
-void u2_fc_arm(void);
-void U2_FirstConnPoll(void);
-void u2_fc_tcp(const char *dir, const uint8_t *d, uint16_t len);
-uint32_t u2_fc_l4(const uint8_t *d, uint16_t len);
-uint32_t U2_NetDiagState(void);   /* CYW43/netif/hook/link readiness bits */
-uint32_t U2_NetDiagStaMac24(void);
-#endif
-
 /** Copy SHAR (0x0009–0x000E) from `mac` — used so ip65 DHCP/MACRAW uses the same SA as CYW43 STA. */
 void U2_SetStationMacFromBytes(const uint8_t mac[6]);
 

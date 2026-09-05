@@ -4,7 +4,19 @@ This project’s local log. One log per project; stored in the project root.
 
 ---
 
+## 2026-09-05
+
+- **Commit on main:** ephemeral NAT (not fixed 41226), FIRSTCONN UART removed, V1.2.4-eo UF2s rebuilt, `optionB/` measurement UF2s deleted. Flash `pico/_releases/V1.2.4-eo/megaflash-pico2.uf2`.
+
+- **Removed FIRSTCONN UART:** `U2_FIRSTCONN` / `u2_fc_*` / NDJSON gone. Kept ephemeral NAT, wrap shim, 60 B pad.
+
+- **Rebuild V1.2.4-eo Release (no version bump):** `./build-both.sh` after §1ec ephemeral NAT. Artifacts: `pico/_releases/V1.2.4-eo/`.
+
 ## 2026-09-04
+
+- **§1ec — UART: 41226 SYN seq=0 unanswered after reboot; 1027/1028 SYN-ACK in 27 ms.** NTP not overlapping. Per-SYN ephemeral NAT (not fixed 41226). FIRSTCONN rebuild `optionB/megaflash-optionB-FIRSTCONN-pico2w.uf2`.
+
+- **§1eb — first-connect soak failed on the same FIRSTCONN image.** ELF compare: NAT/pad in Release and FIRSTCONN; prior greenlight was not a stable delta. Added UART fields for NTP/legacy divert (H55), pnat apply (H56), MF-drop (H57). Rebuild `pico2_firstconn` + `optionB/...-FIRSTCONN-pico2w.uf2`.
 
 - **Release V1.2.4-eo (0x0024):** `cmakeall.sh` Release pico_w + pico2_w; `U2_FIRSTCONN=0` / `U2_RX_AUDIT=0` (no NDJSON symbols). Artifacts: `pico/_releases/V1.2.4-eo/`, `optionB/megaflash-optionB-pico2w.uf2`.
 

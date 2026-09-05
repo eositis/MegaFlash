@@ -4006,12 +4006,70 @@ Operator: Contiki connects on the first try; checksum errors gone. Further soak 
 
 ---
 
+## 1eb. First-connect “fix” did not survive soak (2026-09-04)
+
+**What:** Operator reloaded the same FIRSTCONN UF2 that had been greenlit; first-connect failed again across multiple reboots. V1.2.4 Release showed the same symptom. ELF compare: `u2_pnat_tx` (1026→41226) and TX pad are in **both** binaries; FIRSTCONN only adds UART/NDJSON.
+
+**Why:** The greenlit run was not a stable firmware delta. Remaining candidates are intermittent:
+
+| id | if true |
+|---|---|
+| H55 | NTP/TFTP (`IsLegacyOperationActive`) owns STA while MACRAW is open → SYN-ACK never reaches the ring (`legacy:1` on `tcp4` or `divert` lines) |
+| H56 | first SYN is not remapped (`pnat applied:0` / sport≠1026) |
+| H57 | SYN-ACK hits netif then MF-filter drop (`mfdrop`) |
+| H58 | SYN on the wire, zero `dir=in` — LAN/gateway still black-holes the first 4-tuple |
+
+**What we did:** extra FIRSTCONN fields (`legacy`/`pnat`/`diag` on `tcp4`), SYN `pnat` apply/skip, `divert`/`legacy` begin-end, TCP `mfdrop`. No production behavior change.
+
+**Takeaway:** do not treat §1ea as closed until UART on a failing run confirms one of H55–H58.
+
+---
+
+## 1ec. First-connect UART: fixed 41226 is the same 4-tuple after reboot (2026-09-04)
+
+**What:** `Serial Saved Output.txt` (2511 JSON lines). Capture starts mid-HTTP (`tcp4` ACK/PSH on wire sport **41226**, `pnat:1`, `legacy:0`, timestamp ~563 s). Two Pico reboots (`legacy` NTP begin/end, timestamp reset to 3534). After each reboot, first connect fails.
+
+**Why (from this capture):**
+
+| id | result | evidence |
+|---|---|---|
+| H55 NTP divert | **REJECTED** | NTP `end` at 12.6 s / 8.6 s; first SYN at 42 s / 45 s; all SYN `legacy:0`; `divert` count 0 |
+| H56 NAT not applied | **REJECTED** | `pnat applied:1` sport 1026→41226, `oc:7502` `nc:32837` |
+| H57 MF-drop | **REJECTED** | `mfdrop` count 0 |
+| H58 / H59 4-tuple reuse | **CONFIRMED** | 41226 SYN `seq:0` ×3, **zero** SYN-ACK to 41226. SYN to **1027** / **1028** SYN-ACK in 27 ms. Later 41226 SYNs still unanswered while 1027 already works. Long-uptime start of log is an **established 41226** flow — same wire 4-tuple as the post-reboot SYNs (same STA IP `.213`) |
+
+Fixed 41226 made the historical “1026 is always first” sticky across reboots (TIME-WAIT / conntrack). 1027 works because it is a new 4-tuple.
+
+**What we did:** on each host SYN from port 1026, pick a new ephemeral 49152–57342; rewrite RX dports that match recent picks. Incremental checksum unchanged. FIRSTCONN logs include `wire`.
+
+**What we didn’t do:** ISN rewrite (previously rejected; this capture still has `seq:0` on 41226, but 1027 `seq:7/11` succeeding is explained by a new port without changing ISN).
+
+**References:** `u2_pnat_pick_wire` in `uthernet2_net.cpp`; UART windows at lines 2426 and 2470.
+
+---
+
+## 1ed. V1.2.4-eo Release rebuild (2026-09-05)
+
+Operator: first-connect appears fixed on FIRSTCONN ephemeral NAT. Rebuilt **same version** `V1.2.4-eo` (`0x0024`) via `build-both.sh` (no `cmakeall.sh` bump). Production path is per-SYN ephemeral NAT. FIRSTCONN UART later removed from source (§1ee).
+
+**References:** `pico/_releases/V1.2.4-eo/`, `optionB/megaflash-optionB-pico2w.uf2`.
+
+---
+
+## 1ee. FIRSTCONN UART removed (2026-09-05)
+
+Operator confirmed first-connect fixed on the V1.2.4-eo Release rebuild. Removed `U2_FIRSTCONN` CMake flag, `u2_fc_*` / NDJSON, and NTP `legacy` prints. Kept per-SYN ephemeral NAT, wrap spill, and 60-byte TX pad. Dropped the `optionB/` UF2 drop folder; published images live in `pico/_releases/V1.2.4-eo/`.
+
+**References:** `uthernet2.c`, `uthernet2_net.cpp`, `CMakeLists.txt`, `pico/_releases/V1.2.4-eo/`.
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
 | U2 address range | `defines.h`, `busloop.c` | C0x4–C0x7 only; no GPIO slot select |
-| First-connect | §1ea, `u2_pnat_*` | Confirmed: incremental 1026→41226 + 60 B TX pad; PSM rejected |
+| First-connect | §1ea→**1ee**, `u2_pnat_*` | Per-SYN ephemeral NAT. FIRSTCONN UART and `optionB/` UF2s removed; flash `_releases/V1.2.4-eo` |
 | MACRAW wrap checksums | §1ea, §1dq/§1dx | Confirmed: spill layout when neighbour CLOSED; shim fires (`shim:1`) |
 | AppleWin vs Pico U2 | §1i, AppleWin `Uthernet2.cpp` `IO_C0` / `MemReadFloatingBus` | AppleWin: **synchronous** slot I/O in one emulated step. Pico: **FIFO + PIO prefetch + IRQ0** (§1d §1f). AppleWin port = **`addr & 0x03`** on full slot page; MegaFlash U2 path only **`addr` 4–7**; **`$C0C8+`** not mirrored (ACIA reservation, §1b) — PIO **chunk = A3:A2** |
 | ip65 W5100 probe + SHAR | `uthernet2.c` §`u2_reset`, §1c | RTR $07/$D0 + RMSR/TMSR $06 for `w5100.s` probe; default SHAR = `00:08:DC:A2:A2:A2` (matches `w5100.s`) so RMSR=$06 short path does not leave `cfg_mac` all-zero |

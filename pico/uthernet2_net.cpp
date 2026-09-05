@@ -228,13 +228,44 @@ static void u2_macraw_patch_dhcp_bootp_chaddr(uint8_t *eth, uint16_t len, const 
   eth[udp_off + 7] = 0;
 }
 
-/* §1dz: previous NAT (1026→50178) used a homegrown full TCP checksum; 50178 still got no SYN-ACK,
- * so we could not tell "path drops 1026" from "we broke the checksum." Incremental RFC 1624
- * preserves Contiki's already-valid checksum (pcap §1cr). New wire port 41226 so this run is
- * distinguishable from the 50178 experiment. */
+/* Host 1026 is Contiki/ip65's first ephemeral. A *fixed* wire port (41226) becomes the same
+ * 4-tuple after every reboot (same STA IP), so a prior session's TIME-WAIT black-holes the
+ * first SYN; 1027/1028 are new 4-tuples and SYN-ACK in ~25 ms (§1eb UART). Pick a fresh
+ * ephemeral on each SYN; later 1026 segments use that mapping until the next SYN or CLOSE. */
 #define U2_PNAT_HOST 1026u
-#define U2_PNAT_WIRE 41226u
+#define U2_PNAT_WIRE_BASE 49152u
+#define U2_PNAT_WIRE_SPAN 8191u
+#define U2_PNAT_RX_KEEP 8
 static uint8_t u2_pnat_used;
+static uint16_t u2_pnat_wire;
+static uint16_t u2_pnat_last;
+static uint16_t u2_pnat_rx_ports[U2_PNAT_RX_KEEP];
+static uint8_t u2_pnat_rx_n;
+
+static uint16_t u2_pnat_pick_wire(void) {
+  uint16_t p = (uint16_t)(U2_PNAT_WIRE_BASE + (time_us_32() % U2_PNAT_WIRE_SPAN));
+  if (p == u2_pnat_last)
+    p = (uint16_t)(U2_PNAT_WIRE_BASE + ((p + 1u - U2_PNAT_WIRE_BASE) % U2_PNAT_WIRE_SPAN));
+  u2_pnat_last = p;
+  u2_pnat_rx_ports[u2_pnat_rx_n % U2_PNAT_RX_KEEP] = p;
+  u2_pnat_rx_n++;
+  return p;
+}
+
+static int u2_pnat_rx_match(uint16_t dport) {
+  uint8_t n = u2_pnat_rx_n < U2_PNAT_RX_KEEP ? u2_pnat_rx_n : U2_PNAT_RX_KEEP;
+  for (uint8_t i = 0; i < n; i++) {
+    if (u2_pnat_rx_ports[i] == dport)
+      return 1;
+  }
+  return 0;
+}
+
+static void u2_pnat_reset(void) {
+  u2_pnat_used = 0;
+  u2_pnat_wire = 0;
+  u2_pnat_rx_n = 0;
+}
 
 static void u2_tcp_csum_replace2(uint8_t *tcp, uint16_t oldv, uint16_t newv) {
   uint32_t hc = ((uint32_t)tcp[16] << 8) | tcp[17];
@@ -264,23 +295,15 @@ static void u2_pnat_tx(uint8_t *eth, uint16_t len) {
   if (!u2_tcp_hdr(eth, len, &tcp))
     return;
   uint16_t sport = (uint16_t)(((uint16_t)tcp[0] << 8) | tcp[1]);
-  if ((tcp[13] & 0x12u) == 0x02u && sport == U2_PNAT_HOST)
+  if ((tcp[13] & 0x12u) == 0x02u && sport == U2_PNAT_HOST) {
+    u2_pnat_wire = u2_pnat_pick_wire();
     u2_pnat_used = 1;
-  if (!u2_pnat_used || sport != U2_PNAT_HOST)
-    return;
-  uint16_t oc = (uint16_t)(((uint16_t)tcp[16] << 8) | tcp[17]);
-  tcp[0] = (uint8_t)(U2_PNAT_WIRE >> 8);
-  tcp[1] = (uint8_t)U2_PNAT_WIRE;
-  u2_tcp_csum_replace2(tcp, U2_PNAT_HOST, U2_PNAT_WIRE);
-#if U2_FIRSTCONN
-  /* #region agent log */
-  printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H47\","
-         "\"location\":\"uthernet2_net.cpp:u2_pnat_tx\",\"message\":\"pnat\","
-         "\"timestamp\":%llu,\"data\":{\"oc\":%u,\"nc\":%u}}\n",
-         (unsigned long long)(time_us_64() / 1000u), (unsigned)oc,
-         (unsigned)(((uint16_t)tcp[16] << 8) | tcp[17]));
-  /* #endregion */
-#endif
+  }
+  if (u2_pnat_used && u2_pnat_wire && sport == U2_PNAT_HOST) {
+    tcp[0] = (uint8_t)(u2_pnat_wire >> 8);
+    tcp[1] = (uint8_t)u2_pnat_wire;
+    u2_tcp_csum_replace2(tcp, U2_PNAT_HOST, u2_pnat_wire);
+  }
 }
 
 static void u2_pnat_rx(uint8_t *eth, uint16_t len) {
@@ -288,11 +311,11 @@ static void u2_pnat_rx(uint8_t *eth, uint16_t len) {
   if (!u2_pnat_used || !u2_tcp_hdr(eth, len, &tcp))
     return;
   uint16_t dport = (uint16_t)(((uint16_t)tcp[2] << 8) | tcp[3]);
-  if (dport != U2_PNAT_WIRE)
+  if (!u2_pnat_rx_match(dport))
     return;
   tcp[2] = (uint8_t)(U2_PNAT_HOST >> 8);
   tcp[3] = (uint8_t)U2_PNAT_HOST;
-  u2_tcp_csum_replace2(tcp, U2_PNAT_WIRE, U2_PNAT_HOST);
+  u2_tcp_csum_replace2(tcp, dport, U2_PNAT_HOST);
 }
 
 static void set_status(int i, uint8_t s) {
@@ -454,13 +477,6 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
 
   /* Native MegaFlash (NTP/TFTP/TestWifi): lwIP owns STA ingress; do not copy into ip65 ring. */
   if (legacy) {
-#if U2_FIRSTCONN
-    /* #region agent log — H14: a native MegaFlash op (NTP) owns STA ingress, so this frame never
-     * reaches the ip65 ring. Only the diverted cases are recorded; normal deliveries would flood
-     * the trace. */
-    u2_fc_note(7, 1, p->tot_len);
-    /* #endregion */
-#endif
     if (u2_saved_netif_input)
       return u2_saved_netif_input(p, inp);
     pbuf_free(p);
@@ -473,22 +489,6 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
       uint8_t buf[U2_MACRAW_MAX_FRAME];
       u16_t len = (u16_t)pbuf_copy_partial(p, buf, p->tot_len, 0);
       if (len > 0) {
-#if U2_FIRSTCONN
-        /* #region agent log — H40/H54: SYN at netif, and ICMP that would explain a silent SYN. */
-        if (len >= 34 && buf[12] == 0x08 && buf[13] == 0x00) {
-          uint8_t ihl = (uint8_t)((buf[14] & 0x0Fu) * 4u);
-          uint16_t off = (uint16_t)(14u + ihl);
-          if (buf[23] == 6 && len >= (uint16_t)(off + 14u) && (buf[off + 13] & 0x02u))
-            u2_fc_tcp("in", buf, len);
-          else if (buf[23] == 1 && len >= (uint16_t)(off + 2u))
-            printf("{\"sessionId\":\"a36369\",\"runId\":\"firstconn\",\"hypothesisId\":\"H54\","
-                   "\"location\":\"uthernet2_net.cpp:wrapper\",\"message\":\"icmp\","
-                   "\"timestamp\":%llu,\"data\":{\"type\":%u,\"code\":%u,\"len\":%u}}\n",
-                   (unsigned long long)(time_us_64() / 1000u), (unsigned)buf[off],
-                   (unsigned)buf[off + 1], (unsigned)len);
-        }
-        /* #endregion */
-#endif
         u2_pnat_rx(buf, len);
         U2_MonNetRxMacraw(0, len);
         push_rx_macraw_cb(0, buf, len);
@@ -498,43 +498,12 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
     return ERR_OK;
   }
 
-#if U2_FIRSTCONN
-  /* #region agent log — H12: socket 0 is not MACRAW (or no callback), so ip65 gets nothing. */
-  u2_fc_note(7, 2, p->tot_len);
-  /* #endregion */
-#endif
   if (u2_saved_netif_input)
     return u2_saved_netif_input(p, inp);
   pbuf_free(p);
   return ERR_ARG;
 }
 
-#if U2_FIRSTCONN
-/* #region agent log — §1dr: expose the net-layer readiness bits the bus side cannot see, so the
- * OPEN event can record whether CYW43, the netif, the input hook and the link were up. */
-uint32_t U2_NetDiagState(void) {
-  struct netif *sta = u2_cyw43_sta_netif();
-  uint32_t v = 0;
-  if (cyw43_is_initialized(&cyw43_state)) v |= 1u;
-  if (sta) v |= 2u;
-  if (sta && sta->input) v |= 4u;
-  if (u2_saved_netif_input) v |= 8u;              /* hook installed */
-  if (sta && sta->hwaddr_len == 6) v |= 16u;
-  if (sta && netif_is_up(sta)) v |= 32u;
-  if (sta && netif_is_link_up(sta)) v |= 64u;
-  if (GetNetworkPump().IsLegacyOperationActive()) v |= 128u;
-  if (sockets[0].type == PCB_MACRAW) v |= 256u;
-  if (push_rx_macraw_cb) v |= 512u;
-  return v;
-}
-
-uint32_t U2_NetDiagStaMac24(void) {
-  struct netif *sta = u2_cyw43_sta_netif();
-  if (!sta || sta->hwaddr_len != 6) return 0;
-  return ((uint32_t)sta->hwaddr[3] << 16) | ((uint32_t)sta->hwaddr[4] << 8) | sta->hwaddr[5];
-}
-/* #endregion */
-#endif
 } // extern "C"
 
 extern "C" {
@@ -598,11 +567,6 @@ static void u2_macraw_tx_drain(void) {
 static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   struct netif *netif = u2_cyw43_sta_netif();
   if (!cyw43_is_initialized(&cyw43_state) || !netif || !netif->linkoutput || netif->hwaddr_len != 6) {
-#if U2_FIRSTCONN
-    /* #region agent log — H13 reason 1: CYW43/netif not ready, frame stays queued. */
-    u2_fc_note(6, 1, len);
-    /* #endregion */
-#endif
     return false;
   }
   /* W5100 MAC pads TX to 60 bytes (excl. FCS). CYW43 sends the pbuf length as-is, so 54–58
@@ -611,11 +575,6 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
   struct pbuf *p = pbuf_alloc(PBUF_RAW, send_len, PBUF_RAM);
   if (!p) {
     u2_macraw_tx_pbuf_fail++;
-#if U2_FIRSTCONN
-    /* #region agent log — H13 reason 2: pbuf exhaustion. */
-    u2_fc_note(6, 2, len);
-    /* #endregion */
-#endif
     return false;
   }
   memcpy(p->payload, data, len);
@@ -640,29 +599,14 @@ static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len) {
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_tap("core0-post", eth, send_len);
 #endif
-#if U2_FIRSTCONN
-  /* #region agent log — H25: TCP 4-tuple at the radio, after SA/ARP patches. */
-  u2_fc_tcp("tx", eth, send_len);
-  /* #endregion */
-#endif
   U2_SetStationMacFromBytes(netif->hwaddr);
   err_t err = netif->linkoutput(netif, p);
   pbuf_free(p);
   if (err != ERR_OK) {
     u2_macraw_tx_lo_err++;
-#if U2_FIRSTCONN
-    /* #region agent log — H13 reason 3: the driver rejected the frame (link down / busy). */
-    u2_fc_note(6, 3, len);
-    /* #endregion */
-#endif
     return false;
   }
   U2_MonNetMacrawTx(i, len);
-#if U2_FIRSTCONN
-  /* #region agent log — H13: frame actually reached the wire. Pair with TXQ. */
-  u2_fc_note(5, len, u2_fc_l4(data, len));
-  /* #endregion */
-#endif
   return true;
 }
 
@@ -747,7 +691,7 @@ void U2_Net_Close(int i) {
     }
   } else if (s->type == PCB_MACRAW) {
     u2_macraw_tx_queue_clear();
-    u2_pnat_used = 0;
+    u2_pnat_reset();
   }
   s->type = PCB_NONE;
   s->status = W5100_SN_SR_CLOSED;
@@ -890,11 +834,6 @@ void U2_Net_ServicePoll(void) {
   u2_eth_trace_try_install();
 #endif
   u2_macraw_tx_drain();
-#if U2_FIRSTCONN
-  /* #region agent log — §1dr: one-shot dump, 20 s after the first OPEN. */
-  U2_FirstConnPoll();
-  /* #endregion */
-#endif
 #if U2_RX_AUDIT
   /* #region agent log
    * Deliberately outside the NDEBUG guard: the audit has to run in a Release build so the bus

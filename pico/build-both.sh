@@ -85,10 +85,8 @@ echo "Using CMake: $CMAKE_BIN"
 echo "U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE (1=UART [u2eth] STA frame hex dump)"
 
 # Embed configure-time build id (new values each run → identifiable builds without bumping FIRMWAREVER).
-FIRMWARE_BUILD_TIMESTAMP="${FIRMWARE_BUILD_TIMESTAMP:-$(date +%s)}"
-FIRMWARE_BUILD_TIMESTAMP_STR="${FIRMWARE_BUILD_TIMESTAMP_STR:-$(date -u +"%Y-%m-%d %H:%M:%S UTC")}"
-echo "FIRMWARE_BUILD_TIMESTAMP=$FIRMWARE_BUILD_TIMESTAMP  ($FIRMWARE_BUILD_TIMESTAMP_STR)"
-echo "(override either by exporting FIRMWARE_BUILD_TIMESTAMP / FIRMWARE_BUILD_TIMESTAMP_STR before run)"
+mf_firmware_build_stamp
+echo "(override with FIRMWARE_BUILD_TIMESTAMP / FIRMWARE_BUILD_TIMESTAMP_STR, or pin MF_BUILD_NUMBER)"
 
 echo "Configuring pico_release (Pico W)..."
 "$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \

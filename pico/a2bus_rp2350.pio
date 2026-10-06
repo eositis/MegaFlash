@@ -138,8 +138,8 @@ read_cycle:
   nop            [2]            ;Brief settle (address decode)
   nop            [1]
 
-  ;Read output value to osr  
-  mov osr,rxfifo[y]    
+  ;Read output value to osr
+  mov osr,rxfifo[y]
   irq clear 0                   ;To indicate we have pulled output value from rxfifo
 
 byte_select:                    ;Max loop 4 times

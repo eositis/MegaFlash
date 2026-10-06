@@ -148,6 +148,14 @@ void __no_inline_not_in_flash_func(BusLoop)() {
       continue;
     }
 
+    /* $C0C8 is a stage marker for a2stream. Record the byte and leave.
+     * Falling through would UpdateMegaFlashRegisters on every chunk, including
+     * the Uthernet prefetch at $C0C4–$C0C7. */
+    if (addr == 8 && !(busdata & READFLAG)) {
+      U2_NoteStage((uint8_t)((busdata >> 5) & 0xffu));
+      continue;
+    }
+
     if (busdata & READFLAG) {
       //6502 is reading from us
       switch(addr) {

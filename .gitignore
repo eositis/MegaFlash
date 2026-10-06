@@ -29,3 +29,6 @@
 
 **/*:Zone.Identifier
 .DS_Store
+
+# Local captures and UART logs. Not part of the repo.
+/debug/

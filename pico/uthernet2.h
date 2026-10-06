@@ -43,6 +43,16 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
 /** Byte the W5100 would return on the next read of the DATA port ($C0C7) at current ptr/MR (no increment). */
 uint8_t U2_PeekDataPort(void);
 
+/** Times the peeked memory byte differed from the later data-port read, plus the cover and audio bytes that read returned. */
+void U2_RxDebugQueue(int *waits, int *feeds, int *level);
+
+/** Last RX address the 6502 wrote after the audio byte was stored, the stored audio address, and whether that address was read. */
+void U2_RxDebugAim(int *aim, int *at, int *seen);
+
+/** Last slot cycles after the audio byte was stored. slot 0 is the newest.
+ *  packed = (C0Cx nibble << 16) | (1 if read << 8) | byte. pk is the data-port prefetch, or 0. */
+void U2_RxDebugCyc(int slot, int *adr, int *packed, int *pk);
+
 #if U2_RX_AUDIT
 /* §1di instrumentation counters. Core 0 writes the service-gap ones; U2_RxAuditReport (core 0)
  * emits them as NDJSON. */
@@ -60,6 +70,42 @@ void U2_RxAuditReport(void);
 
 /** Copy SHAR (0x0009–0x000E) from `mac` — used so ip65 DHCP/MACRAW uses the same SA as CYW43 STA. */
 void U2_SetStationMacFromBytes(const uint8_t mac[6]);
+
+/** OR Sn_IR bits (and common IR S0–S3 if IMR allows). Safe from core 0 lwIP callbacks. */
+void U2_SocketIrq(int socket_i, uint8_t bits);
+
+/**
+ * Run deferred TCP/UDP/IPRAW socket commands queued by the bus core.
+ * Core 0 only. Sn_CR stays set until the command is accepted.
+ */
+void U2_ProcessDeferredSocketCmds(void);
+
+/**
+ * Copy STA IPv4 address, gateway, and netmask into SIPR/GAR/SUBR when the
+ * Apple has not written those registers since the last W5100 reset.
+ */
+void U2_MirrorStaNet(const uint8_t ip[4], const uint8_t gw[4], const uint8_t mask[4]);
+
+/** Sparse UART NDJSON for socket-mode debug. force=1 always prints (capped). */
+void U2_AgentLog(const char *hid, const char *msg, int a, int b, int c, int force);
+
+/** Core 1: a write to $C0C8. Does not touch the PIO register chunks. */
+void U2_NoteStage(uint8_t id);
+
+/** Core 0: print queued $C0C8 stage bytes. */
+void U2_StagePoll(void);
+
+/** Core 1: a write to $C0C8. Does not touch the PIO register chunks. */
+void U2_NoteStage(uint8_t id);
+
+/** Core 0: print queued $C0C8 stage bytes. */
+void U2_StagePoll(void);
+
+/** Socket RX occupancy for the cover-art probe. size, live Sn_RX_RSR, shadow used. */
+void U2_RxDebugStat(int socket_i, int *size, int *live_rsr, int *shadow_used);
+
+/** Sn_CR, completed U2 bus cycles, and live Sn_RX_RD. Core 0 reads; core 1 counts cycles. */
+void U2_RxDebugProbe(int socket_i, int *cr, int *bus_n, int *rx_rd);
 
 #ifdef __cplusplus
 }

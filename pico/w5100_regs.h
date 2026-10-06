@@ -25,6 +25,8 @@
 #define W5100_SHAR5               0x000E
 #define W5100_SIPR0               0x000F
 #define W5100_SIPR3               0x0012
+#define W5100_IR                  0x0015
+#define W5100_IMR                 0x0016
 #define W5100_RTR0                0x0017
 #define W5100_RTR1                0x0018
 #define W5100_RCR                 0x0019
@@ -43,8 +45,17 @@
 #define W5100_MR_PB               0x10
 #define W5100_MR_RST              0x80
 
+/* Common IR / IMR: socket bits S0–S3. IMR resets to S0–S3 enabled so IR tracks Sn_IR
+ * unless the host masks them (datasheet reset is 0x00; drivers that poll Sn_IR ignore IMR). */
+#define W5100_IR_S0               0x01
+#define W5100_IR_S1               0x02
+#define W5100_IR_S2               0x04
+#define W5100_IR_S3               0x08
+#define W5100_IMR_SOCKETS         0x0F
+
 #define W5100_SN_MR               0x00
 #define W5100_SN_CR               0x01
+#define W5100_SN_IR               0x02
 #define W5100_SN_SR               0x03
 #define W5100_SN_PORT0            0x04
 #define W5100_SN_PORT1            0x05
@@ -80,6 +91,7 @@
 #define W5100_SN_MR_UDP           0x02
 #define W5100_SN_MR_IPRAW         0x03
 #define W5100_SN_MR_MACRAW        0x04
+#define W5100_SN_MR_ND            0x20  /* TCP: no delayed ACK */
 #define W5100_SN_MR_MF            0x40  /* MACRAW MAC Filter: accept only own-MAC (SHAR) + broadcast */
 
 #define W5100_SN_CR_OPEN          0x01
@@ -90,10 +102,23 @@
 #define W5100_SN_CR_SEND          0x20
 #define W5100_SN_CR_RECV          0x40
 
+/* Sn_IR bits. Host write-1-to-clear. */
+#define W5100_SN_IR_CON           0x01
+#define W5100_SN_IR_DISCON        0x02
+#define W5100_SN_IR_RECV          0x04
+#define W5100_SN_IR_TIMEOUT       0x08
+#define W5100_SN_IR_SEND_OK       0x10
+
 #define W5100_SN_SR_CLOSED        0x00
 #define W5100_SN_SR_SOCK_INIT     0x13
+#define W5100_SN_SR_SOCK_LISTEN   0x14
 #define W5100_SN_SR_SOCK_SYNSENT  0x15
 #define W5100_SN_SR_ESTABLISHED   0x17
+#define W5100_SN_SR_SOCK_FIN_WAIT 0x18
+#define W5100_SN_SR_SOCK_CLOSING  0x1A
+#define W5100_SN_SR_SOCK_TIME_WAIT 0x1B
+#define W5100_SN_SR_SOCK_CLOSE_WAIT 0x1C
+#define W5100_SN_SR_SOCK_LAST_ACK 0x1D
 #define W5100_SN_SR_SOCK_UDP      0x22
 #define W5100_SN_SR_SOCK_IPRAW    0x32
 #define W5100_SN_SR_SOCK_MACRAW   0x42

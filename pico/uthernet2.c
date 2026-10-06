@@ -7,9 +7,13 @@
 #include "u2_monitor.h"
 #include "w5100_regs.h"
 #include "ipc.h"
+#include "a2bus.h"
+#include "hardware/pio.h"
 #include "pico.h"
 #include "pico/multicore.h"
 #include "pico/time.h"
+#include "pico/stdio.h"
+#include "pico/stdio_uart.h"
 #include <stdio.h>
 #include <string.h>
 #if U2_RX_AUDIT
@@ -87,6 +91,36 @@ typedef struct {
 } u2_socket_t;
 
 static u2_socket_t u2_sockets[W5100_NUM_SOCKETS];
+
+/* Sn_IR and common IR are write-1-to-clear shadows. Core 0 ORs bits; core 1 reads them. */
+static uint8_t u2_sn_ir[W5100_NUM_SOCKETS];
+static uint8_t u2_ir;
+static uint8_t u2_host_net_locked;
+static volatile uint8_t u2_cmd_epoch;
+
+enum {
+  U2_DF_NONE = 0,
+  U2_DF_OPEN,
+  U2_DF_CONNECT,
+  U2_DF_LISTEN,
+  U2_DF_DISCON,
+  U2_DF_CLOSE,
+  U2_DF_SEND,
+};
+
+typedef struct {
+  uint8_t op;
+  uint8_t mr;
+  uint8_t proto;
+  uint16_t port;
+  uint16_t dport;
+  uint32_t dip;
+  uint16_t tx_rd;
+  uint16_t tx_wr;
+  uint16_t sent;
+} u2_defer_t;
+
+static u2_defer_t u2_defer[W5100_NUM_SOCKETS];
 #if UTHERNET2_DEBUG
 static uint16_t u2_dbg_last_wire[W5100_NUM_SOCKETS];
 static uint8_t u2_dbg_stall_dumped[W5100_NUM_SOCKETS];
@@ -193,6 +227,33 @@ static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
   return (uint16_t)d;
 }
 
+static volatile uint32_t u2_bus_n;
+
+void U2_RxDebugProbe(int socket_i, int *cr, int *bus_n, int *rx_rd) {
+  if (!cr || !bus_n || !rx_rd)
+    return;
+  *bus_n = (int)u2_bus_n;
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS) {
+    *cr = *rx_rd = -1;
+    return;
+  }
+  uint16_t ra = u2_sockets[socket_i].register_address;
+  *cr = (int)u2_memory[ra + W5100_SN_CR];
+  *rx_rd = (int)(((uint16_t)u2_memory[ra + W5100_SN_RX_RD0] << 8)
+                 | u2_memory[ra + W5100_SN_RX_RD1]);
+}
+
+void U2_RxDebugStat(int socket_i, int *size, int *live_rsr, int *shadow_used) {
+  if (!size || !live_rsr || !shadow_used)
+    return;
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS) {
+    *size = *live_rsr = *shadow_used = -1;
+    return;
+  }
+  *size = (int)u2_sockets[socket_i].receive_size;
+  *live_rsr = (int)u2_rx_used_bytes_live(socket_i);
+  *shadow_used = (int)u2_rx_used_bytes(socket_i);
+}
 
 #if U2_RX_AUDIT
 /* #region agent log
@@ -321,10 +382,16 @@ static void u2_reset(void) {
   u2_ip65_data_trace_left = 0;
 #endif
   U2_MonReset();
+  __atomic_fetch_add(&u2_cmd_epoch, 1, __ATOMIC_ACQ_REL);
+  u2_host_net_locked = 0;
+  __atomic_store_n(&u2_ir, 0, __ATOMIC_RELEASE);
+  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
+    __atomic_store_n(&u2_sn_ir[i], 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&u2_defer[i].op, 0, __ATOMIC_RELEASE);
+    U2_Net_Close(i);
+  }
   memset(u2_memory, 0, sizeof(u2_memory));
   u2_mode_register = 0;
-  for (int i = 0; i < W5100_NUM_SOCKETS; i++)
-    U2_Net_Close(i);
   /* data_address is NOT reset on soft reset (Uthernet II doc) */
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
     u2_sockets[i].transmit_base = 0;
@@ -340,6 +407,7 @@ static void u2_reset(void) {
   u2_memory[W5100_RTR1] = 0xD0;
   u2_memory[W5100_RCR]  = 0x08;
   u2_memory[W5100_PTIMER] = 0x28;
+  u2_memory[W5100_IMR] = W5100_IMR_SOCKETS;
   /* SHAR: same default MAC as ip65 drivers/w5100.s (WIZnet OUI). When RMSR==0x06, ip65 skips SW reset
    * (which writes SHAR) but still reads SHAR back into cfg_mac — without this, MAC is all zeros. */
   u2_memory[W5100_SHAR0] = 0x00;
@@ -427,6 +495,8 @@ static uint8_t U2_BUS_RAM(read_socket_register)(uint16_t address) {
   case W5100_SN_MR:
   case W5100_SN_CR:
     return u2_memory[address];
+  case W5100_SN_IR:
+    return __atomic_load_n(&u2_sn_ir[i], __ATOMIC_ACQUIRE);
   case W5100_SN_SR:
     return U2_Net_GetStatus(i);
   case W5100_SN_TX_FSR0:
@@ -456,6 +526,8 @@ static uint8_t U2_BUS_RAM(read_socket_register)(uint16_t address) {
 static uint8_t U2_BUS_RAM(read_value_at)(uint16_t address) {
   if (address == W5100_MR)
     return u2_mode_register;
+  if (address == W5100_IR)
+    return __atomic_load_n(&u2_ir, __ATOMIC_ACQUIRE);
   if (address >= W5100_GAR0 && address <= W5100_UPORT1)
     return u2_memory[address];
   if (address >= W5100_S0_BASE && address <= W5100_S3_MAX)
@@ -465,10 +537,64 @@ static uint8_t U2_BUS_RAM(read_value_at)(uint16_t address) {
   return u2_memory[address & W5100_MEM_MAX];
 }
 
+/* Peek runs after every $C0C4–$C0C7 cycle and is what the next $C0C7 read should return. */
+static uint8_t u2_expect;
+static uint8_t u2_expect_valid;
+static volatile uint32_t u2_mis_n;
+static volatile uint16_t u2_pic_at, u2_aud_at;
+static volatile uint8_t u2_pic_byte, u2_aud_byte;
+static volatile uint8_t u2_pic_ready, u2_aud_ready;
+static volatile uint8_t u2_pic_got, u2_aud_got;
+static volatile uint8_t u2_pic_seen, u2_aud_seen;
+static volatile uint16_t u2_aim;
+static volatile uint8_t u2_aim_seen;
+/* Last slot cycles after the audio byte exists. Core 1 writes, core 0 reads once the bus has stopped. */
+struct u2_cyc_s {
+  uint16_t adr;
+  uint8_t loc, rw, val, pk;
+};
+static struct u2_cyc_s u2_cyc[8];
+static volatile uint8_t u2_cyc_i;
+
 uint8_t U2_BUS_RAM(U2_PeekDataPort)(void) {
   /* Pair with core-0 release-store of sn_rx_wr so DATA peeks see the frame bytes. */
   __atomic_thread_fence(__ATOMIC_ACQUIRE);
-  return read_value_at(u2_data_address);
+  uint8_t v = read_value_at(u2_data_address);
+  u2_expect = v;
+  u2_expect_valid = 1;
+  if (u2_cyc_i)
+    u2_cyc[(u2_cyc_i - 1u) & 7u].pk = v;
+  return v;
+}
+
+void U2_RxDebugQueue(int *waits, int *feeds, int *level) {
+  /* a = times the data port returned a different memory byte than the previous peek.
+   * b = cover byte read at the stored address (-1 if that address was never read).
+   * c = first audio byte read (-1 if the player never read that address). */
+  if (waits) *waits = (int)u2_mis_n;
+  if (feeds) *feeds = u2_pic_seen ? (int)u2_pic_got : -1;
+  if (level) *level = u2_aud_seen ? (int)u2_aud_got : -1;
+}
+
+void U2_RxDebugAim(int *aim, int *at, int *seen) {
+  if (aim) *aim = u2_aim_seen ? (int)u2_aim : -1;
+  if (at) *at = u2_aud_ready ? (int)u2_aud_at : -1;
+  if (seen) *seen = (int)u2_aud_seen;
+}
+
+void U2_RxDebugCyc(int slot, int *adr, int *packed, int *pk) {
+  uint8_t n = u2_cyc_i;
+  if (slot < 0 || slot > 7 || n == 0) {
+    if (adr) *adr = -1;
+    if (packed) *packed = -1;
+    if (pk) *pk = -1;
+    return;
+  }
+  uint8_t idx = (uint8_t)((n - 1u - (uint8_t)slot) & 7u);
+  const struct u2_cyc_s *e = &u2_cyc[idx];
+  if (adr) *adr = e->adr;
+  if (packed) *packed = ((int)e->loc << 16) | ((int)e->rw << 8) | e->val;
+  if (pk) *pk = e->pk;
 }
 
 static void U2_BUS_RAM(auto_increment)(void) {
@@ -558,6 +684,19 @@ static uint8_t U2_BUS_RAM(read_value)(void) {
     U2_MonCheckpoint(4);
 #endif
   uint8_t v = read_value_at(rd_addr);
+  if (u2_expect_valid && rd_addr >= W5100_TX_BASE && v != u2_expect)
+    u2_mis_n++;
+  u2_expect_valid = 0;
+  if (!u2_pic_seen && __atomic_load_n(&u2_pic_ready, __ATOMIC_ACQUIRE) &&
+      rd_addr == u2_pic_at) {
+    u2_pic_got = v;
+    u2_pic_seen = 1;
+  }
+  if (!u2_aud_seen && __atomic_load_n(&u2_aud_ready, __ATOMIC_ACQUIRE) &&
+      rd_addr == u2_aud_at) {
+    u2_aud_got = v;
+    u2_aud_seen = 1;
+  }
 #if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
   if (u2_ip65_data_trace_left > 0) {
     U2_MonDataReadTrace(rd_addr, v, u2_mode_register);
@@ -588,6 +727,15 @@ static void U2_BUS_RAM(write_common_register)(uint16_t address, uint8_t value) {
       (address >= W5100_SUBR0 && address <= W5100_SUBR3) ||
       (address >= W5100_SHAR0 && address <= W5100_SHAR5) ||
       (address >= W5100_SIPR0 && address <= W5100_SIPR3)) {
+    if (address <= W5100_SUBR3 || address >= W5100_SIPR0)
+      u2_host_net_locked = 1;
+    u2_memory[address] = value;
+  }
+  else if (address == W5100_IR) {
+    uint8_t cur = __atomic_load_n(&u2_ir, __ATOMIC_ACQUIRE);
+    __atomic_store_n(&u2_ir, (uint8_t)(cur & (uint8_t)~value), __ATOMIC_RELEASE);
+  }
+  else if (address == W5100_IMR) {
     u2_memory[address] = value;
   }
   else if (address == W5100_RMSR)
@@ -614,14 +762,20 @@ static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int 
   uint16_t free_bytes = size - used;
   uint16_t accept_len = len;
   uint16_t total = len;
-  if (is_udp) {
-    total += 8;  /* 4 + 2 + 2 */
+  uint16_t hdr = 0;
+  if (is_udp == 1)
+    hdr = 8;
+  else if (is_udp == 2)
+    hdr = 6;
+  if (hdr) {
+    total = (uint16_t)(len + hdr);
     if (free_bytes <= total) {
       used = u2_rx_used_bytes(socket_i);
       free_bytes = size - used;
       if (free_bytes <= total) {
-        U2_MonNetRxDrop(socket_i, U2_RX_PROTO_UDP, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
-        return 0;  /* UDP datagram is atomic */
+        U2_MonNetRxDrop(socket_i, is_udp == 1 ? U2_RX_PROTO_UDP : U2_RX_PROTO_TCP,
+                        U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
+        return 0;
       }
     }
   } else {
@@ -642,7 +796,7 @@ static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int 
       U2_MonNetRxDrop(socket_i, U2_RX_PROTO_TCP, U2_RX_DROP_PARTIAL, len, accept_len, free_bytes, size);
   }
   uint16_t wr = u2_rx_wr_load(s);
-  if (is_udp) {
+  if (is_udp == 1 || is_udp == 2) {
     u2_memory[base + (wr & mask)] = (uint8_t)(src_ip >> 24);
     wr++;
     u2_memory[base + (wr & mask)] = (uint8_t)(src_ip >> 16);
@@ -651,20 +805,71 @@ static uint16_t u2_push_rx(int socket_i, const uint8_t *data, uint16_t len, int 
     wr++;
     u2_memory[base + (wr & mask)] = (uint8_t)src_ip;
     wr++;
-    u2_memory[base + (wr & mask)] = (uint8_t)(src_port >> 8);
-    wr++;
-    u2_memory[base + (wr & mask)] = (uint8_t)src_port;
-    wr++;
+    if (is_udp == 1) {
+      u2_memory[base + (wr & mask)] = (uint8_t)(src_port >> 8);
+      wr++;
+      u2_memory[base + (wr & mask)] = (uint8_t)src_port;
+      wr++;
+    }
     u2_memory[base + (wr & mask)] = (uint8_t)(len >> 8);
     wr++;
     u2_memory[base + (wr & mask)] = (uint8_t)len;
     wr++;
   }
+  static uint32_t u2_tcp_n;
+  static uint8_t u2_prev, u2_sig_done, u2_visu_done, u2_aud_done;
+  static uint16_t u2_sig = 0xFFFFu;
   for (uint16_t k = 0; k < accept_len; k++) {
-    u2_memory[base + (wr & mask)] = data[k];
+    uint8_t b = data[k];
+    uint16_t at = (uint16_t)(base + (wr & mask));
+    u2_memory[at] = b;
     wr++;
+    if (!hdr && socket_i == 0) {
+      uint32_t seq = u2_tcp_n++;
+      if (!u2_sig_done && u2_prev == 0xA2 && b == 0x01 && seq < 4000u) {
+        u2_sig = (uint16_t)(seq - 1u);
+        u2_sig_done = 1;
+        // #region agent log
+        U2_AgentLog("H21", "sig", (int)u2_sig, u2_prev, b, 1);
+        // #endregion
+      }
+      if (u2_sig_done && !u2_pic_ready && seq == (uint32_t)u2_sig + 2u) {
+        u2_pic_byte = b;
+        u2_pic_at = at;
+        __atomic_store_n(&u2_pic_ready, 1, __ATOMIC_RELEASE);
+        // #region agent log
+        U2_AgentLog("H27", "pic", (int)at, b, 0, 1);
+        // #endregion
+      }
+      if (u2_sig_done && !u2_visu_done &&
+          seq == (uint32_t)u2_sig + 2u + 16384u) {
+        u2_visu_done = 1;
+        uint8_t b1 = (uint16_t)(k + 1u) < accept_len ? data[k + 1u] : 0;
+        uint8_t b2 = (uint16_t)(k + 2u) < accept_len ? data[k + 2u] : 0;
+        // #region agent log
+        U2_AgentLog("H21", "visu", b, b1, b2, 1);
+        // #endregion
+      }
+      /* First audio sample: 140 templates * 40 bytes after the hires pages.
+       * Legal PWM bytes are 0x40-0x63 or 0x64-0x87. A zero here is a hole. */
+      if (u2_sig_done && !u2_aud_done &&
+          seq == (uint32_t)u2_sig + 2u + 16384u + 5600u) {
+        u2_aud_done = 1;
+        uint8_t b1 = (uint16_t)(k + 1u) < accept_len ? data[k + 1u] : 0;
+        uint8_t b2 = (uint16_t)(k + 2u) < accept_len ? data[k + 2u] : 0;
+        // #region agent log
+        U2_AgentLog("H22", "aud", b, b1, b2, 1);
+        // #endregion
+        u2_aud_byte = b;
+        u2_aud_at = at;
+        __atomic_store_n(&u2_aud_ready, 1, __ATOMIC_RELEASE);
+      }
+      u2_prev = b;
+    }
   }
   u2_rx_wr_store(s, wr);
+  if (accept_len > 0 || hdr)
+    U2_SocketIrq(socket_i, W5100_SN_IR_RECV);
   return accept_len;
 }
 
@@ -903,9 +1108,304 @@ static int send_data(int i) {
 
 /* §1cx: the RECV branch runs immediately before the host reads the next frame's length header,
  * so its latency lands directly on the prefetch deadline. Keep it in SRAM (RP2350 only). */
+static void u2_cr_clear(int i) {
+  u2_memory[u2_sockets[i].register_address + W5100_SN_CR] = 0;
+}
+
+static void u2_tx_rd_store(int i, uint16_t rd) {
+  uint16_t ra = u2_sockets[i].register_address;
+  u2_memory[ra + W5100_SN_TX_RD0] = (uint8_t)(rd >> 8);
+  u2_memory[ra + W5100_SN_TX_RD1] = (uint8_t)rd;
+}
+
+static uint16_t u2_tx_span(int i, uint16_t rd_full, uint16_t wr_full) {
+  uint16_t size = u2_sockets[i].transmit_size;
+  if (size == 0)
+    return 0;
+  uint16_t mask = (uint16_t)(size - 1);
+  int data = (int)(wr_full & mask) - (int)(rd_full & mask);
+  if (data < 0)
+    data += (int)size;
+  return (uint16_t)data;
+}
+
+static int u2_epoch_ok(uint8_t ep) {
+  return __atomic_load_n(&u2_cmd_epoch, __ATOMIC_ACQUIRE) == ep;
+}
+
+static void u2_defer_finish(int i, uint8_t ep) {
+  __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+  if (u2_epoch_ok(ep))
+    u2_cr_clear(i);
+}
+
+void U2_SocketIrq(int socket_i, uint8_t bits) {
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS || bits == 0)
+    return;
+  __atomic_fetch_or(&u2_sn_ir[socket_i], bits, __ATOMIC_ACQ_REL);
+  uint8_t imr = u2_memory[W5100_IMR];
+  if (imr & (uint8_t)(1u << socket_i))
+    __atomic_fetch_or(&u2_ir, (uint8_t)(1u << socket_i), __ATOMIC_ACQ_REL);
+}
+
+void U2_MirrorStaNet(const uint8_t ip[4], const uint8_t gw[4], const uint8_t mask[4]) {
+  if (u2_host_net_locked || !ip || !gw || !mask)
+    return;
+  for (int b = 0; b < 4; b++) {
+    u2_memory[W5100_SIPR0 + b] = ip[b];
+    u2_memory[W5100_GAR0 + b] = gw[b];
+    u2_memory[W5100_SUBR0 + b] = mask[b];
+  }
+}
+
+static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep) {
+  int ok = 0;
+  switch (d->mr & W5100_SN_MR_PROTO_MASK) {
+  case W5100_SN_MR_UDP:
+    ok = (U2_Net_OpenUdp(i, d->port) == 0);
+    break;
+  case W5100_SN_MR_TCP:
+    ok = (U2_Net_OpenTcp(i) == 0);
+    if (ok)
+      U2_Net_SetTcpNoDelay(i, (d->mr & W5100_SN_MR_ND) != 0);
+    break;
+  case W5100_SN_MR_IPRAW:
+    ok = (U2_Net_OpenIpraw(i, d->proto) == 0);
+    break;
+  default:
+    ok = 0;
+    break;
+  }
+  if (!u2_epoch_ok(ep)) {
+    U2_Net_Close(i);
+    __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+    return;
+  }
+  U2_MonSockOpen(i, d->mr, d->port, ok);
+  // #region agent log
+  U2_AgentLog("H5", "open", i, d->mr, ok, 1);
+  // #endregion
+  /* a2stream polls Sn_SR for SOCK_INIT and then writes CONNECT without waiting
+   * for Sn_CR. Publishing INIT while this OPEN still owns the defer slot drops
+   * that CONNECT (arm-fail op 2) and the following CR clear makes it look done. */
+  u2_defer_finish(i, ep);
+  if (ok && u2_epoch_ok(ep)) {
+    uint8_t st = W5100_SN_SR_CLOSED;
+    switch (d->mr & W5100_SN_MR_PROTO_MASK) {
+    case W5100_SN_MR_TCP:
+      st = W5100_SN_SR_SOCK_INIT;
+      break;
+    case W5100_SN_MR_UDP:
+      st = W5100_SN_SR_SOCK_UDP;
+      break;
+    case W5100_SN_MR_IPRAW:
+      st = W5100_SN_SR_SOCK_IPRAW;
+      break;
+    default:
+      break;
+    }
+    U2_Net_SetStatus(i, st);
+  }
+}
+
+static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
+  uint8_t st = U2_Net_GetStatus(i);
+  if (st == W5100_SN_SR_SOCK_CLOSE_WAIT || st == W5100_SN_SR_SOCK_FIN_WAIT ||
+      st == W5100_SN_SR_SOCK_LAST_ACK || st == W5100_SN_SR_CLOSED) {
+    // #region agent log
+    U2_AgentLog("H3", "send-bad-st", i, st, 0, 1);
+    // #endregion
+    U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+    u2_defer_finish(i, ep);
+    return;
+  }
+  uint16_t total = u2_tx_span(i, d->tx_rd, d->tx_wr);
+  if (d->sent >= total) {
+    u2_tx_rd_store(i, d->tx_wr);
+    U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
+    u2_defer_finish(i, ep);
+    return;
+  }
+  uint16_t size = u2_sockets[i].transmit_size;
+  uint16_t mask = (uint16_t)(size - 1);
+  uint16_t base = u2_sockets[i].transmit_base;
+  uint16_t left = (uint16_t)(total - d->sent);
+  if (st == W5100_SN_SR_SOCK_UDP || st == W5100_SN_SR_SOCK_IPRAW) {
+    uint16_t off = (uint16_t)(d->tx_rd & mask);
+    int rc = (st == W5100_SN_SR_SOCK_UDP)
+                 ? U2_Net_SendUdp(i, &u2_memory[base], size, off, left, d->dip, d->dport)
+                 : U2_Net_SendIpraw(i, &u2_memory[base], size, off, left, d->dip);
+    if (!u2_epoch_ok(ep)) {
+      __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+      return;
+    }
+    if (rc != 0) {
+      U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+      u2_defer_finish(i, ep);
+      return;
+    }
+    u2_tx_rd_store(i, d->tx_wr);
+    U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
+    u2_defer_finish(i, ep);
+    return;
+  }
+  if (st != W5100_SN_SR_ESTABLISHED) {
+    U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+    u2_defer_finish(i, ep);
+    return;
+  }
+  uint8_t buf[256];
+  uint16_t n = left > (uint16_t)sizeof(buf) ? (uint16_t)sizeof(buf) : left;
+  uint16_t off = (uint16_t)((d->tx_rd + d->sent) & mask);
+  for (uint16_t j = 0; j < n; j++)
+    buf[j] = u2_memory[base + ((off + j) & mask)];
+  int acc = U2_Net_SendTcp(i, buf, n);
+  if (!u2_epoch_ok(ep)) {
+    __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+    return;
+  }
+  if (acc < 0) {
+    // #region agent log
+    U2_AgentLog("H2", "send-fail", i, st, acc, 1);
+    // #endregion
+    U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+    u2_defer_finish(i, ep);
+    return;
+  }
+  d->sent = (uint16_t)(d->sent + (uint16_t)acc);
+  u2_tx_rd_store(i, (uint16_t)(d->tx_rd + d->sent));
+  if (acc == 0 || d->sent < total) {
+    // #region agent log
+    U2_AgentLog("H2", "send-hold", i, (int)d->sent, (int)total, 0);
+    // #endregion
+    return; /* Sn_CR stays set; core 0 retries until lwIP accepts the span */
+  }
+  // #region agent log
+  U2_AgentLog("H2", "send-ok", i, (int)total, st, 0);
+  // #endregion
+  U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
+  u2_defer_finish(i, ep);
+}
+
+static volatile uint8_t u2_arm_fail_sock;
+static volatile uint8_t u2_arm_fail_op;
+static volatile uint8_t u2_arm_fail_pending;
+
+void U2_ProcessDeferredSocketCmds(void) {
+  if (get_core_num() != 0)
+    return;
+  // #region agent log
+  if (u2_arm_fail_pending) {
+    U2_AgentLog("H6", "arm-fail", u2_arm_fail_sock, u2_arm_fail_op, 0, 1);
+    u2_arm_fail_pending = 0;
+  }
+  // #endregion
+  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
+    uint8_t op = __atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE);
+    if (op == U2_DF_NONE)
+      continue;
+    uint8_t ep = __atomic_load_n(&u2_cmd_epoch, __ATOMIC_ACQUIRE);
+    u2_defer_t *d = &u2_defer[i];
+    int rc;
+    switch (op) {
+    case U2_DF_OPEN:
+      u2_defer_open(i, d, ep);
+      break;
+    case U2_DF_CONNECT:
+      // #region agent log
+      U2_AgentLog("H6", "conn-go", i, (int)d->dip, (int)d->dport, 1);
+#ifndef PICO_RP2040
+      /* H23 samples the sticky listener-drop bit. Clear it here so a later
+       * 1 means a cycle was dropped after CONNECT, not at power-on. */
+      pio0->fdebug = (1u << SM_LISTENER);
+#endif
+      // #endregion
+      rc = U2_Net_ConnectTcpEx(i, d->dip, d->dport, d->port);
+      if (!u2_epoch_ok(ep)) {
+        U2_Net_Close(i);
+        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        break;
+      }
+      U2_MonSockConnect(i, d->dip, d->dport, rc == 0);
+      // #region agent log
+      U2_AgentLog("H7", "conn-rc", i, rc, U2_Net_GetStatus(i), 1);
+      // #endregion
+      if (rc != 0) {
+        U2_Net_Close(i);
+        U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+      }
+      u2_defer_finish(i, ep);
+      break;
+    case U2_DF_LISTEN:
+      rc = U2_Net_ListenTcp(i, d->port);
+      if (!u2_epoch_ok(ep)) {
+        U2_Net_Close(i);
+        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        break;
+      }
+      U2_MonSockListen(i, d->port, rc == 0);
+      if (rc != 0) {
+        U2_Net_Close(i);
+        U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+      }
+      u2_defer_finish(i, ep);
+      break;
+    case U2_DF_DISCON:
+      rc = U2_Net_DisconTcp(i);
+      if (!u2_epoch_ok(ep)) {
+        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        break;
+      }
+      if (rc != 0)
+        U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
+      u2_defer_finish(i, ep);
+      break;
+    case U2_DF_CLOSE:
+      U2_MonSockClose(i);
+      U2_Net_Close(i);
+      u2_defer_finish(i, ep);
+      break;
+    case U2_DF_SEND:
+      u2_defer_send(i, d, ep);
+      break;
+    default:
+      u2_defer_finish(i, ep);
+      break;
+    }
+  }
+}
+
+static int u2_defer_arm(int i, const u2_defer_t *src) {
+  if (__atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE) != U2_DF_NONE) {
+    // #region agent log
+    u2_arm_fail_sock = (uint8_t)i;
+    u2_arm_fail_op = src->op;
+    u2_arm_fail_pending = 1;
+    // #endregion
+    return -1;
+  }
+  u2_defer[i].mr = src->mr;
+  u2_defer[i].proto = src->proto;
+  u2_defer[i].port = src->port;
+  u2_defer[i].dport = src->dport;
+  u2_defer[i].dip = src->dip;
+  u2_defer[i].tx_rd = src->tx_rd;
+  u2_defer[i].tx_wr = src->tx_wr;
+  u2_defer[i].sent = 0;
+  __atomic_store_n(&u2_defer[i].op, src->op, __ATOMIC_RELEASE);
+  U2_RequestCore0NetPoll();
+  return 0;
+}
+
 static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
-  u2_memory[address] = value;
   uint16_t loc = address & 0xFF;
+  int sock_i = (address >> 8) - 0x04;
+  if (loc == W5100_SN_IR && sock_i >= 0 && sock_i < W5100_NUM_SOCKETS) {
+    uint8_t cur = __atomic_load_n(&u2_sn_ir[sock_i], __ATOMIC_ACQUIRE);
+    __atomic_store_n(&u2_sn_ir[sock_i], (uint8_t)(cur & (uint8_t)~value), __ATOMIC_RELEASE);
+    return;
+  }
+  u2_memory[address] = value;
   /* NOTE: Sn_RX_RD byte writes deliberately do NOT publish the core-0 shadow. On a real W5100
    * the host's Sn_RX_RD update only takes effect (Sn_RX_RSR is recomputed) when the RECV command
    * is issued; the shadow is therefore published in the RECV handler below, where both RX_RD bytes
@@ -915,6 +1415,7 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
    * over-reported Sn_RX_RSR, resurrecting the unbounded "sock0 RECV" storm (§1ch). */
   if (loc == W5100_SN_CR) {
     int i = (address >> 8) - 0x04;
+    int hold_cr = 0;
     switch (value) {
     case W5100_SN_CR_OPEN: {
       uint8_t mr = u2_memory[(address & 0xFF00) + W5100_SN_MR];
@@ -923,24 +1424,9 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
       /* Hardware resets the socket's ring pointers on OPEN; do the same so a reused socket
        * starts with Sn_RX_RSR=0 (see u2_reset_socket_rings — fixes the Contiki RECV storm). */
       u2_reset_socket_rings(i);
-      switch (mr & W5100_SN_MR_PROTO_MASK) {
-      case W5100_SN_MR_UDP: {
-        int ok = (U2_Net_OpenUdp(i, port) == 0);
-        U2_MonSockOpen(i, mr, port, ok);
-        if (!ok)
-          u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-        break;
-      }
-      case W5100_SN_MR_TCP: {
-        int ok = (U2_Net_OpenTcp(i) == 0);
-        U2_MonSockOpen(i, mr, port, ok);
-        if (ok)
-          u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_SOCK_INIT;
-        else
-          u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-        break;
-      }
-      case W5100_SN_MR_MACRAW: {
+      __atomic_store_n(&u2_sn_ir[i], 0, __ATOMIC_RELEASE);
+      uint8_t proto = mr & W5100_SN_MR_PROTO_MASK;
+      if (proto == W5100_SN_MR_MACRAW) {
         int ok = (U2_Net_OpenMacraw(i) == 0);
         U2_MonSockOpen(i, mr, port, ok);
         if (ok) {
@@ -950,54 +1436,82 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
 #endif
         } else
           u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-        break;
-      }
-      default:
+      } else if (proto == W5100_SN_MR_TCP || proto == W5100_SN_MR_UDP || proto == W5100_SN_MR_IPRAW) {
+        u2_defer_t cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.op = U2_DF_OPEN;
+        cmd.mr = mr;
+        cmd.port = port;
+        cmd.proto = u2_memory[(address & 0xFF00) + W5100_SN_PROTO];
+        u2_defer_arm(i, &cmd);
+        hold_cr = 1;
+      } else {
         U2_MonSockOpen(i, mr, port, 0);
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-        break;
       }
       break;
     }
     case W5100_SN_CR_CONNECT: {
-      uint32_t dip = (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR0] << 24
-                   | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR1] << 16
-                   | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR2] << 8
-                   | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
-      uint16_t dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
-                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
-      uint16_t lport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
-                     | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
-      {
-        int cok = (U2_Net_ConnectTcpEx(i, dip, dport, lport) == 0);
-        U2_MonSockConnect(i, dip, dport, cok);
-        if (!cok)
-          u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-      }
+      u2_defer_t cmd;
+      memset(&cmd, 0, sizeof(cmd));
+      cmd.op = U2_DF_CONNECT;
+      cmd.dip = (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR0] << 24
+              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR1] << 16
+              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR2] << 8
+              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
+      cmd.dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
+                | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
+      cmd.port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
+               | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      u2_defer_arm(i, &cmd);
+      hold_cr = 1;
       break;
     }
     case W5100_SN_CR_LISTEN: {
-      uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
-                    | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
-      {
-        int lok = (U2_Net_ListenTcp(i, port) == 0);
-        U2_MonSockListen(i, port, lok);
-        if (!lok)
-          u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
-      }
+      u2_defer_t cmd;
+      memset(&cmd, 0, sizeof(cmd));
+      cmd.op = U2_DF_LISTEN;
+      cmd.port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
+               | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      u2_defer_arm(i, &cmd);
+      hold_cr = 1;
       break;
     }
     case W5100_SN_CR_CLOSE:
     case W5100_SN_CR_DISCON:
-      U2_MonSockClose(i);
-      U2_Net_Close(i);
-      u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+      if (U2_Net_GetStatus(i) == W5100_SN_SR_SOCK_MACRAW) {
+        U2_MonSockClose(i);
+        U2_Net_Close(i);
+        u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+      } else {
+        u2_defer_t cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.op = (value == W5100_SN_CR_DISCON) ? U2_DF_DISCON : U2_DF_CLOSE;
+        u2_defer_arm(i, &cmd);
+        hold_cr = 1;
+      }
       break;
     case W5100_SN_CR_SEND:
       U2_MonSockSendRecv(i, 1);
-      if (send_data(i) != 0) {
-        U2_RequestCore0NetPoll();
-        return;
+      if (U2_Net_GetStatus(i) == W5100_SN_SR_SOCK_MACRAW) {
+        if (send_data(i) != 0) {
+          U2_RequestCore0NetPoll();
+          return;
+        }
+      } else {
+        u2_defer_t cmd;
+        memset(&cmd, 0, sizeof(cmd));
+        cmd.op = U2_DF_SEND;
+        cmd.tx_rd = read_net16(&u2_memory[(address & 0xFF00) + W5100_SN_TX_RD0]);
+        cmd.tx_wr = read_net16(&u2_memory[(address & 0xFF00) + W5100_SN_TX_WR0]);
+        cmd.dip = (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR0] << 24
+                | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR1] << 16
+                | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR2] << 8
+                | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
+        cmd.dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
+                  | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
+        u2_defer_arm(i, &cmd);
+        hold_cr = 1;
       }
       U2_RequestCore0NetPoll();
       break;
@@ -1076,6 +1590,16 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
           }
         }
 #endif
+        {
+          /* TCP window opens when the host consumes, not when the byte is copied in. */
+          uint16_t prev = u2_rx_rd_load(&u2_sockets[i]);
+          uint16_t sz = u2_sockets[i].receive_size;
+          if (sz) {
+            uint16_t adv = (uint16_t)((rd - prev) & (uint16_t)(sz - 1u));
+            if (adv)
+              U2_Net_NoteRecv(i, adv);
+          }
+        }
         __atomic_store_n(&u2_sockets[i].sn_rx_rd, rd, __ATOMIC_RELEASE);
         /* MACRAW RX wedge detect + recovery (§1ck). A single-chip W5100 can never present a frame
          * whose 2-byte length header is 0x0000 (min header = frame_len + 2 ≥ 16) or larger than
@@ -1160,8 +1684,10 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
     default:
       break;
     }
-    /* Command complete: clear CR so host (e.g. ip65) sees command done */
-    u2_memory[address] = 0;
+    /* Command complete: clear CR so host (e.g. ip65) sees command done.
+     * Deferred TCP/UDP/IPRAW commands clear CR on core 0 when the command is accepted. */
+    if (!hold_cr)
+      u2_memory[address] = 0;
   }
 }
 
@@ -1296,7 +1822,56 @@ void U2_RxAuditReport(void) {
 /* #endregion */
 #endif
 
+static volatile uint8_t u2_stage_b[16];
+static volatile uint32_t u2_stage_us[16];
+static volatile uint8_t u2_stage_w;
+static volatile uint8_t u2_stage_r;
+
+void U2_BUS_RAM(U2_NoteStage)(uint8_t id) {
+  uint8_t w = u2_stage_w;
+  uint8_t nxt = (uint8_t)((w + 1u) & 15u);
+  if (nxt == u2_stage_r)
+    return;
+  u2_stage_b[w] = id;
+  u2_stage_us[w] = time_us_32();
+  u2_stage_w = nxt;
+}
+
+void U2_StagePoll(void) {
+  uint8_t r = u2_stage_r;
+  uint8_t w = u2_stage_w;
+  while (r != w) {
+    // #region agent log
+    U2_AgentLog("H31", "stg", (int)u2_stage_b[r], (int)u2_stage_us[r], 0, 1);
+    // #endregion
+    r = (uint8_t)((r + 1u) & 15u);
+    u2_stage_r = r;
+  }
+}
+
+void U2_AgentLog(const char *hid, const char *msg, int a, int b, int c, int force) {
+  // #region agent log
+  static uint16_t u2_agent_n;
+  if (u2_agent_n >= 400)
+    return;
+  if (!force) {
+    if ((u2_agent_n & 15u) != 0) {
+      u2_agent_n++;
+      return;
+    }
+  }
+  u2_agent_n++;
+  printf("{\"sessionId\":\"98f944\",\"hypothesisId\":\"%s\",\"location\":\"uthernet2\",\"message\":\"%s\",\"data\":{\"a\":%d,\"b\":%d,\"c\":%d},\"timestamp\":%llu}\n",
+         hid, msg, a, b, c, (unsigned long long)(time_us_64() / 1000u));
+  // #endregion
+}
+
 void U2_Init(void) {
+  /* Socket-mode probe: Release turns UART off. Bring it back here so a few
+   * NDJSON lines are visible on GPIO 0/1 without the Debug monitor flood. */
+  stdio_uart_init();
+  stdio_set_driver_enabled(&stdio_uart, true);
+  setbuf(stdout, NULL);
 #if U2_RX_AUDIT
   /* The audit must run in a Release build to keep the bus path's normal timing, but Release
    * disables UART stdio (main.c) leaving only USB CDC — and a connected USB console gates the
@@ -1315,6 +1890,9 @@ void U2_Init(void) {
   u2_data_address = 0;
   U2_Net_Init(u2_push_rx, u2_push_rx_macraw);
   u2_reset();
+  // #region agent log
+  U2_AgentLog("H5", "boot", 0, 0, 0, 1);
+  // #endregion
 }
 
 #if PICO_CYW43_ARCH_POLL
@@ -1333,9 +1911,11 @@ void U2_RequestCore0NetPoll(void) {}
 volatile bool u2_core0_net_wake_pending;
 
 void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
+  u2_bus_n++;
   uint32_t loc = busdata & U2_C0X_MASK;
   uint8_t data = (uint8_t)((busdata >> 5) & 0xFF);
   int is_read = (busdata & READFLAG) != 0;
+  uint16_t adr_before = u2_data_address;
 
   *read_byte_out = 0;
   if (is_read) {
@@ -1393,6 +1973,11 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
       break;
     case U2_C0X_ADDRESS_LOW:
       u2_data_address = (uint16_t)((data << 0) | (u2_data_address & 0xFF00));
+      if (__atomic_load_n(&u2_aud_ready, __ATOMIC_ACQUIRE) &&
+          u2_data_address >= W5100_RX_BASE) {
+        u2_aim = u2_data_address;
+        u2_aim_seen = 1;
+      }
 #if U2_RX_AUDIT
       /* #region agent log — pointer trace, see note at u2_trc. */
       u2_trc_note(0);
@@ -1412,4 +1997,14 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
     U2_MonBus(is_read, (unsigned)loc, busdata, log_byte, u2_data_address, u2_mode_register);
   }
 #endif
+  if (__atomic_load_n(&u2_aud_ready, __ATOMIC_ACQUIRE)) {
+    uint8_t i = u2_cyc_i;
+    struct u2_cyc_s *e = &u2_cyc[i & 7u];
+    e->adr = is_read ? adr_before : u2_data_address;
+    e->loc = (uint8_t)loc;
+    e->rw = (uint8_t)(is_read ? 1 : 0);
+    e->val = is_read ? *read_byte_out : data;
+    e->pk = 0;
+    u2_cyc_i = (uint8_t)(i + 1u);
+  }
 }

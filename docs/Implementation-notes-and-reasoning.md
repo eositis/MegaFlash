@@ -4064,11 +4064,96 @@ Operator confirmed first-connect fixed on the V1.2.4-eo Release rebuild. Removed
 
 ---
 
+## 1ef. W5100 socket mode: Sn_IR, deferred TCP/UDP/IPRAW, graceful close (2026-09-28)
+
+**What:** MACRAW on socket 0 was the path that matched real cards. TCP/UDP sockets already had lwIP pcbs, but drivers that wait on `Sn_IR` after `Sn_CR` returns to 0 never woke up, `LISTEN` was reported as `SOCK_INIT`, and peer FIN jumped straight to `CLOSED`.
+
+**Why:** A W5100 TCP client (a2stream, WIZnet-style stacks) spins until `Sn_CR == 0`, then waits for `Sn_IR` CON / SEND_OK / RECV / TIMEOUT / DISCON. Those bits were not in the register file. `tcp_write` also ran on the bus core and advanced `Sn_TX_RD` only by the bytes lwIP accepted in that one call, so a short accept never raised SEND_OK and expected another SEND. UDP ignored `udp_sendto` failure and still retired the TX window (stack-architecture P0-1).
+
+**What we did:**
+
+- `Sn_IR` and common `IR` are write-1-to-clear shadows. `IMR` resets to `0x0F` (S0–S3 unmasked) so `IR` tracks socket events unless the host masks them. Datasheet reset of `IMR` is `0x00`; drivers that only poll `Sn_IR` are unaffected.
+- TCP/UDP/IPRAW OPEN, CONNECT, LISTEN, SEND, DISCON, and CLOSE are queued on the bus core and finished on core 0. `Sn_CR` stays at the command until that completion. MACRAW OPEN/SEND/RECV/CLOSE stay on the existing path.
+- TCP SEND retries `tcp_write` until the whole `TX_RD`→`TX_WR` span is accepted or the pcb fails. SEND_OK is set once, not per short accept. UDP and IPRAW set SEND_OK only when the send returns success; otherwise `Sn_TX_RD` is left and TIMEOUT is raised.
+- Status values drivers branch on: `SOCK_LISTEN` (`0x14`), `SOCK_CLOSE_WAIT` (`0x1C`), `SOCK_FIN_WAIT` (`0x18`), `SOCK_LAST_ACK` (`0x1D`). Peer FIN sets CLOSE_WAIT + DISCON and leaves unread RX. DISCON shuts the TX side (`tcp_shutdown`); CLOSE aborts.
+- One accepted TCP child per listen. The listen pcb is dropped after accept, so the host must OPEN+LISTEN again (W5100 does not auto-relisten). `Sn_MR` ND disables Nagle on the active pcb.
+- IPRAW (`Sn_MR` `0x03`, `Sn_PROTO`) uses an lwIP raw pcb. RX is 4-byte source IP + 2-byte length + IP payload.
+- UDP/IPRAW source addresses in that header are host-order octets. The previous UDP path stored `ip_addr_get_ip4_u32` shifted on a little-endian CPU, which reversed the address.
+- STA IPv4 address, gateway, and netmask are copied into `SIPR` / `GAR` / `SUBR` until the Apple writes any of those bytes. Wire source stays the STA address; TCP offload does not put the host's `SIPR` on the wire.
+
+**What we didn’t do:** PPPoE, AppleWin virtual DNS, `SEND_MAC`, `SEND_KEEP`, and wiring W5100 `/INT` to the slot IRQ. No on-device a2stream, UDP, IPRAW, or MACRAW regression run in this session — Release images were only compiled (`./pico/build-both.sh`). Socket TCP still cannot share STA ingress with socket 0 MACRAW.
+
+**Takeaway:** Flash a Release build (Debug UART starves lwIP). Prove a2stream connect/send/recv, one UDP exchange, then a MACRAW ip65/Contiki smoke test with socket 0 not left in MACRAW during the socket-mode run. `U2_Init` calls `U2_Net_Close` before `cyw43_arch_init`; that close must not take the CYW43 lock or the chip hard-faults before USB, UART, and the Apple bus loop.
+
+**References:** `pico/w5100_regs.h`, `pico/uthernet2.c` (`U2_SocketIrq`, `U2_ProcessDeferredSocketCmds`), `pico/uthernet2_net.cpp` (`u2_lwip_enter`).
+
+---
+
+## 1eg. a2stream CONNECT dropped while OPEN still deferred (2026-09-29)
+
+**What:** a2stream opened TCP (`Sn_MR=0x21`) and then sat in “connecting”. UART showed `open` ok, then `arm-fail` with `b=2` (`U2_DF_CONNECT`) 9 ms later. No `conn-go`.
+
+**Why:** `w5100_connect` in a2stream writes OPEN, spins until `Sn_SR==SOCK_INIT` (`0x13`), then writes CONNECT. It does not wait for `Sn_CR==0`. `U2_Net_OpenTcp` published `SOCK_INIT` before `u2_defer_finish` released the defer slot, so the 6502’s CONNECT hit `u2_defer_arm` while `op` was still OPEN and was discarded. OPEN’s finish then cleared `Sn_CR`, so the lost CONNECT looked complete and `Sn_SR` stayed `0x13`.
+
+**What we did:** TCP, UDP, and IPRAW OPEN leave `Sn_SR` at `CLOSED` until the defer slot is released and `Sn_CR` is cleared, then publish `SOCK_INIT` / `SOCK_UDP` / `SOCK_IPRAW`.
+
+**What we didn’t do:** A command queue. a2stream’s poll is on status, so publishing status only after the slot is free matches the real chip (status and command-complete appear together).
+
+**Takeaway:** Any driver that treats `Sn_SR` as “command done” will issue the next command as soon as status changes. Do not publish the post-command status while `u2_defer[i].op` is still set.
+
+**References:** a2stream `w5100.c` `w5100_connect`; `u2_defer_open`, `u2_defer_arm`; probe `arm-fail` op 2.
+
+## 1eh. TCP RX tail dropped once the socket ring is full (2026-09-29)
+
+**What:** After the OPEN/CONNECT fix, a2stream connects, sends the request, and receives the start of the response, then stalls on cover art. Two UART captures show the same shape: `con`, then `rx` with `c` (accepted) less than `b` (offered), then a run of `rx` with `c=0`.
+
+**Why:** `u2_tcp_recv` copied what fit in the W5100 RX ring, called `tcp_recved` for that count, and `pbuf_free`d the whole segment. lwIP had already ACKed the segment, so the peer did not retransmit the tail. a2stream only issues RECV after it has read a chunk (`w5100_data_commit`), and core 0’s free-space math uses the RX_RD shadow published at RECV, so a burst fills the ring before the 6502 drains it. The cover-art bytes were the part that did not fit.
+
+**What we did:** A short accept trims the pbuf with `pbuf_remove_header` and returns `ERR_MEM`. lwIP keeps that pbuf as `refused_data` and `tcp_fasttmr` presents it again after the host RECV frees ring space. `tcp_recved` runs only for bytes actually stored.
+
+**What we didn’t do:** Change the RX ring size or publish `Sn_RX_RD` on every pointer write. The shadow rule is what keeps a torn RD from letting core 0 overwrite unread data.
+
+**Takeaway:** Once lwIP has ACKed a segment, the emulator must either store every byte or hold the pbuf. Returning `ERR_MEM` parks that pbuf in `refused_data`, and lwIP then drops any newer segment that arrives before the hold is drained. a2stream’s `Sn_RX_RSR` double-read never settles if the ring is updated from that retry path, and the machine freezes on the hires load.
+
+**Update:** Chaining every new segment onto that hold (`rx-cat` past 11KB) kept the Wi-Fi driver’s pbufs until the chip died mid-cover-art. Extra segments are no longer concatenated. One remainder stays on the socket; a further segment is returned `ERR_MEM` so lwIP holds it and the receive window stays closed until the ring drains.
+
+**Update (still failing):** The no-cat build still dies at cover art. The capture shows the ring accepting only ~80 bytes per poll (`rx-hold` 1383, 1303, …, 23), then a 431-byte remainder that never enters while `rx-block` repeats a 1456-byte segment for >1.5 s. a2stream `load(0x800)` will not read until `Sn_RX_RSR` ≥ 2048, so the next probe (`rx-stat`: a=socket size, b=live RSR, c=shadow used) distinguishes a buffer that can never reach 2048 from a live/shadow split where the host sees a short RSR while core 0 still treats the ring as full.
+
+**Update (rx-stat):** Socket size is 8192 and both live RSR and the shadow sit at 8191 when the 431-byte hold sticks for 5 s. H9 (buffer shorter than 2048) and H11 (live/shadow split) are out. `rx-probe` (a=`Sn_CR`, b=completed bus cycles, c=live `Sn_RX_RD`) is the next sample: a frozen bus count means core 1 is stuck in the IRQ0 wait; a climbing count with `Sn_CR` non-zero means `w5100_data_request` is returning 0.
+
+**Update (rx-probe):** `Sn_CR` stays 0. Bus cycles climb (6506 → 11458 → 18942 → 21002) with `Sn_RX_RD` moving, then both freeze for the rest of the capture while core 0 keeps printing `rx-block`. The 6502 is not spinning on the card. `rx-bus` during the active stretch is IRQ0 clear, program counter 7, listener FIFO empty — that is the idle bus, not a stuck IRQ.
+
+**Fix:** `u2_flush_hold` was calling `tcp_recved` as soon as bytes were copied into the ring, so the peer kept sending after the 8KB socket was full (live RSR 8191, tail parked in `hold`). `tcp_recved` now runs only for the byte count the host commits with RECV (`U2_Net_NoteRecv`).
+
+**Update (window still 11KB):** The post-fix capture still fills the ring to 8191 and `rx-block`s 1456-byte segments. `tcp_connect()` assigns `rcv_wnd = TCP_WND` (8×MSS = 11680) and transmits the SYN before we can overwrite it. `TCP_WND` is now 8192, and after each receive/RECV `u2_tcp_cap_window` shrinks the advertised window to socket free space minus any held tail.
+
+**Datasheet check (W5100 v1.1.6):** §5.2.1 computes the read address as `(Sn_RX_RD & gSn_RX_MASK) + gSn_RX_BASE`, and a copy that crosses the socket end continues at `gSn_RX_BASE`. For a2stream's 8KB socket that is the existing 0x8000→0x6000 auto-increment. §4 Sn_MR bit 5 (ND) means ACK immediately; the code had mapped it to Nagle only. `yield` (2 hits) did not move `Sn_RX_RD` off the player entry, so that pause was removed. `sig` at 680 was `A2 01` and `visu` was `01 00 00` (a legal aux template, not a bad jump). Playback still stops at the first audio byte. `aud` is the three stored sample bytes there; `pio` is the data-port state machine once the bus sticks.
+
+**References:** `u2_tcp_recv`, `u2_flush_hold`, `U2_RxDebugStat`; lwIP `tcp_in.c` `refused_data`; a2stream `w5100_data_request`, `load`.
+
+## 1ei. gssquared Uthernet II vs MegaFlash (2026-09-30)
+
+**What:** a2stream plays on gssquared (`src/devices/uthernet2/`) and dies here at the first audio byte (`Sn_RX_RD` 22666) even though the stored type (`A2 01` at 680) and the first visualization template (`01 00 00`) are legal.
+
+**Same:** 8KB socket geometry, `Sn_RX_RSR` as `(wr - rd) mod size` with one byte kept free, auto-increment wrap `0x8000→0x6000` and `0x6000→0x4000`, TCP payload written with no 8-byte header.
+
+**Deviations that can change the bytes the 6502 actually loads:**
+1. gssquared `io_read` returns `read_value()` in the same step as the 6502 access. MegaFlash serves `$C0C7` from a one-deep PIO prefetch written by core 1 after the previous cycle. A late push duplicates a byte and shifts the rest. a2stream's player uses those bytes as jump highs, so one bad byte in the audio page crashes before that page's RECV. Cover art is only pixels, so the same fault does not crash there.
+2. gssquared never reads more TCP than W5100 free space (`rx_credit`, restored on RECV by the drop in `Sn_RX_RSR`). A tail that does not fit stays in `rx_pending` and is written on the next RECV. MegaFlash lets lwIP ACK and advertise a window on its own, and a segment that does not fit is `ERR_MEM` / `refused_data` rather than a retained tail.
+3. gssquared clears `Sn_CR` before the write returns. MegaFlash leaves it set until core 0 finishes the command. a2stream's `w5100_data_request` returns 0 while `Sn_CR` is nonzero; the generated player does not check it.
+
+**Takeaway:** The ring contents can be a valid stream and the player can still die, because gssquared never hands the 6502 a byte that was computed on an earlier cycle.
+
+**Reverted:** A blocking `pull` on `$C0C7` stalled the a2bus state machine when the FIFO was empty, so `$C0C0`–`$C0C3` stopped answering and the control panel did not see MegaFlash.
+
+**This run:** `q` a=0, b=0, c=-1. The first cover byte at `$62AB` is 0 and the data port returned 0, so that read matched. Peek and the later memory read never disagreed. The stored audio address was never read, and `Sn_RX_RD` stopped at 22667, the first audio byte. The player is dying before that read. `aim` records the last RX address the 6502 wrote after the audio byte existed, next to the address where that byte is stored.
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
 |-------|-----------|----------------|
 | U2 address range | `defines.h`, `busloop.c` | C0x4–C0x7 only; no GPIO slot select |
+| W5100 socket mode (TCP/UDP/IPRAW) | §**1ef**, §**1eg**, §**1eh**, §**1ei**, `uthernet2.c`, `uthernet2_net.cpp`, `w5100_regs.h` | `Sn_IR`/`IR` W1C; commands deferred to core 0; SEND_OK only after the full TX span; LISTEN `0x14`; CLOSE_WAIT on peer FIN; DISCON ≠ CLOSE; IPRAW raw pcb; STA address mirrored into SIPR/GAR/SUBR until the host writes them. OPEN publishes `Sn_SR` only after the defer slot is free (§1eg). A short TCP accept keeps the pbuf tail as lwIP `refused_data` (§1eh). MACRAW path unchanged |
 | First-connect | §1ea→**1ee**, `u2_pnat_*` | Per-SYN ephemeral NAT. FIRSTCONN UART and `optionB/` UF2s removed; flash `_releases/V1.2.4-eo` |
 | MACRAW wrap checksums | §1ea, §1dq/§1dx | Confirmed: spill layout when neighbour CLOSED; shim fires (`shim:1`) |
 | AppleWin vs Pico U2 | §1i, AppleWin `Uthernet2.cpp` `IO_C0` / `MemReadFloatingBus` | AppleWin: **synchronous** slot I/O in one emulated step. Pico: **FIFO + PIO prefetch + IRQ0** (§1d §1f). AppleWin port = **`addr & 0x03`** on full slot page; MegaFlash U2 path only **`addr` 4–7**; **`$C0C8+`** not mirrored (ACIA reservation, §1b) — PIO **chunk = A3:A2** |
@@ -4115,7 +4200,7 @@ Operator confirmed first-connect fixed on the V1.2.4-eo Release rebuild. Removed
 | Version bump | `cmakeall.sh`, `defines.h` | Grep with trailing space; `awk '{print $3}'`; `tr -d '\r\n'`; string = "Vx.y.z-eo"; **1.2.x** = `V1.2.0-eo` / `0x0020` onward |
 | Release output | `cmakeall.sh` | Build then copy UF2s to `_releases/<NEW_VER>/` |
 | Both-board test build | `build-both.sh` | `pico_release` + `pico2_release` (Release), cpanel first; no `defines.h` bump; passes **`FIRMWARE_BUILD_TIMESTAMP`** (Unix s) into CMake each run |
-| Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `CMakeLists.txt`, `build_id.h.in` | `-DFIRMWARE_BUILD_TIMESTAMP` + `-DFIRMWARE_BUILD_TIMESTAMP_STR` → generated **`build_id.h`** (Unix + UTC string); **`CMD_GETFIRMWAREVER`** / **`DoGetDeviceInfo`** bytes **[12..15]** LE; USB string shows readable time + Unix s, or **`__DATE__`/`__TIME__`** if unset |
+| Firmware build timestamp | `build-both.sh`, `cmakeall.sh`, `build-debug-both.sh`, `build-env.sh` `mf_firmware_build_stamp`, `CMakeLists.txt`, `build_id.h.in` | Each script configure sets `-DFIRMWARE_BUILD_TIMESTAMP` and a UTC string ending in **`bN`** (`pico/build-number`, first issued number **b123**). **`cmake --build` alone does not refresh the stamp.** Device info prints `Firmware build: … bN  (Unix s)` |
 | Debug behaviour | `main.c`, `debug.h`, `lwipopts.h` | Debug = UART + logs + bus loop always; Release = no UART, no logs; as of 1.1.20 both always run bus loop and core0Loop when CheckPicoW() (see §7b) |
 | Pico W USB path + IPC | `main.c` §7i | When **`!appleConnected`** at boot, **`core0Loop()`** is skipped; **`PicoW_ServiceCore0IpcAndNetwork(0)`** must still run so Test WiFi / TFTP FIFO + **`NetworkPump_PollOnce`** are serviced |
 | Release USB vs Apple bus | `main.c`, `misc.c`, `a2bus.h` §7j | **`NDEBUG`**: bus emulation only when Apple **and** no USB host; USB terminal only when USB **and** no Apple; Debug builds exempt |
@@ -4731,5 +4816,41 @@ backed out of `busloop.c`, `busloop_wa.c`, `slinky.c`, `main.c`, `CMakeLists.txt
 **Takeaway worth keeping:** for a board the Apple never sees, `cyc=0` with `phi0` toggling points
 at the GAL not selecting the Pico (A4–A15 / GP20) rather than the level shifters; `cmd10>0` while
 the Apple still reports not-found points at the return data path.
+
+## 26. a2stream dies at the first audio address (b123)
+
+**What:** On firmware `2026-10-01 00:18:11 UTC b123` the control panel sees the card. a2stream still freezes with `Sn_RX_RD` at 22666.
+
+**Why:** 22666 = signature offset 680 + 2 + 16384 cover + 5600 visualization. That is the first audio byte, physical `$788A` (30858). `aim` is 30858 and the stored address is 30858, so the 6502 wrote the correct RX address. `seen` is 0, so `read_value` never ran at that address. `q` stayed 0 (peek matched the later read on every earlier byte, and the cover byte was 0). `pio` irq is clear and the listener stall bit is clear. The duplicated `Sn_RX_RD` low-byte theory is out.
+
+**What b125 showed:** `oe` a=0, so GPIO11–18 are not driving the data bus when the 6502 stops. b on that image was nPICOWR output-enable, which stays 1 because the pin is always an output. The cycle tail matches b124 with signature 681: RSR `$1B27`, RX_RD `$588B`, `set_addr($788B)`, prefetch `$51`, no following data-port read.
+
+**What b126 showed:** `oe` b is now the nPICOWR pin level and it is 1 (inactive, active-low). The data bus and the write strobe are both released. The 6502 still stops after `set_addr` of the first audio byte.
+
+**What the pcap showed:** `sensoroni_onion_1037.pcap` is five HTTP downloads from `192.168.0.241` to `185.199.109.153:80`, 2026-09-29 22:11 UTC through 2026-10-01 00:55 UTC. It ends before the b126 image (built 01:09 UTC), so that run is not in the file. Every session reassembles with no holes and no disagreeing payload bytes. Apparent overlaps were Ethernet padding on short frames (TCP checksum failed until the IP length was honored). Header length is 678, 680, or 681, which is the firmware `sig` value. The body is `A2 01`, then cover `00` or `7F` (matching `pic`), visualization `01 00 00 00`, and audio `51 51 51` at stream offset `sig+2+16384+5600` (22664 / 22666 / 22667). The client ACKs that audio offset in under 1.5 s and keeps ACKing until the 8 KiB window fills. One session retransmitted four segments; the bytes matched. The wire is not the corrupted copy.
+
+**What we did next:** A write to `$C0C8` records an 8-bit stage and `time_us_32` on core 1 and returns without `UpdateMegaFlashRegisters`. Core 0 prints `stg`. a2stream writes 1 after the cover, 2 after DHGR and text-off, 3 after the visualization load, 4 when `w5100_receive_request` returns a page and playback is about to start, 5 on entry to `enter()`, and 6 after the stack copy and before the jump to `SILENCE`.
+
+**What we did:** Keep the existing logs. Add the last eight `$C0C4`–`$C0C7` cycles after the audio byte is stored (`cy`: address, packed nibble/read/value, prefetch byte). Newest cycle is slot 0. Next image also logs data-bus output enable when the bus stops (`oe`).
+
+**What we did not do:** No change to the PIO program, the listener, or `$C0C0`–`$C0C3`.
+
+**References:** `pico/uthernet2.c` `U2_RxDebugCyc`, `pico/uthernet2_net.cpp` H29.
+
+---
+
+## 27. `debug/` removed from git history (2026-10-05)
+
+**What:** GitHub would not take an update while `debug/` remained in history. The folder held UART logs, pcaps, and a debug UF2. Nothing in it needed to be kept in the repo.
+
+**Why:** No single blob was over GitHub’s 100 MB file limit (the biggest object left is the ~45 MB installation-guide PDF). The `debug/` history still dominated the pack: about 1.55 GiB packed, down to about 82 MiB after the purge. A separate 12 GB `debug/good_boot.csv` was only on disk, never committed; committing it would be rejected. `main` (`80a20f7`) was already the same commit as `origin/main` before the rewrite.
+
+**What we did:** `git filter-repo --invert-paths --path debug/ --force` on every local branch and tag. `main` is now `0bd8c57` (same message as `80a20f7`). `/debug/` is in `.gitignore`. Uncommitted work on `main` and in the `u2-debug-test` worktree was stashed and restored. `origin` is the only remote that should receive the rewritten refs. `upstream` (ThomasFok) was not pushed.
+
+**What we did not do:** Did not delete the local untracked captures (`good_boot.csv`, `good_boot.dsl`, `MF-capture.dsc`). Did not rewrite or push `upstream`.
+
+**Takeaway:** New captures belong under `debug/` and stay untracked. Updating GitHub requires a force-push of the rewritten branches and tags; a normal push is not a fast-forward. That push was not completed here: this environment has no GitHub credentials (`https` prompted for a username, SSH had no key).
+
+**References:** `.gitignore`, `git filter-repo` commit map in `.git/filter-repo/ref-map`.
 
 *This document reflects reasoning and changes made during development; it may be extended as further design decisions are documented.*

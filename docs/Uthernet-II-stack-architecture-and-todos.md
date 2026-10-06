@@ -333,7 +333,7 @@ Contracts describe **intended** behavior as implemented today; rows marked **gap
 
 | ID | Issue | Notes |
 |----|--------|------|
-| **P0-1** | **`send_data` advances `SN_TX_RD` to `SN_TX_WR` unconditionally** after calling net send. Host believes data sent even if lwIP rejected or MACRAW queue dropped. | Align with accepted-byte semantics (UDP/TCP partially improved historically; MACRAW path needs explicit ack or retry). |
+| **P0-1** | ~~UDP/TCP `TX_RD` advanced even when lwIP rejected the send~~ **Done (§1ef):** UDP/IPRAW SEND_OK only on success; TCP SEND retries until the span is accepted. MACRAW already retired `TX_RD` only when the TX queue accepted the frame (§10z). | Core 0 command queue in `U2_ProcessDeferredSocketCmds`. |
 | **P0-2** | ~~MACRAW TX trampoline overrun~~ **Done (§10z):** bounded ring + **`tx_q_drop`** + honest **`TX_RD`**. | Depth **16** (RP2350), drain **8**/poll, **`U2_TryCompletePendingSocket0Send`**. |
 | **P0-3** | **Cross-core RX producer vs consumer** — `sn_rx_wr` updated on core 0; `get_rx_rsr` / host reads on core 1 without locks. | **Implemented (2026-05):** **`sn_rx_wr`** uses **`__atomic_*` acquire/release**; **`u2_push_rx` / `u2_push_rx_macraw`** publish **`sn_rx_wr` once per enqueue** after ring writes; **`get_rx_rsr`** atomic load; **`RMSR`** remap uses **`sn_rx_wr ← old % new_size`** (not zero — avoids RX/TX stalls after ip65 reprograms **`RMSR`**). Validate under ADTProETH Send load; revisit if DATA-port reads still need barriers vs ring bytes. |
 

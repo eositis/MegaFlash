@@ -94,7 +94,7 @@ void __no_inline_not_in_flash_func(BusLoopDataInit)() {
 void __no_inline_not_in_flash_func(BusLoop)() {
   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
   const uint READFLAG = (1<<4); //Read flag is at bit 4
-  uint u2_poll_counter = 0;
+
 
   while(true) {
     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
@@ -122,10 +122,6 @@ void __no_inline_not_in_flash_func(BusLoop)() {
           registers.r[addr] = (uint8_t)data;
         }
       }
-      /* RP2350 a2bus prefetches SM1 FIFO for the *next* 6502 read; r[7] ($C0C7) must already
-       * hold the byte the W5100 would return on the next DATA read, or the first read after
-       * setting the address can latch a stale byte (monitor saw $08 then $07/$D0). */
-      registers.r[7] = U2_PeekDataPort();
 #ifndef PICO_RP2040
       /* RP2350 a2bus SM delays rxfifo pull behind IRQ 0; do not update chunk FIFOs until
        * the SM has pulled (same rule as bottom of loop). U2 used `continue` and skipped this,
@@ -136,12 +132,27 @@ void __no_inline_not_in_flash_func(BusLoop)() {
         tight_loop_contents();
       }
 #endif
+      /* Peek *after* IRQ0 so r[7] samples the RX ring after any core-0 MACRAW write that
+       * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
+      registers.r[7] = U2_PeekDataPort();
       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
-      /* Drain U2 net often; [u2]/[u2m] UART flush runs on core 0 (U2_MonPollFlush in main), not here. */
-      if (++u2_poll_counter >= 32) {
-        u2_poll_counter = 0;
-        U2_Poll();
-      }
+      /* §1di: H5 (core 1 falling behind the listener FIFO) was REJECTED by measurement —
+       * backlog occurred on 2 of 155,358 cycles, max depth 1 — so its probe is removed rather
+       * than left on the timing-critical path it was measuring. */
+      /* Nothing else may run here. The a2bus SM serves the next $C0C7 read straight from
+       * rxf_putget ~90 ns after nDEVSEL falls, so any work on this path can make the 6502 latch
+       * the previous byte (or overflow the 4-deep listener FIFO, which drops the cycle so
+       * u2_data_address never advances). Either duplicates a byte and shifts the rest of the
+       * frame — the every-3rd/6th-packet checksum failures of §1cx. Core 0 is woken from the
+       * SEND/RECV handlers and polls the network unconditionally, so no poll belongs here. */
+      continue;
+    }
+
+    /* $C0C8 is a stage marker for a2stream. Record the byte and leave.
+     * Falling through would UpdateMegaFlashRegisters on every chunk, including
+     * the Uthernet prefetch at $C0C4–$C0C7. */
+    if (addr == 8 && !(busdata & READFLAG)) {
+      U2_NoteStage((uint8_t)((busdata >> 5) & 0xffu));
       continue;
     }
 

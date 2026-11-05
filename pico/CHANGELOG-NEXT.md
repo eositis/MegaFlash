@@ -1,19 +1,17 @@
 # @VERSION@
 
-**1.2 series:** V1.1.24-eo was the final release in the 1.1.x line. Development from **V1.2.0-eo** onward uses the **1.2.x** series, focused on **Uthernet II emulation**, **com port**, and **imagewriter emulation**.
+**1.2 series:** Uthernet II emulation on Pico 2 W (RP2350). Use **`megaflash-pico2.uf2`** from this folder.
 
-## Uthernet II / ip65 fixes
+## Uthernet II / ip65 (first-connect + checksums)
 
-- **Fixed W5100 TX pointer register reads:** `SN_TX_RD0/1` and `SN_TX_WR0/1` now return the real emulated register bytes instead of incorrectly falling through `RX_RSR` handling. This fixes host-side pointer corruption that produced malformed MACRAW TX frames.
-- **Fixed MACRAW RX length prefix compatibility:** MACRAW RX enqueue now writes wire length as `len+2` in the 2-byte prefix (W5100 convention), avoiding frame truncation in clients that subtract 2 from the prefix.
-- **DHCP payload mutation rollback for compatibility:** Outbound DHCP handling now avoids rewriting BOOTP payload fields (`chaddr` / client-id option path) and keeps only Ethernet source MAC normalization, reducing client-side validation mismatch risk.
+- **MACRAW wrap checksums (§1dq / §1dx):** On a straddling RX record, lay bytes where the ip65/Contiki driver actually reads them (including two bytes past the ring when the neighbour socket is CLOSED). Fixes IP/TCP checksum errors every ~3rd/6th HTTP segment.
+- **First TCP connect (§1ec):** Remap Contiki/ip65 source port 1026 to a **new ephemeral** (49152–57342) on each SYN, with an incremental TCP checksum. A fixed wire port (41226) reused the same 4-tuple after reboot (TIME-WAIT / conntrack) so the first SYN got no SYN-ACK; 1027/1028 still worked as new 4-tuples. Pad MACRAW TX to 60 bytes (W5100-like).
+- **Release hygiene:** FIRSTCONN UART / `U2_FIRSTCONN` removed after confirmation. `U2_RX_AUDIT` remains a CMake opt-in (default off).
 
-## Uthernet networking stability and diagnostics
+## Validation (2026-09-05)
 
-- **Core-affinity stabilization:** Uthernet network polling/transmit path remains constrained to core 0 service flow to avoid CYW43/lwIP `async_context` wrong-core panics.
-- **Low-noise Ethernet tracing support:** Header-level Uthernet tracing (`[u2eth]`) and optional checkpoint/bus diagnostics were used to validate frame flow while keeping logs manageable.
-- **Additional MACRAW instrumentation:** Monitor/tap events were extended for SEND pointer progression and queue-stage payload inspection to isolate pre-core0 vs post-core0 corruption.
+- First Contiki/wget connect after a fresh reboot succeeds (ephemeral NAT). Checksum wrap shim previously confirmed.
 
 ## Notes
 
-- This release includes substantial Uthernet emulation correctness work and debugability improvements used to validate ip65/Telnet/Contiki/ADTPro paths.
+- Flash **`megaflash-pico2.uf2`** from this folder (Pico 2 W). Measurement copies under `optionB/` are no longer used.

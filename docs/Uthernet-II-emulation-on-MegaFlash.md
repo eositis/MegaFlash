@@ -75,20 +75,21 @@ Total 8 KB; address wraps at 0x6000/0x8000 when auto-increment is on (per Uthern
 
 ### 5.1 Supported Modes
 
-- **TCP:** OPEN → (CONNECT or LISTEN) → SEND / RECV; status SYNSENT → ESTABLISHED.
-- **UDP:** OPEN → SEND / RECV; status SOCK_UDP.
-- **MACRAW:** OPEN with SN_MR = MACRAW (0x04) → SEND / RECV; status SOCK_MACRAW. RX buffer format: 2-byte length (big-endian) then raw Ethernet frame. TX: host writes full frame to TX buffer and issues SEND; frame is sent via netif linkoutput. MACRAW RX can be fed via `U2_Net_FeedMacrawRx(i, data, len)` if a driver hook is available (e.g. from the CYW43 receive path).
+- **TCP:** OPEN → (CONNECT or LISTEN) → SEND / RECV. `Sn_CR` stays set until core 0 accepts the command. Status goes INIT → SYNSENT → ESTABLISHED, or LISTEN (`0x14`) until one child is accepted. Peer FIN is CLOSE_WAIT (`0x1C`) plus `Sn_IR` DISCON; unread RX stays. DISCON sends FIN (`FIN_WAIT` / `LAST_ACK` then CLOSED). CLOSE aborts.
+- **UDP:** OPEN → SEND / RECV; status SOCK_UDP. RX is 4B IP + 2B port + 2B length + payload. SEND_OK only if `udp_sendto` succeeds.
+- **IPRAW:** OPEN with `Sn_MR` `0x03` and `Sn_PROTO`. Status SOCK_IPRAW (`0x32`). RX is 4B source IP + 2B length + IP payload. TX is the IP payload to `Sn_DIPR`.
+- **MACRAW:** OPEN with SN_MR = MACRAW (0x04) → SEND / RECV; status SOCK_MACRAW. This path is still completed on the bus core (TX queued to core 0 as before). RX buffer format: 2-byte length (big-endian) then raw Ethernet frame. Do not leave socket 0 in MACRAW while using TCP/UDP sockets: MACRAW takes STA ingress away from lwIP.
 
-IPRAW is **not** implemented. AppleWin-only features (e.g. Virtual DNS) are **not** implemented.
+`Sn_IR` (CON, DISCON, RECV, TIMEOUT, SEND_OK) is write-1-to-clear. Common `IR` S0–S3 follows when `IMR` enables that socket (`IMR` resets to `0x0F`). PPPoE and AppleWin Virtual DNS are not implemented.
 
 ### 5.2 Socket Commands (SN_CR)
 
-- **OPEN:** From SN_MR (protocol) and SN_PORT: open UDP with `U2_Net_OpenUdp(i, port)` or TCP with `U2_Net_OpenTcp(i)`.
-- **CONNECT:** From SN_DIPR, SN_DPORT, SN_PORT: `tcp_bind` to local port then `tcp_connect` — `U2_Net_ConnectTcpEx(i, dest_ip_net, dest_port, local_port)`.
-- **LISTEN:** From SN_PORT: `U2_Net_ListenTcp(i, port)`.
-- **CLOSE / DISCON:** `U2_Net_Close(i)`.
-- **SEND:** Read payload from W5100 TX buffer (between TX_RD and TX_WR), send via `U2_Net_SendUdp` or `U2_Net_SendTcp`; then advance TX_RD to TX_WR.
-- **RECV:** RSR is computed from (sn_rx_wr − RX_RD) in the circular RX buffer; no extra action required.
+- **OPEN:** Resets the socket rings. MACRAW calls `U2_Net_OpenMacraw` immediately. TCP, UDP, and IPRAW are queued for core 0 (`U2_Net_OpenTcp` / `OpenUdp` / `OpenIpraw`).
+- **CONNECT:** Queued. Core 0 does `tcp_bind` to `Sn_PORT` then `tcp_connect`. Success: SYNSENT, then ESTABLISHED + CON. Failure: CLOSED + TIMEOUT.
+- **LISTEN:** Queued. Success status is SOCK_LISTEN, not INIT. One accept, then the listen pcb is dropped.
+- **DISCON:** Queued graceful FIN (`U2_Net_DisconTcp`). **CLOSE:** queued abort (`U2_Net_Close`). MACRAW close stays synchronous.
+- **SEND:** MACRAW uses the existing queue and advances `Sn_TX_RD` only when the frame is accepted. TCP/UDP/IPRAW run on core 0. TCP SEND_OK waits until lwIP has accepted the whole `TX_RD`→`TX_WR` span. UDP/IPRAW raise TIMEOUT and leave `Sn_TX_RD` if the send fails.
+- **RECV:** Publishes `Sn_RX_RD`. Does not force RD to WR.
 
 ### 5.3 RX Path (push into W5100 buffer)
 
@@ -126,10 +127,12 @@ RSR (receive size) is **computed** when the Apple reads SN_RX_RSR0/1: `(sn_rx_wr
 
 ## 8. Limitations
 
-- **No IPRAW:** Only TCP, UDP, and MACRAW are implemented.
-- **No Virtual DNS:** DNS is not part of this emulation; host resolution must be done elsewhere if needed.
+- **No PPPoE and no Virtual DNS.** `SEND_MAC` and `SEND_KEEP` are not implemented.
+- **`SIPR` is not the wire source.** Until the Apple writes `SIPR`/`GAR`/`SUBR`, those registers mirror the STA address. TCP/UDP/IPRAW packets use the STA address either way.
+- **Socket 0 MACRAW and socket TCP/UDP do not share STA ingress.** MACRAW consumes every frame while it is open.
 - **Non–Pico W:** On builds without CYW43 (e.g. plain Pico), the network layer is stubbed and sockets remain closed.
-- **Single connection per socket:** For TCP listen, one accepted connection per socket at a time; close it to listen again.
+- **Single connection per socket:** For TCP listen, one accepted connection per socket; the host must OPEN and LISTEN again after it closes.
+- **On-device soak of a2stream / UDP / IPRAW is still outstanding** after the 2026-09-28 socket-mode change. Release `build-both.sh` compiled; Debug UART builds are not a valid connect test.
 
 ---
 
@@ -137,7 +140,7 @@ RSR (receive size) is **computed** when the Apple reads SN_RX_RSR0/1: `(sn_rx_wr
 
 **UTHERNET2.DRV (MACRAW-only) is now supported** for socket 0 in MACRAW mode: OPEN with SN_MR = MACRAW, READ (2-byte length + frame), WRITE (frame), SEND, RECV. MACRAW TX is implemented (netif linkoutput). MACRAW RX can be used if raw frames are fed via `U2_Net_FeedMacrawRx(0, data, len)` from a driver hook.
 
-**UTHER2.AI.DRV** still uses Socket 0 MACRAW plus Sockets 1–3 **IPRAW** (ICMP, TCP, UDP by protocol). IPRAW is **not** implemented, so UTHER2.AI remains partially incompatible (socket 0 MACRAW works; IPRAW sockets do not).
+**UTHER2.AI.DRV** uses socket 0 MACRAW plus sockets 1–3 **IPRAW**. IPRAW OPEN/`Sn_PROTO`/SEND/RECV is implemented (4-byte source IP + 2-byte length + payload). It has not been run against A2osX on hardware, and socket 0 must not stay in MACRAW if those IPRAW sockets need lwIP to see the STA.
 
 ---
 

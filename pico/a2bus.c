@@ -67,7 +67,7 @@ void InitPIO() {
 
   //Initialize the program. The function is defined in .pio file
   a2bus_program_init(pio0, SM_A2BUS, offset);
-    
+
   //Start running PIO program
   pio_sm_set_enabled(pio0, SM_A2BUS, true /*=run*/); 
 }  

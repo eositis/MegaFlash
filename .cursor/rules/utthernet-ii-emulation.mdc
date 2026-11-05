@@ -1,0 +1,26 @@
+---
+description: Uthernet II (W5100) emulation goal — match hardware; validation app bugs out of scope
+alwaysApply: true
+---
+
+# Uthernet II emulation (MegaFlash / `pico/`)
+
+## What we are building
+
+We are implementing an **emulation of the Uthernet II** network interface for the Apple II: **W5100-class** behavior as exposed on the card’s I/O (e.g. $C0Cx), consistent with how **real Uthernet II hardware** is used by 6502 software.
+
+## Authoritative references
+
+- **W5100** register and buffer semantics: **Wiznet W5100 datasheet** (and related errata / app notes as needed).
+- **Code lineage**: emulation logic derived from **AppleWin**-style W5100 handling, adapted for the Pico bus and ip65; treat datasheet + real-card behavior as the **ground truth** when in doubt.
+
+## How we use “validation” software (ADTPro, ip65, etc.)
+
+- These programs are used to **exercise** the emulation because they are known to work correctly against a **physical W5100-based Uthernet II**.
+- **Defects or quirks in validation software are not our problem** when framing work: we do **not** default to “fix the app” or treat application-layer timeouts as proof of a bug outside the emulation unless the user explicitly expands scope.
+- **Primary engineering obligation**: the emulation should behave **as the application expects from real Uthernet II / W5100** — registers, buffer sizing, pointer rules, RECV/DATA semantics, MACRAW vs UDP paths, and timing visibility consistent with the chip model.
+
+## Debugging stance
+
+- Prefer **“where does our emulation diverge from W5100 / AppleWin / datasheet?”** over **“maybe ADTPro is wrong.”**
+- If traces disagree with real-card behavior, assume **emulation gap first**; bring **datasheet-backed** reasoning and concrete register/buffer checks.

@@ -1,0 +1,552 @@
+diff --git a/pico/CMakeLists.txt b/pico/CMakeLists.txt
+index 0cdd300..f43f770 100644
+--- a/pico/CMakeLists.txt
++++ b/pico/CMakeLists.txt
+@@ -147,6 +147,13 @@ set(U2_MON_LOG_BUS "0" CACHE STRING "1=verbose [u2m] per bus cycle at C0C4-C0C7
+ set(U2_IP65_TRACE_DATA "0" CACHE STRING "1=verbose 48 DATA reads after MODE=0x03 ([u2])")
+ set(U2_ETH_HEADER_TRACE "0" CACHE STRING "1=UART [u2eth] hex dump first 64B of STA TX/RX Ethernet frames (bring-up; not pcap/tcpdump)")
+ set(U2_MACRAW_COMPAT_DROP_OLDEST "0" CACHE STRING "1=MACRAW RX: discard unread once when full to admit new frame (compat; not strict W5100)")
++# §1cy bus-path counters. Deliberately NOT tied to CMAKE_BUILD_TYPE: the Debug build's [u2m]
++# firehose blocks core 0 in 115200-baud printf and starves lwIP, so it cannot be used to measure
++# bus timing or connection behaviour. Enable in a Release build instead:
++#   cmake -B pico2_diag -S . -DPICO_BOARD=pico2_w -DCMAKE_BUILD_TYPE=Release -DMF_BUS_DIAG=1
++set(MF_BUS_DIAG "0" CACHE STRING "1=[busdiag]/[u2diag] bus-path counters (works in Release; see docs §1cy)")
++target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE MF_BUS_DIAG=${MF_BUS_DIAG})
++
+ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_ETH_HEADER_TRACE=${U2_ETH_HEADER_TRACE})
+ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MACRAW_COMPAT_DROP_OLDEST=${U2_MACRAW_COMPAT_DROP_OLDEST})
+ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+diff --git a/pico/busloop.c b/pico/busloop.c
+index 5e27e67..adf38a7 100644
+--- a/pico/busloop.c
++++ b/pico/busloop.c
+@@ -91,10 +91,26 @@ void __no_inline_not_in_flash_func(BusLoopDataInit)() {
+   UpdateMegaFlashRegisters(3,registers.i32[3]);
+ }
+ 
++#if MF_BUS_DIAG
++volatile uint32_t g_bus_c0c7_reads;
++volatile uint32_t g_bus_behind;
++volatile uint32_t g_bus_fifo_high_water;
++volatile uint32_t g_bus_rxstall;
++
++void BusDiagReport(void) {
++  /* ppm rather than a float so this cannot depend on soft-float printf support. */
++  uint32_t reads = g_bus_c0c7_reads;
++  uint32_t behind = g_bus_behind;
++  uint32_t ppm = reads ? (uint32_t)(((uint64_t)behind * 1000000u) / reads) : 0u;
++  printf("[busdiag] c0c7_reads=%lu behind=%lu (%lu ppm) fifo_hw=%lu rxstall=%lu\n",
++         (unsigned long)reads, (unsigned long)behind, (unsigned long)ppm,
++         (unsigned long)g_bus_fifo_high_water, (unsigned long)g_bus_rxstall);
++}
++#endif
++
+ void __no_inline_not_in_flash_func(BusLoop)() {
+   const uint SM0 = 0;   //State Machine 0 for $C0C0-$C0C3 registers 
+   const uint READFLAG = (1<<4); //Read flag is at bit 4
+-  uint u2_poll_counter = 0;
+ 
+   while(true) {
+     //8-bit data from Apple + RnW Flag + 4-bit address from Apple
+@@ -136,14 +152,35 @@ void __no_inline_not_in_flash_func(BusLoop)() {
+        * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
+       registers.r[7] = U2_PeekDataPort();
+       UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
+-      /* Poll/wake on writes and non-DATA (SEND, RECV, addr). Skip during $C0C7 reads so the
+-       * PIO prefetch word is not delayed in the ip65 mov_data burst (checksums / RX_RD walk). */
+-      if (!(addr == U2_C0X_LAST && (busdata & READFLAG))) {
+-        if (++u2_poll_counter >= 32) {
+-          u2_poll_counter = 0;
+-          U2_Poll();
++#if MF_BUS_DIAG
++      /* Sampled only AFTER the prefetch is published, so it cannot delay what it measures.
++       * A cycle still queued here was already answered from the previous chunk-1 value (§1cy). */
++      if (addr == U2_C0X_LAST && (busdata & READFLAG)) {
++        uint32_t lvl = pio_sm_get_rx_fifo_level(pio0, SM_LISTENER);
++        g_bus_c0c7_reads++;
++        if (lvl) {
++          g_bus_behind++;
++          if (lvl > g_bus_fifo_high_water)
++            g_bus_fifo_high_water = lvl;
+         }
+       }
++      /* Harvested per cycle, not per report: RXSTALL is sticky, so sampling it only in the 10 s
++       * BusDiagReport() could add at most 1 per window and could not distinguish one dropped
++       * cycle from millions (§1db). Still after the prefetch publish, so it costs no deadline. */
++      {
++        const uint32_t stall_bit = 1u << (PIO_FDEBUG_RXSTALL_LSB + SM_LISTENER);
++        if (pio0->fdebug & stall_bit) {
++          pio0->fdebug = stall_bit; /* write-1-to-clear */
++          g_bus_rxstall++;
++        }
++      }
++#endif
++      /* Nothing else may run here. The a2bus SM serves the next $C0C7 read straight from
++       * rxf_putget ~90 ns after nDEVSEL falls, so any work on this path can make the 6502 latch
++       * the previous byte (or overflow the 4-deep listener FIFO, which drops the cycle so
++       * u2_data_address never advances). Either duplicates a byte and shifts the rest of the
++       * frame — the every-3rd/6th-packet checksum failures of §1cx. Core 0 is woken from the
++       * SEND/RECV handlers and polls the network unconditionally, so no poll belongs here. */
+       continue;
+     }
+ 
+diff --git a/pico/busloop.h b/pico/busloop.h
+index f2abd3b..24351ff 100644
+--- a/pico/busloop.h
++++ b/pico/busloop.h
+@@ -1,9 +1,49 @@
+ #ifndef _BUSLOOP_H
+ #define _BUSLOOP_H
+ 
++#include <stdint.h>
++
++#ifndef MF_BUS_DIAG
++#define MF_BUS_DIAG 0
++#endif
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ void BusLoopDataInit();
+ void BusLoop();
+ 
++#if MF_BUS_DIAG
++/*
++ * §1cy bus-path diagnostics. Build with -DMF_BUS_DIAG=1 on a **Release** configuration: the Debug
++ * build flushes up to 48 [u2m] lines per core-0 iteration through a blocking 115200-baud printf,
++ * which starves NetworkPump_PollOnce and by itself breaks TCP connects — so Debug cannot measure
++ * either bus timing or connection behaviour.
++ *
++ * The a2bus SM answers a 6502 read entirely from `rxf_putget`, latching chunk 1 about 140 ns after
++ * nDEVSEL falls, while a2buslistener pushes the cycle record about 70 ns after nDEVSEL. So if the
++ * listener FIFO is still non-empty once core 1 has already pushed the next prefetch byte, the
++ * queued cycle was necessarily answered from the *previous* chunk-1 value: the 6502 got a
++ * duplicate byte and the remainder of the frame is shifted. `behind` is therefore a direct count
++ * of corrupted DATA bytes, not a proxy. In healthy operation it must be 0 — even the tightest
++ * 6502 sequence (back-to-back `eor $C0C7`, the §1d RTR probe) leaves ~4 us between accesses.
++ *
++ * Sampling happens AFTER UpdateMegaFlashRegisters so the measurement cannot itself delay the
++ * prefetch it is measuring. RXSTALL is a sticky write-1-to-clear flag, so it is read and cleared
++ * on core 0 in BusDiagReport() and costs the bus path nothing.
++ */
++extern volatile uint32_t g_bus_c0c7_reads;      /* total $C0C7 read cycles serviced */
++extern volatile uint32_t g_bus_behind;          /* $C0C7 reads with a cycle still queued behind */
++extern volatile uint32_t g_bus_fifo_high_water; /* max listener FIFO level observed */
++extern volatile uint32_t g_bus_rxstall;         /* listener `push noblock` discarded a cycle */
++
++/** Print counters and clear the sticky PIO RXSTALL flag. Core 0 only (uses stdio). */
++void BusDiagReport(void);
++#endif
++
++#ifdef __cplusplus
++}
++#endif
+ 
+ #endif
+diff --git a/pico/main.c b/pico/main.c
+index 1177bcd..a8f920b 100644
+--- a/pico/main.c
++++ b/pico/main.c
+@@ -159,16 +159,18 @@ int main() {
+   gpio_pull_down(1);
+   gpio_pull_down(26);
+ 
+-#ifndef NDEBUG
+-  //For sending Debug Message to UART
++#if defined(NDEBUG) && !MF_BUS_DIAG
++  //Disable stdio_uart for Release Build
++  stdio_set_driver_enabled(&stdio_uart, false);
++#else
++  //Debug, or Release + MF_BUS_DIAG: diagnostics must go to UART, not USB. Release gates the bus
++  //loop off whenever a USB host is connected (g_release_bus_emulation_enabled), so a USB-only
++  //diag build cannot be read without killing storage and the U2 emulation (§1da).
+   stdio_uart_init();    //Default baud: 115200
+ 
+   //Disable stdout buffering
+   //otherwise, text is not printed to uart or usb correctly.
+   setbuf(stdout, NULL);
+-#else
+-  //Disable stdio_uart for Release Build
+-  stdio_set_driver_enabled(&stdio_uart, false);
+ #endif
+ 
+   /* After UART: U2_Init / U2_MonInit use printf — if this ran earlier, [u2]/[u2m] boot text was lost. */
+@@ -235,7 +237,10 @@ int main() {
+   // is false at boot due to timing).
+   //
+   if (CheckPicoW()) {
+-    /* USB before core0Loop so Release stdio_usb_connected() / gate are valid in core0Loop. */
++    /* USB before core0Loop so Release stdio_usb_connected() / gate are valid in core0Loop.
++     * Kept in MF_BUS_DIAG builds too: USB serial is the offline storage upload/download console
++     * used before the card is installed in the IIc (§1db). Diag output goes to UART instead, and
++     * the bus gate ignores USB, so a cable no longer stops the bus loop. */
+     stdio_usb_init();
+     InitPicoLed();
+ #if defined(NDEBUG)
+diff --git a/pico/misc.c b/pico/misc.c
+index 22ce5b5..13a9954 100644
+--- a/pico/misc.c
++++ b/pico/misc.c
+@@ -95,8 +95,21 @@ void ReleaseInitBusUsbGate(bool apple_at_boot) {
+   release_busgate_initialized = false;
+ }
+ 
++/* §1da/§1db: in MF_BUS_DIAG builds the diagnostics go to UART, so USB no longer needs to win the
++ * arbitration — report "no USB console" to the gate. USB stdio is still initialized and the
++ * offline storage console still runs, because main() only enters UserTerminal() when
++ * !IsAppleConnected(); this gate is what decides bus mode, and keying it on the Apple bus alone
++ * means a USB cable plugged into an installed card no longer halts the bus loop. */
++static inline bool release_usb_console_active(void) {
++#if MF_BUS_DIAG
++  return false;
++#else
++  return stdio_usb_connected();
++#endif
++}
++
+ void ReleaseUpdateBusUsbGate(void) {
+-  bool usb_on = stdio_usb_connected();
++  bool usb_on = release_usb_console_active();
+   if (!release_busgate_initialized) {
+     release_busgate_initialized = true;
+     release_busgate_last_usb = usb_on;
+diff --git a/pico/misc.h b/pico/misc.h
+index 64281dc..80f454a 100644
+--- a/pico/misc.h
++++ b/pico/misc.h
+@@ -19,6 +19,10 @@ uint32_t EndTimer();
+ bool IsAppleConnected();
+ bool CheckPicoW();
+ 
++#ifndef MF_BUS_DIAG
++#define MF_BUS_DIAG 0
++#endif
++
+ #if defined(NDEBUG)
+ /** Release: Apple II bus emulation only when Apple is present and USB device is not connected to a host. */
+ extern volatile bool g_release_bus_emulation_enabled;
+diff --git a/pico/uthernet2.c b/pico/uthernet2.c
+index c8b7f06..57627ee 100644
+--- a/pico/uthernet2.c
++++ b/pico/uthernet2.c
+@@ -91,7 +91,7 @@ static inline uint8_t get_byte(uint16_t val, unsigned shift) {
+   return (uint8_t)((val >> shift) & 0xFF);
+ }
+ 
+-static uint16_t read_net16(const uint8_t *p) {
++static uint16_t U2_BUS_RAM(read_net16)(const uint8_t *p) {
+   return (uint16_t)p[0] << 8 | p[1];
+ }
+ 
+@@ -158,7 +158,7 @@ static uint16_t u2_rx_used_bytes(int i) {
+  * header, and stalled Sn_RX_RD → the unbounded "sock0 RECV" storm (§1cj). Core 0's producer free-
+  * space math still uses the tear-free shadow (u2_rx_used_bytes) so it can never overwrite unread
+  * data (shadow ≤ live rd ⇒ conservative). */
+-static uint16_t u2_rx_used_bytes_live(int i) {
++static uint16_t U2_BUS_RAM(u2_rx_used_bytes_live)(int i) {
+   const u2_socket_t *s = &u2_sockets[i];
+   uint16_t size = s->receive_size;
+   if (size == 0)
+@@ -273,7 +273,7 @@ static void U2_BUS_RAM(set_rx_sizes)(uint16_t address, uint8_t value) {
+   u2_apply_socket_sizes(1, value);
+ }
+ 
+-static uint16_t get_tx_data_size(int i) {
++static uint16_t U2_BUS_RAM(get_tx_data_size)(int i) {
+   const u2_socket_t *s = &u2_sockets[i];
+   uint16_t size = s->transmit_size;
+   if (size == 0)
+@@ -287,7 +287,7 @@ static uint16_t get_tx_data_size(int i) {
+   return (uint16_t)data;
+ }
+ 
+-static uint16_t get_tx_fsr(int i) {
++static uint16_t U2_BUS_RAM(get_tx_fsr)(int i) {
+   uint16_t ts = u2_sockets[i].transmit_size;
+   if (ts == 0)
+     return 0;
+@@ -300,22 +300,25 @@ static uint16_t get_tx_fsr(int i) {
+ }
+ 
+ /* W5100 RX occupancy: RSR = unread bytes in ring (§10l). Host-facing ⇒ LIVE rd (§1cj). */
+-static uint16_t get_rx_rsr(int i) {
++static uint16_t U2_BUS_RAM(get_rx_rsr)(int i) {
+   return u2_rx_used_bytes_live(i);
+ }
+ 
+ /* Per-byte live FSR/RSR (§1cp). §1cm latched on high-only: a low-first read returned latch=0
+  * (FSR looked empty) until FSR0 was touched — first SYN/ARP delayed. Bramble lo-first have-flags
+  * did not restore first-try connect. Recompute each access like pre-import firmware. */
+-static uint8_t get_tx_fsr_byte(int i, unsigned shift) {
++static uint8_t U2_BUS_RAM(get_tx_fsr_byte)(int i, unsigned shift) {
+   return get_byte(get_tx_fsr(i), shift);
+ }
+ 
+-static uint8_t get_rx_rsr_byte(int i, unsigned shift) {
++static uint8_t U2_BUS_RAM(get_rx_rsr_byte)(int i, unsigned shift) {
+   return get_byte(get_rx_rsr(i), shift);
+ }
+ 
+-static uint8_t read_socket_register(uint16_t address) {
++/* §1cx: reached from read_value_at on every $C0C7 read AND every U2_PeekDataPort prefetch, so it
++ * sits inside the ~90 ns window before the a2bus SM latches the next byte. Was XIP-resident and
++ * contended with core 0's lwIP for the cache. */
++static uint8_t U2_BUS_RAM(read_socket_register)(uint16_t address) {
+   int i = (address >> 8) - 0x04;
+   uint16_t loc = address & 0xFF;
+   switch (loc) {
+@@ -376,6 +379,19 @@ static void U2_BUS_RAM(auto_increment)(void) {
+ 
+ static uint8_t U2_BUS_RAM(read_value)(void) {
+   uint16_t rd_addr = u2_data_address;
++#if MF_BUS_DIAG
++  /* §1cy H3: a read inside the 8 KiB RX region but outside socket 0's assigned window means the
++   * host walked past its socket buffer without rewriting the address register — i.e. host and
++   * emulation disagree about the ring geometry (our auto-increment wraps at 0x8000, the socket
++   * buffer ends at receive_base+receive_size). Non-zero here explains wrap-periodic corruption
++   * directly; zero rules the geometry out. */
++  if (rd_addr >= W5100_RX_BASE) {
++    uint16_t b = u2_sockets[0].receive_base;
++    uint16_t n = u2_sockets[0].receive_size;
++    if (n && (rd_addr < b || rd_addr >= (uint16_t)(b + n)))
++      g_u2_data_oow++;
++  }
++#endif
+ #if UTHERNET2_DEBUG
+   /* Bisect ip65 init: move U2_IP65_CHECKPOINT between builds (CMake). */
+   if (rd_addr == W5100_RTR0)
+@@ -525,8 +541,12 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
+     int is_ours = dm[0] == u2_memory[W5100_SHAR0 + 0] && dm[1] == u2_memory[W5100_SHAR0 + 1] &&
+                   dm[2] == u2_memory[W5100_SHAR0 + 2] && dm[3] == u2_memory[W5100_SHAR0 + 3] &&
+                   dm[4] == u2_memory[W5100_SHAR0 + 4] && dm[5] == u2_memory[W5100_SHAR0 + 5];
+-    if (!is_broadcast && !is_ours)
++    if (!is_broadcast && !is_ours) {
++#if MF_BUS_DIAG
++      g_u2_rx_filtered++;
++#endif
+       return;
++    }
+   }
+   uint16_t size = s->receive_size;
+   if (size == 0) return;
+@@ -539,6 +559,9 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
+    * (empty vs full) since RSR is derived from wr-rd, and "full" would read back as empty,
+    * silently discarding a full ring during bulk RX (§1cf). Hence the >=/<= comparisons. */
+   if (total >= size) {
++#if MF_BUS_DIAG
++    g_u2_rx_drop++;
++#endif
+     U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_FRAME_TOO_BIG, len, 0, free_bytes, size);
+     return;
+   }
+@@ -554,6 +577,9 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
+       free_bytes = size - used;
+     }
+     if (free_bytes <= total) {
++#if MF_BUS_DIAG
++      g_u2_rx_drop++;
++#endif
+       U2_MonNetRxDrop(socket_i, U2_RX_PROTO_MACRAW, U2_RX_DROP_NO_ROOM, len, 0, free_bytes, size);
+       return;
+     }
+@@ -571,6 +597,9 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
+     wr++;
+   }
+   u2_rx_wr_store(s, wr);
++#if MF_BUS_DIAG
++  g_u2_rx_push++;
++#endif
+ #if UTHERNET2_DEBUG
+   u2_dbg_last_wire[socket_i] = wire_len;
+ #endif
+@@ -658,7 +687,9 @@ static int send_data(int i) {
+   return 0;
+ }
+ 
+-static void write_socket_register(uint16_t address, uint8_t value) {
++/* §1cx: the RECV branch runs immediately before the host reads the next frame's length header,
++ * so its latency lands directly on the prefetch deadline. Keep it in SRAM (RP2350 only). */
++static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
+   u2_memory[address] = value;
+   uint16_t loc = address & 0xFF;
+   /* NOTE: Sn_RX_RD byte writes deliberately do NOT publish the core-0 shadow. On a real W5100
+@@ -749,6 +780,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
+       u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+       break;
+     case W5100_SN_CR_SEND:
++#if MF_BUS_DIAG
++      g_u2_send_cmd++;
++#endif
+       U2_MonSockSendRecv(i, 1);
+       if (send_data(i) != 0) {
+         U2_RequestCore0NetPoll();
+@@ -757,6 +791,9 @@ static void write_socket_register(uint16_t address, uint8_t value) {
+       U2_RequestCore0NetPoll();
+       break;
+     case W5100_SN_CR_RECV: {
++#if MF_BUS_DIAG
++      g_u2_recv_cmd++;
++#endif
+ #if UTHERNET2_DEBUG
+       if (!u2_dbg_stall_dumped[i])
+ #endif
+@@ -910,29 +947,50 @@ void U2_Init(void) {
+ }
+ 
+ #if PICO_CYW43_ARCH_POLL
+-static struct IpcMsg u2_net_wake_msg;
+-static absolute_time_t u2_last_net_wake;
+-
+-void U2_RequestCore0NetPoll(void) {
+-  if (get_core_num() != 1)
+-    return;
+-  absolute_time_t now = get_absolute_time();
+-  if (absolute_time_diff_us(u2_last_net_wake, now) < 1000)
+-    return;
+-  u2_last_net_wake = now;
+-  u2_net_wake_msg.command = IPCCMD_NET_WAKE;
+-  u2_net_wake_msg.data = 0;
+-  (void)multicore_fifo_push_timeout_us((uint32_t)&u2_net_wake_msg, 0);
+-}
++/* Set on core 1 from the SEND/RECV handlers, cleared on core 0 in U2_Net_Poll.
++ * §1cx: this used to read the APB timer and push an IPC message through the multicore FIFO
++ * (multicore_fifo_push_timeout_us itself calls make_timeout_time_us + time_reached), all from
++ * XIP flash contended by core 0's lwIP. That ran on the bus path, where the budget before the
++ * 6502's next $C0C7 read is ~90 ns. Core 0 polls the network unconditionally with a zero FIFO
++ * timeout (PicoW_ServiceCore0IpcAndNetwork), so there is nothing to unblock — a single store to
++ * an SRAM flag conveys the same request at no cost to core 1. */
++void U2_BUS_RAM(U2_RequestCore0NetPoll)(void) { u2_core0_net_wake_pending = true; }
+ #else
+ void U2_RequestCore0NetPoll(void) {}
+ #endif
+ 
+-void U2_Poll(void) {
+-  U2_RequestCore0NetPoll();
+-  U2_Net_Poll();
+-  /* U2_MonPollFlush: call from core 0 only — see u2_monitor.h (stdio + cyw43 async_context). */
++volatile bool u2_core0_net_wake_pending;
++
++#if MF_BUS_DIAG
++volatile uint32_t g_u2_data_oow;
++volatile uint32_t g_u2_rx_push;
++volatile uint32_t g_u2_rx_drop;
++volatile uint32_t g_u2_rx_filtered;
++volatile uint32_t g_u2_recv_cmd;
++volatile uint32_t g_u2_send_cmd;
++
++void U2_DiagReport(void) {
++  printf("[u2diag] oow=%lu rx_push=%lu rx_drop=%lu rx_filt=%lu recv=%lu send=%lu MR=0x%02X ptr=0x%04X\n",
++         (unsigned long)g_u2_data_oow, (unsigned long)g_u2_rx_push, (unsigned long)g_u2_rx_drop,
++         (unsigned long)g_u2_rx_filtered, (unsigned long)g_u2_recv_cmd, (unsigned long)g_u2_send_cmd,
++         (unsigned)u2_mode_register, (unsigned)u2_data_address);
++  /* Per-socket state. The 2026-09-01 capture showed a host poll loop parked on Sn_RX_RD with no
++   * way to tell whether frames were arriving, whether the socket was even open, or where the
++   * producer/consumer pointers stood — so print all three (§1db). Only sockets with a buffer. */
++  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
++    const u2_socket_t *s = &u2_sockets[i];
++    if (!s->receive_size)
++      continue;
++    uint16_t ra = s->register_address;
++    uint16_t rd = (uint16_t)(((uint16_t)u2_memory[ra + W5100_SN_RX_RD0] << 8)
++                             | u2_memory[ra + W5100_SN_RX_RD1]);
++    printf("[u2diag]  s%d mr=0x%02X sr=0x%02X buf=0x%04X+%u rd=0x%04X wr=0x%04X rsr=%u\n", i,
++           (unsigned)u2_memory[ra + W5100_SN_MR], (unsigned)U2_Net_GetStatus(i),
++           (unsigned)s->receive_base, (unsigned)s->receive_size, (unsigned)rd,
++           (unsigned)u2_rx_wr_load(s), (unsigned)u2_rx_used_bytes_live(i));
++  }
+ }
++#endif
+ 
+ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
+   uint32_t loc = busdata & U2_C0X_MASK;
+diff --git a/pico/uthernet2.h b/pico/uthernet2.h
+index a712e67..88bf2e0 100644
+--- a/pico/uthernet2.h
++++ b/pico/uthernet2.h
+@@ -4,6 +4,10 @@
+ #include <stdint.h>
+ #include <stdbool.h>
+ 
++#ifndef MF_BUS_DIAG
++#define MF_BUS_DIAG 0
++#endif
++
+ /* U2 debug logging: independent of NDEBUG. Enable with -DUTHERNET2_DEBUG=1 (e.g. in Debug build).
+  * Debug also enables U2_ACTIVITY_MONITOR: UART lines prefixed [u2m] (see u2_monitor.c). */
+ #ifndef UTHERNET2_DEBUG
+@@ -23,12 +27,29 @@ extern "C" {
+ /** Call once at startup before the bus loop. */
+ void U2_Init(void);
+ 
+-/** Advance network (lwIP); call periodically from the bus loop. Monitor UART flush is core 0 only — see U2_MonPollFlush in main. */
+-void U2_Poll(void);
+-
+-/** Wake core 0 for lwIP poll (core 1 only; rate-limited). Phase 1 §10k. */
++/**
++ * Request a core-0 lwIP poll from the bus path. Must stay a single SRAM store: the a2bus PIO
++ * serves the 6502's next $C0C7 read ~90 ns after nDEVSEL falls, so anything slower here corrupts
++ * the byte stream (§1cx). Core 0 clears the flag in U2_Net_Poll.
++ */
+ void U2_RequestCore0NetPoll(void);
+ 
++/** Set by U2_RequestCore0NetPoll on core 1; consumed by U2_Net_Poll on core 0. */
++extern volatile bool u2_core0_net_wake_pending;
++
++#if MF_BUS_DIAG
++/** §1cy: $C0C7 reads landing in RX memory but outside socket 0's window (ring-geometry check). */
++extern volatile uint32_t g_u2_data_oow;
++/** §1db RX/TX path visibility: is anything actually arriving, and is the host consuming it? */
++extern volatile uint32_t g_u2_rx_push;     /* MACRAW frames written into the ring */
++extern volatile uint32_t g_u2_rx_drop;     /* frames discarded: ring full or frame > ring */
++extern volatile uint32_t g_u2_rx_filtered; /* frames rejected by the Sn_MR MAC filter */
++extern volatile uint32_t g_u2_recv_cmd;    /* Sn_CR RECV commands from the 6502 */
++extern volatile uint32_t g_u2_send_cmd;    /* Sn_CR SEND commands from the 6502 */
++/** Print U2 ring geometry + out-of-window count. Core 0 only (uses stdio). */
++void U2_DiagReport(void);
++#endif
++
+ /**
+  * Handle one Apple II bus access for Uthernet II at C0x4–C0x7 (slot 4: $C0C4–$C0C7).
+  * busdata: lower nibble = C0x address (4–7 → W5100 ports 0–3 via &3), bit4 = read flag, bits 5–12 = write data.
+diff --git a/pico/uthernet2_net.cpp b/pico/uthernet2_net.cpp
+index ed5fc2f..ce38d99 100644
+--- a/pico/uthernet2_net.cpp
++++ b/pico/uthernet2_net.cpp
+@@ -9,6 +9,7 @@
+ #include "w5100_regs.h"
+ #include "network.h"
+ #include "network_pump.h"
++#include "busloop.h"
+ 
+ #if PICO_CYW43_ARCH_POLL
+ 
+@@ -735,7 +736,8 @@ void U2_Net_ServicePoll(void) {
+   u2_eth_trace_try_install();
+ #endif
+   u2_macraw_tx_drain();
+-#ifndef NDEBUG
++  /* MF_BUS_DIAG is meant for Release builds (§1cy), so this block must not be NDEBUG-only. */
++#if !defined(NDEBUG) || MF_BUS_DIAG
+   if (time_reached(u2_macraw_tx_stats_next)) {
+     u2_macraw_tx_stats_next = make_timeout_time_ms(10000);
+     uint8_t q_count;
+@@ -745,6 +747,10 @@ void U2_Net_ServicePoll(void) {
+     printf("[u2macraw] tx_q=%u tx_q_drop=%lu lo_err=%lu pbuf_fail=%lu\n",
+            (unsigned)q_count, (unsigned long)u2_macraw_tx_q_drop,
+            (unsigned long)u2_macraw_tx_lo_err, (unsigned long)u2_macraw_tx_pbuf_fail);
++#if MF_BUS_DIAG
++    BusDiagReport();
++    U2_DiagReport();
++#endif
+   }
+ #endif
+ }
+@@ -752,6 +758,7 @@ void U2_Net_ServicePoll(void) {
+ void U2_Net_Poll(void) {
+   if (get_core_num() != 0)
+     return;
++  u2_core0_net_wake_pending = false; /* servicing core 1's request (§1cx) */
+   NetworkPump_PollOnce();
+ }
+ 

@@ -27,7 +27,10 @@
 #define LWIP_ETHERNET               1
 #define LWIP_ICMP                   1
 #define LWIP_RAW                    1
-#define TCP_WND                     (8 * TCP_MSS)
+/* Match one W5100 socket (8KB). tcp_connect() copies this into the SYN window.
+ * 8*MSS (11680) let the peer send past the socket buffer; a2stream then crashed
+ * with Sn_RX_RSR stuck at 8191. */
+#define TCP_WND                     8192
 #define TCP_MSS                     1460
 #define TCP_SND_BUF                 (8 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))

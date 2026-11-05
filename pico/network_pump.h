@@ -187,6 +187,9 @@ public:
   void ScheduleTimer(INetworkSession *owner, uint32_t timeout_ms, uint32_t arg);
   void CancelTimer(INetworkSession *owner);
 
+  /// True while `RunNTP` / `RunTFTP` / `RunTestWifi` holds the STA netif for native MegaFlash lwIP.
+  bool IsLegacyOperationActive() const { return activeLegacyOperation != LEGACY_OPERATION_NONE; }
+
 private:
   void DrainSessionTimers();
   void BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid, const char *label);

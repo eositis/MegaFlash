@@ -7,7 +7,8 @@ extern "C" {
 
 typedef enum {
   IPCCMD_WIFITEST,
-  IPCCMD_TFTP
+  IPCCMD_TFTP,
+  IPCCMD_NET_WAKE /* Core 1 U2 bus activity → run U2_Net_Poll on core 0 sooner */
 } IpcCmd;
 
 

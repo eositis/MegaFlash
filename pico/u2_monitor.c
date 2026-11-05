@@ -18,7 +18,14 @@
 #include "pico/time.h"
 
 #define U2_MON_RING 256
+/* Flush budget per core-0 iteration. printf here goes to a blocking UART, so at 115200 the stock
+ * 128 lines (~10 KB) cost core 0 roughly 0.9 s per call — NetworkPump_PollOnce is starved and TCP
+ * handshakes time out, which by itself makes the Debug build unable to connect (§1cz/§1de).
+ * Override with -DU2_MON_FLUSH_MAX=n (and raise PICO_DEFAULT_UART_BAUD_RATE) to keep the trace
+ * while leaving core 0 enough time to service lwIP. */
+#ifndef U2_MON_FLUSH_MAX
 #define U2_MON_FLUSH_MAX 128
+#endif
 
 enum {
   U2M_BUS = 1,
@@ -33,10 +40,16 @@ enum {
   U2M_NET_UDPRX,
   U2M_NET_TCPRX,
   U2M_NET_MACRX,
+  U2M_NET_RXDROP,
   U2M_NET_MACTX,
   U2M_NET_MACTX_PTRS,
+  U2M_RECV_STALL,
+  U2M_RECV_RESYNC,
+  U2M_RECV_STALL_DBG,
+  U2M_RECV_STALL_RING,
   U2M_MODE_LINE,
   U2M_DATA_READ_TRACE,
+  U2M_DATA_WRITE_TRACE,
   U2M_CHECKPOINT,
 };
 
@@ -132,19 +145,63 @@ static void u2_mon_format_one(const u2_mon_evt_t *e) {
   case U2M_NET_MACRX:
     printf("[u2m] %lu net sock%d MACRAW rx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
     break;
+  case U2M_NET_RXDROP: {
+    const char *proto = "?";
+    const char *reason = "?";
+    switch (e->a1) {
+    case 1: proto = "UDP"; break;
+    case 2: proto = "TCP"; break;
+    case 3: proto = "MACRAW"; break;
+    default: break;
+    }
+    switch (e->a2) {
+    case 1: reason = "no-room"; break;
+    case 2: reason = "partial"; break;
+    case 3: reason = "frame-too-big"; break;
+    case 4: reason = "size-map-clamped"; break;
+    default: break;
+    }
+    printf("[u2m] %lu net sock%d %s rx %s offered=%u accepted=%u free=%u ring=%u\n", (unsigned long)e->t_us,
+           (int)e->a0, proto, reason, (unsigned)e->w0, (unsigned)e->w1, (unsigned)(e->w2 & 0xFFFFu),
+           (unsigned)(e->w2 >> 16));
+    break;
+  }
   case U2M_NET_MACTX:
     printf("[u2m] %lu net sock%d MACRAW tx len=%u\n", (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0);
     break;
   case U2M_NET_MACTX_PTRS:
-    printf("[u2m] %lu net sock%d MACRAW ptrs len=%u rd=0x%04X wr=0x%04X rdm=0x%02X wrm=0x%02X\n",
+    printf("[u2m] %lu net sock%d MACRAW ptrs len=%u%s rd=0x%04X wr=0x%04X rdm=0x%02X wrm=0x%02X\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (e->w0 > 1518u) ? " OVERSIZE" : "",
+           (unsigned)e->w1 & 0xFFFFu, (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_STALL:
+    printf("[u2m] %lu sock%d RECV STALL rsr=%u rd=0x%04X rd_off=0x%04X hdr=%02X%02X (host RX_RD frozen)\n",
            (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
            (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_RESYNC:
+    printf("[u2m] %lu sock%d RECV RESYNC rsr=%u rd=0x%04X -> wr=0x%04X hdr=%02X%02X (wedge cleared, tail discarded)\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
+           (unsigned)e->w2 & 0xFFFFu, (unsigned)e->a1, (unsigned)e->a2);
+    break;
+  case U2M_RECV_STALL_DBG:
+    printf("[u2m] %lu sock%d dbg e66cf7 A/C last_wire=%u rec_off=0x%04X hdr_at_rec=%04X match=%u\n",
+           (unsigned long)e->t_us, (int)e->a0, (unsigned)e->w0, (unsigned)e->w1 & 0xFFFFu,
+           (unsigned)(e->w1 >> 16), (unsigned)e->a1);
+    break;
+  case U2M_RECV_STALL_RING:
+    printf("[u2m] %lu sock%d dbg e66cf7 ring8=%08lX%08lX\n", (unsigned long)e->t_us, (int)e->a0,
+           (unsigned long)e->w1, (unsigned long)e->w2);
     break;
   case U2M_MODE_LINE:
     printf("[u2] mode=0x%02X (AI=%d IND=%d)\n", (unsigned)e->a1, (e->a1 & 0x02) ? 1 : 0, (e->a1 & 0x01) ? 1 : 0);
     break;
   case U2M_DATA_READ_TRACE:
     printf("[u2] DATA read addr=0x%04X -> 0x%02X (MR=0x%02X)\n", (unsigned)e->w2, (unsigned)e->a2,
+           (unsigned)e->a1);
+    break;
+  case U2M_DATA_WRITE_TRACE:
+    printf("[u2] DATA write addr=0x%04X <- 0x%02X (MR=0x%02X)\n", (unsigned)e->w2, (unsigned)e->a2,
            (unsigned)e->a1);
     break;
   case U2M_CHECKPOINT:
@@ -162,7 +219,7 @@ void U2_MonInit(void) {
   u2_mon_head = u2_mon_tail = 0;
   u2_mon_dropped = 0;
   critical_section_exit(&u2_mon_cs);
-  printf("[u2m] U2 activity monitor on (UART 115200); bus+socket+net events; ring=%d flush<=%d/call\n", U2_MON_RING,
+  printf("[u2m] U2 activity monitor on; bus+socket+net events; ring=%d flush<=%d/call\n", U2_MON_RING,
          U2_MON_FLUSH_MAX);
 }
 
@@ -210,6 +267,12 @@ void U2_MonQueueModeLine(uint8_t mr) {
 void U2_MonDataReadTrace(uint16_t addr, uint8_t val, uint8_t mr) {
   u2_mon_evt_t ev = {
       .t_us = time_us_32(), .op = U2M_DATA_READ_TRACE, .a1 = mr, .a2 = val, .w2 = (uint32_t)addr};
+  u2_mon_push(&ev);
+}
+
+void U2_MonDataWriteTrace(uint16_t addr, uint8_t val, uint8_t mr) {
+  u2_mon_evt_t ev = {
+      .t_us = time_us_32(), .op = U2M_DATA_WRITE_TRACE, .a1 = mr, .a2 = val, .w2 = (uint32_t)addr};
   u2_mon_push(&ev);
 }
 
@@ -306,6 +369,30 @@ void U2_MonNetRxMacraw(int sock, uint16_t len) {
   u2_mon_push(&ev);
 }
 
+#ifndef U2_MON_RXDROP_MIN_INTERVAL_US
+#define U2_MON_RXDROP_MIN_INTERVAL_US 100000u
+#endif
+
+void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, uint16_t accepted, uint16_t free_bytes,
+                     uint16_t ring_size) {
+  static uint32_t u2_mon_rxdrop_last_us[4][6];
+  if (sock >= 0 && sock < 4 && reason > 0 && reason < 6) {
+    uint32_t now = time_us_32();
+    if ((uint32_t)(now - u2_mon_rxdrop_last_us[sock][reason]) < U2_MON_RXDROP_MIN_INTERVAL_US)
+      return;
+    u2_mon_rxdrop_last_us[sock][reason] = now;
+  }
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_NET_RXDROP,
+                     .a0 = (uint8_t)sock,
+                     .a1 = proto,
+                     .a2 = reason,
+                     .w0 = offered,
+                     .w1 = accepted,
+                     .w2 = ((uint32_t)ring_size << 16) | (uint32_t)free_bytes};
+  u2_mon_push(&ev);
+}
+
 void U2_MonNetMacrawTx(int sock, uint16_t len) {
   u2_mon_evt_t ev = {.t_us = time_us_32(), .op = U2M_NET_MACTX, .a0 = (uint8_t)sock, .w0 = len};
   u2_mon_push(&ev);
@@ -321,6 +408,46 @@ void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr
                      .w0 = len,
                      .w1 = rd_full,
                      .w2 = wr_full};
+  u2_mon_push(&ev);
+}
+
+void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_STALL,
+                     .a0 = (uint8_t)sock,
+                     .a1 = h0,
+                     .a2 = h1,
+                     .w0 = rsr,
+                     .w1 = rd_full,
+                     .w2 = wr_off};
+  u2_mon_push(&ev);
+}
+
+void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_RESYNC,
+                     .a0 = (uint8_t)sock,
+                     .a1 = h0,
+                     .a2 = h1,
+                     .w0 = rsr,
+                     .w1 = rd_full,
+                     .w2 = wr_full};
+  u2_mon_push(&ev);
+}
+
+void U2_MonRecvStallDbg(int sock, uint16_t last_wire, uint16_t rec_off, uint16_t hdr_at_rec, uint8_t match,
+                        uint32_t ring4a, uint32_t ring4b) {
+  u2_mon_evt_t ev = {.t_us = time_us_32(),
+                     .op = U2M_RECV_STALL_DBG,
+                     .a0 = (uint8_t)sock,
+                     .a1 = match,
+                     .w0 = last_wire,
+                     .w1 = (uint32_t)rec_off | ((uint32_t)hdr_at_rec << 16),
+                     .w2 = 0};
+  u2_mon_push(&ev);
+  ev.op = U2M_RECV_STALL_RING;
+  ev.w1 = ring4a;
+  ev.w2 = ring4b;
   u2_mon_push(&ev);
 }
 
@@ -386,6 +513,16 @@ void U2_MonNetRxMacraw(int sock, uint16_t len) {
   (void)sock;
   (void)len;
 }
+void U2_MonNetRxDrop(int sock, uint8_t proto, uint8_t reason, uint16_t offered, uint16_t accepted, uint16_t free_bytes,
+                     uint16_t ring_size) {
+  (void)sock;
+  (void)proto;
+  (void)reason;
+  (void)offered;
+  (void)accepted;
+  (void)free_bytes;
+  (void)ring_size;
+}
 void U2_MonNetMacrawTx(int sock, uint16_t len) {
   (void)sock;
   (void)len;
@@ -399,9 +536,40 @@ void U2_MonNetMacrawTxPtrs(int sock, uint16_t len, uint16_t rd_full, uint16_t wr
   (void)rd_masked;
   (void)wr_masked;
 }
+void U2_MonRecvStall(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_off, uint8_t h0, uint8_t h1) {
+  (void)sock;
+  (void)rsr;
+  (void)rd_full;
+  (void)wr_off;
+  (void)h0;
+  (void)h1;
+}
+void U2_MonRecvResync(int sock, uint16_t rsr, uint16_t rd_full, uint16_t wr_full, uint8_t h0, uint8_t h1) {
+  (void)sock;
+  (void)rsr;
+  (void)rd_full;
+  (void)wr_full;
+  (void)h0;
+  (void)h1;
+}
+void U2_MonRecvStallDbg(int sock, uint16_t last_wire, uint16_t rec_off, uint16_t hdr_at_rec, uint8_t match,
+                        uint32_t ring4a, uint32_t ring4b) {
+  (void)sock;
+  (void)last_wire;
+  (void)rec_off;
+  (void)hdr_at_rec;
+  (void)match;
+  (void)ring4a;
+  (void)ring4b;
+}
 
 void U2_MonQueueModeLine(uint8_t mr) { (void)mr; }
 void U2_MonDataReadTrace(uint16_t addr, uint8_t val, uint8_t mr) {
+  (void)addr;
+  (void)val;
+  (void)mr;
+}
+void U2_MonDataWriteTrace(uint16_t addr, uint8_t val, uint8_t mr) {
   (void)addr;
   (void)val;
   (void)mr;

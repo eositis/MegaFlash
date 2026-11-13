@@ -1,16 +1,15 @@
 ---
-description: Build both Pico W and Pico 2 W firmware when verifying pico changes
+description: Build the Pico 2 W firmware when verifying pico changes (RP2040 is stopped)
 globs: pico/**/*
 alwaysApply: false
 ---
 
-# Pico firmware: build both boards
+# Pico firmware: Pico 2 W only
 
-MegaFlash ships **two** UF2s: **Pico W** (RP2040, `pico_release`) and **Pico 2 W** (RP2350, `pico2_release`).
+**RP2040 / Pico W development is stopped** (user decision, 2026-11-09). MegaFlash targets the **Pico 2 W** (RP2350, `pico2_release`, `-DPICO_BOARD=pico2_w`) only. Do not build, verify, fix or deliver `pico_release`, and do not spend effort keeping RP2040 code paths working (the `PICO_RP2040` guards may stay, but nothing is tested against them).
 
 When running a compile check or test build after editing `pico/`:
 
-- Prefer **`./pico/build-both.sh`** — configures and builds **both** Release targets, builds **cpanel** first, does **not** bump `defines.h`.
-- **`./pico/cmakeall.sh`** — full release flow (version bump, all four CMake dirs, copies `_releases/…`).
-
-Do **not** verify only `pico_release` unless the user explicitly asked for RP2040-only.
+- Prefer **`./pico/build-both.sh`** (name kept; it now builds **only** `pico2_release`), builds **cpanel** first, runs the SRAM-only bus check, does **not** bump `defines.h`.
+- Audit image: **`./pico/build-audit.sh`** (Pico 2 W only).
+- **`./pico/cmakeall.sh`** is the old four-directory release flow; do not use it unless the user asks.

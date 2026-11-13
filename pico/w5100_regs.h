@@ -92,6 +92,7 @@
 #define W5100_SN_MR_IPRAW         0x03
 #define W5100_SN_MR_MACRAW        0x04
 #define W5100_SN_MR_ND            0x20  /* TCP: no delayed ACK */
+#define W5100_SN_MR_MULTI         0x80  /* UDP: send to Sn_DHAR, not an IP-derived MAC */
 #define W5100_SN_MR_MF            0x40  /* MACRAW MAC Filter: accept only own-MAC (SHAR) + broadcast */
 
 #define W5100_SN_CR_OPEN          0x01

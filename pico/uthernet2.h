@@ -43,6 +43,21 @@ void U2_HandleBusAccess(uint32_t busdata, uint8_t *read_byte_out);
 /** Byte the W5100 would return on the next read of the DATA port ($C0C7) at current ptr/MR (no increment). */
 uint8_t U2_PeekDataPort(void);
 
+/* BSS, so these loads stay in SRAM on the bus path. The bus loop reads them once per
+ * $C0C4–$C0C7 cycle and packs mode, address, and the data peek into one PIO word. */
+extern uint8_t u2_mode_register;
+extern uint16_t u2_data_address;
+/** Number of $C0C4-$C0C7 cycles served since boot. Core 0 samples it to see whether the Apple is in use. */
+uint32_t U2_BusCycleCount(void);
+
+/** Sn_SR shadow in SRAM. The bus peek must not call into the C++ net layer. */
+void U2_SrPublish(int socket_i, uint8_t status);
+
+/** Epoch bumped by MR $80. A pcb opened after that bump must survive the core-0 reset. */
+uint8_t U2_CmdEpoch(void);
+/** Nonzero when the bus has armed a socket command the reset must not discard. */
+int U2_SocketCmdPending(int socket_i);
+
 /** Times the peeked memory byte differed from the later data-port read, plus the cover and audio bytes that read returned. */
 void U2_RxDebugQueue(int *waits, int *feeds, int *level);
 

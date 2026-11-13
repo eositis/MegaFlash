@@ -4148,6 +4148,404 @@ Operator confirmed first-connect fixed on the V1.2.4-eo Release rebuild. Removed
 
 **This run:** `q` a=0, b=0, c=-1. The first cover byte at `$62AB` is 0 and the data port returned 0, so that read matched. Peek and the later memory read never disagreed. The stored audio address was never read, and `Sn_RX_RD` stopped at 22667, the first audio byte. The player is dying before that read. `aim` records the last RX address the 6502 wrote after the audio byte existed, next to the address where that byte is stored.
 
+## 1ej. Nettest on the GitHub tree: MACRAW socket and indirect shadow (2026-11-04)
+
+**What:** The build-0007 IIc catalog still applies to this tree for two items. MACRAW OPEN on socket 1 returned `SOCK_MACRAW` `$42`. Mode `$03` read back `$00`, so a write at `$5FFF` did not wrap, and address high read `$10` after the pointer was `$0010`.
+
+**Why:** TCP, UDP, and IPRAW commands were already deferred to core 0, and LISTEN / CLOSE_WAIT were already `$14` / `$1C`. MACRAW OPEN still called `U2_Net_OpenMacraw` for every socket, and `Sn_SR` is `U2_Net_GetStatus`, so socket 1 became `$42`. The PIO shadow copied the last byte written to `$C0C4`–`$C0C6` and only refreshed `$C0C7`. A data-port write of MR updates `u2_mode_register` and the pointer, but the next `$C0C4`/`$C0C5` read still presented the old shadow. `auto_increment` already wraps `$6000` to `$4000` when AI is set; a lost `$03` is why `$5FFF` stayed `$5Fxx`. `$80` reading `$00` is RST clearing itself and stays that way.
+
+**What we did:** MACRAW OPEN on sockets 1–3 sets status `CLOSED` and does not call `U2_Net_OpenMacraw`. Socket 0 is unchanged. After the IRQ0 wait, `U2_PrimeIndirectShadow` reloads `registers.r[4..6]` from the mode register and pointer, next to the existing `r[7]` peek.
+
+**What we didn’t do:** No change to deferred TCP/UDP/IPRAW, LISTEN, CLOSE_WAIT, `Sn_IR`, or the rule that the bus loop does not poll lwIP. The three shadow stores sit beside the peek that was already on that path.
+
+**Takeaway:** The byte the 6502 gets from `$C0C4`–`$C0C6` is the shadow primed on the previous cycle. That shadow has to be the mode register and the pointer.
+
+**References:** `pico/uthernet2.c` (`write_socket_register`, `U2_PrimeIndirectShadow`), `pico/busloop.c`.
+
+## 1ek. b129 catalog: the shadow call never reached the PIO (2026-11-05)
+
+**What:** NetTester 0017 on the IIc, later catalog the evening of 5 Nov, against the b129 image (`2026-11-05 04:35:35 UTC`, Release CMake cache). Mode `$03` matched the IIGS on the first read. `$0002` still captured `$10` and `$0003` still captured `$5F`. `$0101` was still `$42`. `$0006` captured `$03` where `Sn_CR` must be `$00`. The earlier catalog that evening had passed the socket rows this one lost. Whether the IIc was power-cycled between those two runs is not in the log. A listen wedge on this tree has survived an Apple reboot before, so the next catalog has to be taken with power removed first.
+
+**Why:** `$C0C5` / `$C0C6` are bytes 1 and 2 of the chunk-1 word the PIO shifts out (`A1:A0`). b129 wrote those bytes through `U2_PrimeIndirectShadow(uint8_t *)` and then passed `registers.i32[1]` to the PIO. The word that actually shifted was still the write echo: `$0003` returned the `$5F` just stored in `r[5]`, and `$0002` failed with `$10`, the address low still sitting in `r[6]` (the high-byte compare can pass on the echoed `$00`; the failure stores whichever read missed). `$03` is `MR` indirect plus auto-increment. It is not an `Sn_CR` command. Those commands are one bit each. Presenting that byte from `Sn_CR` makes `t_open` fail after UDP status has already reached `$22`.
+
+**What we did:** After the IRQ 0 wait, the bus loop builds one `uint32_t` from `u2_mode_register`, `u2_data_address`, and `U2_PeekDataPort()`, stores it in `registers.i32[1]`, and passes that value to `UpdateMegaFlashRegisters`. No shadow call. MACRAW OPEN on sockets 1–3 only calls `U2_Net_SetStatus(CLOSED)`. A socket that was not already closed gets `U2_DF_CLOSE` on core 0. Core 1 does not call `U2_Net_OpenMacraw` or `U2_Net_Close`. An `Sn_CR` value with more than one bit set is cleared and reads as `$00`. Release stamp `2026-11-06 02:01:06 UTC b130`.
+
+**What we didn’t do:** No change to deferred TCP/UDP/IPRAW, LISTEN, CLOSE_WAIT, or socket 0 MACRAW. No lwIP poll on the bus loop. Close-wait and the multicast timeout stay for the catalog that moves bytes again.
+
+**Takeaway:** The PIO consumes one 32-bit store per cycle. Byte stores the compiler does not fold into that store are invisible to the 6502.
+
+**References:** `pico/busloop.c`, `pico/uthernet2.c` (`read_socket_register`, `write_socket_register`).
+
+## 1el. Pair catalog: soft reset took the lwIP lock on the bus core (2026-11-05)
+
+**What:** NetTester 0017, two catalogs back to back on the IIc, Pico not power-cycled between them (`docs/megaflash-20261105-pair.md` in NetTester). Both match the IIGS on the pointer (`$0002` ends at `$0013` with `$11 $22 $33`), the `$5FFF`/`$7FFF` wrap (`$0003`), and MACRAW on socket 1 staying `$00` (`$0101`). The first catalog also opened UDP (`$0006`), reached the idle TCP connect (`$0010` at `$17`), and copied a MACRAW frame (`$0111`/`$0112`). The second catalog, after an Apple restart only, read `Sn_CR` `$03` once UDP status had already reached `$22`, left TCP `OPEN` at `$00`, and timed out MACRAW receive at rx 0. MACRAW transmit of 32 bytes and socket 0 at `$42` still worked. `$0201` on the first catalog had stopped at `SOCK_INIT` `$13`.
+
+**Why:** `u2_reset` runs on core 1, from the MR `$80` write. `U2_Net_Close` from that core only avoided the lwIP lock for TCP, UDP, and IPRAW, and for those it pulled the pcb out of the socket while core 0 could be inside `ListenTcp` or `OpenTcp`. MACRAW and an already-closed socket fell through to `u2_net_close_core0`, which calls `cyw43_arch_lwip_begin`. That wait sits in the bus loop. The 6502 then latches the previous PIO word, whose low byte is the mode value `$03`, and `t_open` stores that as `Sn_CR`. The same close could leave `sta->input` as lwIP while `u2_saved_netif_input` was already set, so the next MACRAW open did not install the input wrapper. Transmit uses `linkoutput` and kept working. A pcb freed on the wrong side of `tcp_listen` is why a later `OPEN` stays `CLOSED` until power is removed. The Apple program starting again writes MR `$80` and does not clear that state.
+
+**What we did:** Core 1 never calls `cyw43_arch_lwip_begin`. A TCP, UDP, or IPRAW socket is marked `need_close` and `CLOSED` and the pcb stays put until `U2_Net_ServicePoll` on core 0. MACRAW close on core 1 drops the socket type, clears the TX queue, and asks core 0 to put the station netif input back. `U2_Net_OpenMacraw` only asks core 0 to install the wrapper, and that install runs when `sta->input` is not already the wrapper, including when a saved pointer was left behind. `U2_Net_ServicePoll` still runs the deferred `OPEN` / `LISTEN` / `CONNECT` path after the closes, so a reset and the next open meet on core 0 in that order. Release stamp `2026-11-06 03:36:44 UTC b131`.
+
+**What we didn’t do:** No change to the one-word PIO chunk, the socket-1 MACRAW reject, the multi-bit `Sn_CR` read, deferred TCP/UDP/IPRAW commands, LISTEN `$14`, or CLOSE_WAIT. Close-wait versus the IIGS, and the multicast timeout (`$0302`/`$0303`), are not measurable while `OPEN` stays closed. The next catalog has to be taken with Pico power removed first. An Apple restart is the recovery this change is for, after that one power cycle.
+
+**Takeaway:** Soft reset must not take the lwIP lock, and must not move a pcb core 0 is using. The mode byte `$03` on `Sn_CR` is the prefetch going stale while core 1 is blocked.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_Close`, `u2_macraw_hook_apply`, `U2_Net_OpenMacraw`), `pico/uthernet2.c` (`u2_reset`).
+
+---
+
+## 1em. Fresh catalog: mode byte on `Sn_CR`, LISTEN left at `$13` (2026-11-05)
+
+**What:** NetTester 0017 after b131, one power-cycled boot (`docs/megaflash-20261105-fresh.md`). The wedge is gone: `$0010` reaches `$17`, `$0200` matches the HTTP counts, `$0202`/`$0203` reach `$1C`, and `$0112` counts 60. `$0006` still stores `$03` after UDP status has reached `$22`. `$0001` needs one extra mode slice (aux 1). `$0210` reaches `SOCK_INIT` `$13` and never `$14`. `$0201` is `$00` on the retry after a lost result frame.
+
+**Why:** The multi-bit `Sn_CR` clamp cannot return `$03`, so that byte was not the command register. It is the mode value in the low byte of the PIO word. `t_mode` writes `$03` and reads it with no delay after MR `$80`. `u2_reset` still called `U2_Net_Close` four times on core 1, so that read latched the pre-write word. The same class of late word is what `$0006` samples: `Sn_SR` was a call into flash (`U2_Net_GetStatus`) on the peek path. `$0210` is a different bug. `LISTEN` written while `OPEN` still owns the defer slot returned arm-fail, and `hold_cr` stayed set. `OPEN`'s finish then cleared `Sn_CR`, so the test treated `LISTEN` as done and waited for `$14` on a socket that was still `$13`. A failed `ListenTcp` would have closed the socket (`$00`), which is not this row.
+
+**What we did:** `u2_reset` only sets `u2_net_reset_pending`. Core 0 closes every socket in `U2_Net_ServicePoll` before deferred commands, and does not take the lock on core 1. `Sn_SR` is `u2_sr[]`, published from `set_status`, so the peek stays in SRAM. A command written while the slot is busy is kept in `u2_defer_next` and run once the current op finishes, including `LISTEN` behind `OPEN`. While the pointer sits on `Sn_CR` and that register is already 0, the PIO word is all zeros, so a short shift cannot present mode `$03`. Release stamp `2026-11-06 04:13:52 UTC b133`.
+
+**What we didn’t do:** No padding of `$0111`. The copied frame is 60 bytes; `$0112` already matches the IIGS minimum Ethernet frame. No synthesized `$1C` on `$0207`/`$0208`. Ports 23 and 2323 already reach `CLOSE_WAIT`; the 16-byte echoes sample `Sn_SR` before the peer FIN. No firmware change for ticks. `$C019` is the Apple video switch, and b140 was also 0 on every row. `$0204`–`$0206` stay unexplained: later ports in the same boot connect, so it is not a stuck pcb pool.
+
+**Takeaway:** Core 1 reset is a flag. `Sn_SR` on the bus is the SRAM shadow. A second socket command is queued, not dropped. The all-zero `Sn_CR` word is only for a completed command.
+
+**References:** `pico/uthernet2.c` (`u2_reset`, `u2_sr`, `u2_defer_next`), `pico/uthernet2_net.cpp` (`U2_Net_RequestReset`), `pico/busloop.c` (chunk when the pointer is `Sn_CR`).
+
+---
+
+## 1en. Latest catalog: the all-zero `Sn_CR` word (2026-11-05)
+
+**What:** NetTester 0017 after b133 (`docs/megaflash-20261105-latest.md`). Same 14 IIGS matches, different set. New matches: burst echo `$0217` 512/512 at `$17`, UDP echo `$0300` 40/40 at `$22`, UDP with source IP still zero `$0301`. Regressions against the fresh build: telnet `$0202`/`$0203` back to `$00` with no bytes (they had been 64/64 at `$1C`), ports 1 and 65535 no bytes (they had moved 16/16), `$0210` back to `$00` (it had reached `$13`), `$0112` counts 63 instead of 60. `$0006` is still `$03`. `$0001` aux is still 1. `$0302`/`$0303` now open and receive 8 bytes; the IIGS times out with tx 8, rx 0, aux 8.
+
+**Why:** b133 pushed an all-zero PIO word whenever the pointer sat on `Sn_CR` and the register was already 0. That was aimed at `$0006`, and `$0006` still stored `$03`, so the 6502 is not sampling that word. `sock_cmd` polls `Sn_CR` until it reads 0. The first poll is the peek from before the new command is visible, which is 0. Filling every byte with 0 makes that poll succeed immediately, so `DISCON`/`CLOSE`/`CONNECT` return while the previous status is still in `Sn_SR`. `$0213` and `$0214` show that: 16 bytes moved, status still `$17`. A connect that then runs before `OPEN` has a pcb fails closed, which is the telnet and port 1/65535 rows. `$0001` aux 1 remains because `u2_reset` still cleared 32 KiB on the bus core; `t_mode` reads `$03` on the next instructions. Multicast receive is lwIP `udp_sendto` to 224.0.0.1. The IIGS sends to `Sn_DHAR`, which the test never writes. Our reset value was `$FF`, and the real card leaves it zero, so the frame is not delivered.
+
+**What we did:** Restored the normal PIO word (mode, pointer, data peek). MR `$80` on the bus core only bumps the command epoch, clears the defer slots, and sets the mode register to 0. Core 0 runs `U2_ResetMemory` and then closes the pcbs. `Sn_DHAR` defaults to zero. A UDP socket with `Sn_MR` MULTI set and `Sn_DHAR` still zero completes `SEND` and does not call `udp_sendto`. Unicast `$0300` does not have MULTI, so it still sends. Release stamp `2026-11-06 04:38:15 UTC b134`.
+
+**What we didn’t do:** No change to the MACRAW length copy. `$0112` counting 63 is not a `$04xx` peek; the RX ring is at `$6000`. No synthesized `$1C` and no `$C019` ticks. `$0006` is still the mode byte on a read that does not go through the `Sn_CR` clamp. Holding `Sn_CR` until a `DISCON` handshake reaches `$00` was left alone; `CLOSE` already publishes `$00` before it clears `Sn_CR`, once the poll actually waits.
+
+**Takeaway:** Do not replace the PIO word to hide a `$03` sample. A command poll that sees 0 before the command is written will skip it. Soft reset’s 32 KiB clear belongs on core 0. Multicast without `Sn_DHAR` must not be a normal IP send.
+
+**References:** `pico/busloop.c` (chunk), `pico/uthernet2.c` (`u2_reset`, `U2_ResetMemory`, UDP MULTI send), `pico/uthernet2_net.cpp` (`U2_Net_ServicePoll`).
+
+---
+
+## 1eo. 2341 catalog: core 0 reset ran after the 6502 had continued (2026-11-05)
+
+**What:** NetTester 0017 after b134 (`megaflash-20261105-2341.md`). `$0001` aux is 0, `$0112` is 60 again, and the HTTP client is still tx 26 / rx 64 at `$17`. The rows that matched on the previous catalog went back to `$00`: UDP echo, burst echo, steady echo, `$0213`/`$0214`, `$0300`/`$0301`. `$0302`/`$0303` fail at `OPEN` instead of the IIGS timeout. `$0010` stores `$15` (SYN sent, handshake not finished in the idle). `$0006` is still `$03`. `$0201` is still `$13`. `$0600` connects and sends 8 bytes but aux is `$01` (CON) and status stays `$17`.
+
+**Why:** b134 moved the 32 KiB clear onto core 0 so `$0001` could read `$03` on the first try. The bus core only sets `u2_net_reset_pending` and returns. `wiz_reset` then spins about 0.65 s with no slot access, which is long enough when core 0 is free. When core 0 is still inside lwIP, it handles the flag after that spin. `U2_ResetMemory` then zeros the socket the 6502 already programmed, and `u2_net_close_core0` on every socket aborts the pcb the new `OPEN` just made. Status becomes `$00`. A socket that reached `SYNSENT` before that close, or whose handshake never ran because core 0 was in the wipe, stays `$15` for the idle sample (`t_starve` waits about two seconds, which was enough on b133). `$0006` is the same mode byte as before: the `Sn_CR` clamp cannot return `$03`, and the all-zero word did not catch the sample. A core-0 memset that overlaps the peek is one way that sample goes stale. It is not a second PIO word.
+
+**What we did:** Each `$C0C4`–`$C0C7` cycle sets `u2_bus_since_reset`. `u2_reset` clears it on the `$80` cycle, before `U2_Net_RequestReset` posts the flag. Core 0 runs `U2_ResetMemory` and the close-all only while the flag is still clear. A cycle after the reset means the 6502 has left the spin; wiping that image is the bug. The epoch bump and the defer-slot clear stay on the bus core, so a command armed before reset still dies. Mode is still cleared on the bus core, and the pointer is still left alone. Release stamp `2026-11-06 05:02:52 UTC b135`.
+
+**What we didn’t do:** Did not put the 32 KiB clear back on the bus core, and did not bring back the all-zero `Sn_CR` word. Did not pad `$0111` (the copied frame is 60 bytes; `$0112` matches that length). Did not synthesize `CLOSE_WAIT` for `$0600`. The echo peer does not FIN, so `$1C` is not a status we can publish from the send path. `SEND_OK` is stored before `Sn_CR` clears; aux `$01` is that send not having finished before the second `Sn_IR` read. Did not emulate `$C019`. Left the MULTI + zero `Sn_DHAR` skip in place so `$0302`/`$0303` can time out once UDP `OPEN` works. Did not change `ListenTcp`. `$0201` was already `$13` on b133; a late close is what turned `$0500` from `$13` into `$00`.
+
+**Takeaway:** Soft reset’s memory clear belongs on core 0, and only while the 6502 is still inside the reset spin. A clear that arrives after the next slot cycle deletes the test that just started.
+
+**References:** `pico/uthernet2.c` (`u2_bus_since_reset`, `u2_reset`, `U2_HandleBusAccess`), `pico/uthernet2_net.cpp` (`U2_Net_ServicePoll`), `pico/uthernet2.h`.
+
+---
+
+## 1ep. 7 November catalog: skipping the reset left the previous pcb (2026-11-07)
+
+**What:** NetTester 0017, `docs/megaflash-20261107.md`. Eleven IIGS matches. `$0001` aux 0, the pointer, the wrap, socket-1 MACRAW, and the HTTP client still match. `$0010` no longer stores `$15`: `OPEN` does not reach the idle, error 2, status column `$00`. `$0600` no longer connects. `$0112` counts 63 again (5 November was 60). `$0006` is still `$03`. `$0201` is still `$13`. From `$0202` through `$0503` the sockets are `$00`, the same shape as the 5 November 23:41 catalog. UDP echo and both TCP echoes are in that set.
+
+**Why:** §1eo refused the whole core-0 reset once any later slot cycle had landed. That avoided wiping a socket the 6502 had just programmed, and it also left the previous test’s pcb in the slot. `u2_tcp_err` then calls `set_status(CLOSED)` for that pcb even when the slot already holds a newer one, so a connect that had reached `SYNSENT` or `ESTABLISHED` is stored as `$00`. A reset that still runs because `u2_bus_since_reset` is sampled once, before a 32 KiB clear, has the same effect if the 6502 leaves the spin during the clear: the close hits the pcb `OPEN` just made. `$0112` going from 60 back to 63 is which frame was copied. The length header is still frame length plus 2. `$0006` is still the mode byte. The clamp cannot return `$03`.
+
+**What we did:** Each pcb stores `born_epoch` from `U2_CmdEpoch()` at open. MR `$80` still bumps that epoch on the bus core. Core 0 closes a socket only when its pcb was opened under an older epoch, so a connect that already happened for this reset is left alone, and a pcb from the previous test is still freed. `U2_ResetMemoryIfIdle` clears W5100 RAM in 128-byte steps and stops when a slot cycle arrives, so a late clear does not run the default-register pass over bytes the 6502 has started writing. `u2_tcp_err` and the TCP connected callback do not publish `Sn_SR` for a pcb the socket no longer points at. Release stamp `2026-11-07 22:30:38 UTC b136`.
+
+**What we didn’t do:** Did not put the 32 KiB clear back on the bus core. Did not change the PIO word. Did not pad `$0111` to 66 or trim `$0112` to 60. Those counts are the frame that was copied; `$0112` matched 60 on b134 without a length change. Did not synthesize `$1C`. The echo peer does not FIN, so `$0600` ending at `$17` with aux `$01` on 5 November was a completed send whose `SEND_OK` had not been stored yet, and this run did not get that far. Did not emulate `$C019`. Left the MULTI + zero `Sn_DHAR` skip in place. Did not change `ListenTcp`. `$0201` at `$13` means `LISTEN` never ran and never failed closed.
+
+**Takeaway:** A soft reset has to drop the previous pcb and must not drop the pcb opened after that reset. Skipping both, or closing every socket after one stale look at the bus flag, stores `$00`.
+
+**References:** `pico/uthernet2.c` (`U2_ResetMemoryIfIdle`, `U2_CmdEpoch`), `pico/uthernet2_net.cpp` (`born_epoch`, `u2_tcp_err`, `u2_tcp_connected_cb`, `U2_Net_ServicePoll`).
+
+---
+
+## 1eq. 17:38 catalog: LISTEN never left `$13`, and the later opens stayed `$00` (2026-11-07)
+
+**What:** NetTester 0017 after b136 (`docs/megaflash-20261107-1738.md`). Thirteen IIGS matches. `$0010` now stores `$17` and `$0112` is 60 again. `$0001` aux 0, the pointer, the wrap, socket-1 MACRAW, and the HTTP client (tx 26 / rx 64 at `$17`) still match. `$0006` is still `$03`. `$0201` is still `$13`: OPEN finished, LISTEN did not. From `$0202` through `$0503`, and `$0300`–`$0303`, `$0400`, and `$0600`, the stored status is `$00`. Ticks are 0 on every row.
+
+**Why:** `$0201` staying at `$13` means `ListenTcp` did not run and did not fail. A failed listen closes the socket, which would store `$00`. The 6502 writes LISTEN only after it has seen `$13`, so the defer slot is already free; the command is not dropped behind OPEN. Two holes still fit the row. A dropped address-low cycle leaves the pointer on `Sn_PORT0` (auto-increment after the `Sn_SR` read). The `$02` is stored there, `Sn_CR` stays 0, `sock_cmd` returns, and the status wait keeps seeing `$13`. Separately, `U2_ResetMemoryIfIdle` still memsets 128 bytes after it has observed a quiet bus. That chunk overlaps the socket the 6502 has started to program. OPEN then reads `Sn_MR` as 0, does not arm, and `u2_sr` stays the 0 written by MR `$80`. That is the `$00` tail. `$0010` and `$0200` finish before that overlap. `$0006` is still the mode byte. The all-zero `Sn_CR` word did not catch it (§1en) and made `sock_cmd` return before the command was visible. It stays out.
+
+**What we did:** Mode, local port, destination port, and destination IP are latched as the 6502 writes them. OPEN, LISTEN, and CONNECT use that copy when the memory byte is 0. A LISTEN or CONNECT that lands on `Sn_IR`, `Sn_PORT`, or `Sn_DHAR0` while the socket is already `SOCK_INIT` is put back and armed as `Sn_CR`. The idle clear is 8-byte chunks. A socket that already has a deferred command is not closed by the reset handler; the command closes the previous pcb. `u2_net_close_core0` clears `born_epoch`. `ListenTcp` publishes `$14` if the pcb is already listening, and replaces a pcb that is not `CLOSED` instead of failing the listen. `PollOnce` runs the deferred commands again after `cyw43_arch_poll`, so a command written during that poll is not left until the following iteration. Release stamp `2026-11-07 23:15:05 UTC b138`.
+
+**What we didn’t do:** Did not put the all-zero PIO word back. Did not pad `$0111` to 66 or trim `$0112`. The shared length header is frame length plus 2, and `$0112` is already 60. Did not synthesize `$1C` or aux `$11` for `$0600`. The echo peer does not FIN; those values appear only if the connect and the send actually complete. Did not emulate `$C019`. Left the MULTI + zero `Sn_DHAR` skip in place so `$0302`/`$0303` can time out once UDP OPEN works. Did not move the 32 KiB clear back onto the bus core.
+
+**Takeaway:** A LISTEN that misses `Sn_CR` leaves the socket at `$13` for the whole wait. A memory clear that overlaps the next test’s register writes makes every later OPEN look closed. Keep the bytes the 6502 wrote, and arm the command even when the address-low cycle did not move the pointer.
+
+**References:** `pico/uthernet2.c` (`u2_mr_latch`, `u2_port_latch`, `write_socket_register`, `U2_ResetMemoryIfIdle`), `pico/uthernet2_net.cpp` (`U2_Net_ListenTcp`, `u2_net_close_core0`, `U2_Net_ServicePoll`), `pico/network_pump.cpp` (`PollOnce`).
+
+---
+
+## 1er. 18:26 catalog: LISTEN still `$13`, SEND_OK missing, peer FIN late (2026-11-07)
+
+**What:** NetTester 0017 after b138 (`docs/megaflash-20261107-1826.md`). The same thirteen IIGS matches held, including `$0001` aux 0, the pointer and wrap, socket-1 MACRAW, idle connect `$17`, `$0112` at 60, and the HTTP client (tx 26 / rx 64 at `$17`). `$0207` and `$0208` now move 16/16 but stay `$17`. `$0210` reached `$13`. `$0600` connects, the 6502 counts tx 8, aux is `$01`, and status stays `$17`. `$0111` counted 63. `$0006` is still `$03`. `$0201` is still `$13`. Telnet, the other echoes, UDP, IP raw, and the four-socket rows are `$00`. Two result frames were lost (`$0205`, `$0500`); the retries are the `$00` rows. Ticks are 0 on every row.
+
+**Why:** b138's salvage ran after `Sn_IR`'s write-1-to-clear return, and only for offsets 2, 4, 5, and 6. A dropped address-low leaves the pointer on `Sn_SR` (the status read did not advance) or on `Sn_RX_RSR0` (auto-increment after `tx_commit`). LISTEN `$02` and SEND `$20` are stored there. `Sn_CR` stays 0, so `sock_cmd` returns at once. LISTEN never runs, which is why the row stays `$13` instead of failing closed to `$00`. SEND never runs, so the second `Sn_IR` sample is CON alone. Separately, Release `U2_AgentLog` printf'd on core 0, and `U2_Init` had turned UART on to make those lines visible. A line at 115200 holds the core that has to accept the send and take the peer FIN. `echo_once` does `close()` after the payload, which sends FIN. `finish_io` reads `Sn_SR` before that FIN is published, so `$0207`, `$0208`, and `$0600` stay `$17`. A command still inside `ListenTcp` or `OpenTcp` when MR `$80` ran then stored `U2_DF_NONE` over the OPEN the next test had armed. That is the `$00` tail after a listen that did not finish. `$0111`'s 63 is the frame that was copied. `$0112` uses the same length header and is 60. `$0006` is still a one-byte shift of the mode register. The all-zero PIO word did not catch it (§1en).
+
+**What we did:** A missed single-bit command is retargeted to `Sn_CR` before the `Sn_IR` handler. LISTEN and CONNECT qualify anywhere in the socket register block while status is `$13`. OPEN qualifies at the post-setup offsets (`Sn_IR`, `Sn_SR`, `Sn_DHAR0`, the byte after `Sn_DPORT`, the byte after `Sn_PROTO`) while status is CLOSED and the mode latch is TCP, UDP, or IP raw. SEND qualifies at those same leftovers and at `Sn_RX_RSR`, not at `Sn_TX_WR`, so a pointer low byte of `$20` is still the write pointer. MR `$80` bumps a per-socket generation. The in-flight command clears the defer slot, and closes, only when that generation is still the one it started with. Release builds no longer printf the agent log and do not turn UART on for it. After the host's RECV credit, `tcp_process_refused_data` runs on this poll, and a pcb lwIP has already moved to `CLOSE_WAIT` is published as `$1C` with DISCON. TCP bind sets `SOF_REUSEADDR` so local port 50023 (`$0202` and `$0203`) can be bound again. `ListenTcp` and `ConnectTcpEx` do not publish `Sn_SR` if MR `$80` ran during the call. Release stamp `2026-11-07 23:52:23 UTC b140`.
+
+**What we didn’t do:** Did not restore the all-zero PIO word. Did not pad `$0111` or trim `$0112`. Did not write `$1C` or aux `$11` from the send path. Those show up only when the send is accepted and the peer FIN has been delivered. Did not emulate `$C019`. Left the MULTI + zero `Sn_DHAR` skip in place. Left the 8-byte idle clear and the register latches as they were in §1eq.
+
+**Takeaway:** `sock_cmd` treats a zero `Sn_CR` as "the command finished." A command byte that never landed on `Sn_CR` is a finished command that never ran. A printf on core 0 is late for the sample that follows a 16-byte transfer.
+
+**References:** `pico/uthernet2.c` (`u2_missed_command`, `u2_defer_gen`, `u2_defer_finish`, `U2_AgentLog`), `pico/uthernet2_net.cpp` (`U2_Net_ServicePoll`, `U2_Net_ListenTcp`, `U2_Net_ConnectTcpEx`).
+
+---
+
+## 1es. 20:09 catalog: UDP and IP raw are back, idle connect and later TCP opens are not (2026-11-07)
+
+**What:** NetTester 0017 after b140 (`docs/megaflash-20261107-2009.md`). Eighteen IIGS matches. New ones: `$0218` 80/80 at `$1C`, `$0300` 40/40 at `$22`, `$0301` tx 8 at `$22`, `$0302`/`$0303` the IIGS timeout (tx 8, rx 0, aux 8, `$22`), and `$0400` at `$32`. `$0112` is still 60, the HTTP client still tx 26 / rx 64 at `$17`, and `$0500` now reaches `$13`. Lost: `$0010` (error 2, no status stored; the idle never started), `$0207`/`$0208` (were 16/16 at `$17`, now `$00`), `$0210` (was `$13`, now `$00`), `$0600` (was connected with aux `$01`, now `$00`). `$0006` is still `$03`. `$0111` is still 63. `$0201` is still `$13`. Ticks are 0.
+
+**Why:** b140 stopped the release printf, so core 0 publishes the peer FIN in time for `$0218`, and a missed OPEN is armed, which is why UDP and IP raw leave `$00`. Two of the new paths also drop sockets. A command still running at MR `$80` called `U2_Net_Close` when its generation still matched, and that store is `Sn_SR` `$00` on the socket the next test is opening. The reset handler also skipped that close when any command was queued, so the previous TCP pcb stayed allocated until `tcp_new` failed and later OPENs never left CLOSED. Separately, salvaging every `$01` at `Sn_DHAR0` turned a port low byte into OPEN. Local port 49153 (`$0010`) and destination port 1 (`$0207`) are that byte. `$0010` returns from `tcp_arm` before it stores `Sn_SR`, which is why the status column is the zeroed result byte.
+
+**What we did:** The in-flight command no longer closes the socket when the generation has moved; the reset handler still frees a pcb opened under the previous epoch, including when a new command is already queued. OPEN is salvaged only at `Sn_IR`, `Sn_SR`, and the byte after `Sn_PROTO`. LISTEN and CONNECT while `SOCK_INIT` are salvaged only at the post-increment offsets through `Sn_DHAR0` and the byte after `Sn_DPORT`. A `Sn_CR` byte left behind with an empty defer slot is armed again; an OPEN byte left behind after the status is already published is cleared so `sock_cmd` can finish. A SEND that wakes up after the slot was reused returns without writing that struct. `tcp_process_refused_data` runs only for an established or close-wait pcb. Release stamp `2026-11-08 01:27:19 UTC b141`.
+
+**What we didn’t do:** Did not put the all-zero PIO word back, so `$0006` is still the mode byte. Did not pad `$0111`. Did not synthesize `$1C` or aux `$11`. Did not emulate `$C019`. Left the MULTI + zero `Sn_DHAR` skip, the register latches, and the 8-byte idle clear.
+
+**Takeaway:** Publishing `$00` from a command that has already lost its slot is the next test's status. A `$01` written while the pointer is still on the port or the destination is a port byte.
+
+**References:** `pico/uthernet2.c` (`u2_defer_stale`, `u2_defer_rearm_cr`, `u2_missed_command`), `pico/uthernet2_net.cpp` (`U2_Net_ServicePoll`).
+
+---
+
+## 1et. 20:34 catalog: steady and burst echo match, DISCON stops in LAST_ACK (2026-11-07)
+
+**What:** NetTester 0017 after b141 (`docs/megaflash-20261107-2034.md`). Twenty IIGS matches. New ones: `$0211` rx 100 at `$17`, `$0214` 16/16 at `$00`, `$0216` 1152/1152 at `$17`, `$0217` 512/512 at `$17`. `$0212` and `$0213` move their bytes and stop at `$1D`. Lost: `$0218` (was 80/80 at `$1C`, now `$00` after two lost frames) and `$0300` (was 40/40 at `$22`, now `$00`). `$0010`, `$0201`, `$0500`, and `$0600` are unchanged. `$0006` is still `$03`. `$0111` is still 63. Ticks are 0.
+
+**Why:** `DISCON` from `CLOSE_WAIT` published `LAST_ACK` and cleared `Sn_CR` before the ACK. `sock_cmd` then returned and `finish_io` stored `$1D`. The IIGS read is `$00`. A second `OPEN` armed from a leftover `Sn_CR` `$01` calls `OpenTcp`, and that closes the socket before the new pcb exists, which is a `$00` sample. An 8K socket was also shrinking `rcv_wnd` from `TCP_WND` to 8191 after `tcp_connect` had already set the right edge. `$0010`'s local port is `$C001`; a `$01` that lands on `Sn_SR` was still taken as `OPEN`.
+
+**What we did:** `DISCON` from `CLOSE_WAIT` still queues the FIN, then publishes `CLOSED` and drops the socket's pcb pointer before `Sn_CR` clears. Rearm no longer starts a second `OPEN`; it only clears a leftover `$01` once a status is already published. `OPEN` is not salvaged from `Sn_SR`. An 8K socket keeps the window `tcp_connect` installed. If `tcp_new` fails, orphaned pcbs that still carry our argument and are not installed on a socket are aborted, and `tcp_new` is tried once more. Release stamp `2026-11-08 01:53:09 UTC b142`.
+
+**What we didn’t do:** Did not pad `$0111`, emulate `$C019`, or put the all-zero PIO word back. Did not publish `$14` before `ListenTcp` returns. Did not synthesize aux `$11`.
+
+**Takeaway:** The byte the 6502 stores after `DISCON` is `CLOSED` on the IIGS because the peer has already FINed. Publishing `LAST_ACK` and clearing the command is the `$1D` row.
+
+**References:** `pico/uthernet2_net.cpp` (`U2_Net_DisconTcp`, `u2_reclaim_orphan_tcp`, `U2_Net_ConnectTcpEx`), `pico/uthernet2.c` (`u2_defer_rearm_cr`, `u2_missed_command`).
+
+---
+
+## 1eu. 20:57 catalog: idle connect is back, payload opens are not (2026-11-07)
+
+**What:** NetTester 0017 after b142 (`docs/megaflash-20261107-2057.md`). Eleven IIGS matches. `$0010` is `$17` again. MACRAW transmit is still 32 bytes. Lost, all `$00`: the HTTP client, the partial read, `CLOSE`, both large echoes, UDP including the multicast timeout, and IP raw. `$0112` counts 342. The previous catalog counted 60. `$0111` counts 60. `$0201` is still `$13`. `$0006` is still `$03`. No result frame was lost. Ticks are 0.
+
+**Why:** Stopping every `$01` at `Sn_SR` fixed `$0010`, because that byte is the low half of local port 49153 and it was opening the socket before the destination was written. The same register is where `OPEN` lands after the MACRAW tests. Those opens never ran, so the payload rows stayed `$00`. The MAC filter also read `Sn_MR` from memory. A clear that overlaps that byte turns the filter off, and the first STA frame (342 bytes here) is what the scan counts. MACRAW's packet hook can also be left installed after the saved input pointer has been dropped, so the SYN-ACK never reaches lwIP.
+
+**What we did:** `OPEN` at `Sn_SR` is armed only after `Sn_PORT` low has actually been stored, and always for IP raw. The MAC filter uses the mode latch. The STA input function is remembered the first time it is seen and put back when MACRAW closes, including when the saved pointer is already gone. `DISCON` from close-wait still publishes `CLOSED`, and the pcb is parked for the pending free so reset cannot skip it. Release stamp `2026-11-08 02:10:54 UTC b143`.
+
+**What we didn’t do:** Did not treat the port low byte as `OPEN`. Did not pad `$0111` or trim `$0112`. Did not emulate `$C019`. Did not publish `$14` before `ListenTcp` returns.
+
+**Takeaway:** `Sn_SR` sees both the port byte and, later, the `OPEN` command. The port low byte has to be stored before a `$01` there is a command.
+
+**References:** `pico/uthernet2.c` (`u2_port_ready`, `u2_missed_command`, `u2_push_rx_macraw`), `pico/uthernet2_net.cpp` (`u2_macraw_hook_apply`, `U2_Net_DisconTcp`).
+
+---
+
+## 1ev. Twenty rounds without convergence: measure the bus pipeline, then fix the structure (2026-11-08)
+
+**What:** After b143 the IIGS match count over the last twelve catalogs read 7, 10, 14, 14, 12, 11, 13, 13, 18, 20, 11, 12 (the lost October b140 reached 27). Every round fixed one symptom (`$0006` `$03`, LISTEN `$13`, `$0600` aux, `$0010`, ...) and moved another. The same build and the same test gave different answers across a power cycle and across a "pair" run. The request was to stop patching, look at the whole system, and plan. This section records the diagnosis, the plan that was approved ("Measure bus pipeline, fix structure"), and what was implemented. Release stamp `2026-11-08 15:41:28 UTC b147`; audit image `2026-11-08 15:32:59 UTC b145 AUDIT`.
+
+**Why (diagnosis, stated with its evidence level):**
+
+1. *Same build, different results ⇒ a race or timing dependence, not W5100 logic.* Logic bugs reproduce. This is the strongest single fact, and it is measured (pair catalog vs power-cycled catalog).
+2. *Five heuristics fight each other.* `u2_missed_command`, four register latches, `u2_defer_gen`, `born_epoch`, `u2_bus_since_reset` each compensate for a command that landed late or on the wrong register, and each was added because the previous one broke a neighbouring test (a `$01` at `Sn_SR` is `OPEN` after MACRAW and the low byte of port 49153 before it). That is the signature of compensating for an unmodelled fault, not of a missing feature.
+3. *Reset and register state were owned by two cores.* Core 1 handled MR `$80`; core 0 later memset 32 KiB in 8-byte chunks and abandoned the job if any slot cycle had landed (`U2_ResetMemoryIfIdle`). Whether the clear ran, ran partly, or ran under the next test's setup writes depended on core 0's schedule. Verified in the code.
+4. *Core 0 can be away.* `CUDPTask::ConnectWifi` / `wifi_connect_timeout_ms` loop for up to 15 s per attempt and sleep up to 15 s between attempts without any U2 service; `core0Loop` runs an NTP attempt (Wi-Fi connect + UDP) at boot and every 5 minutes after a failure. During a native op `u2_netif_input_wrapper` also took every STA frame for itself (`IsLegacyOperationActive`), so a MACRAW OPEN made during one never saw its DHCP/ARP replies. Verified in the code. Whether the catalog actually overlapped an NTP attempt is NOT measured.
+5. *The bus handler was "RAM" in name only.* `U2_HandleBusAccess` is in SRAM, but `write_socket_register` reached about twenty flash functions through veneers (`nm`/`objdump` call-tree walk, all `0x1000xxxx`): `U2_Mon*` stubs, `U2_Net_*`, `u2_defer_arm`, `u2_missed_command`, `send_data` with 1.5 KiB stack buffers. Flash is fetched through the XIP cache shared with core 0 (lwIP, CYW43, `std::vector`). Verified in the binary.
+
+*Caveat recorded on purpose.* Earlier measurements (§1db: `behind=0`, `fifo_hw=0` over 38,807 reads; §1di: listener backlog on 2 of 155,358 cycles, max depth 1) say core 1 usually meets the prefetch deadline. So "flash stalls make core 1 late" is a hypothesis, not a finding, and the structural problems 1–4 do not depend on it. That is why Phase 0 is a measurement step and why the changes below are structural (single owner, no flash on the bus path, core 0 always serviced) rather than another symptom patch.
+
+**What we did:**
+
+*Phase 0 – audit image (measurement only; `U2_BUS_AUDIT`, default 0).* `pico/u2_busaudit.{h,c}`, hooks in `busloop.c`, `uthernet2.c`, `uthernet2_net.cpp`, `network_pump.cpp`, `main.c`, `CMakeLists.txt` (`U2_BUS_AUDIT`, `U2_BUS_AUDIT_BAUD`), `pico/build-audit.sh` (builds `pico2_audit/`, copies the UF2 to `pico/audit_images/megaflash-pico2_w-bNNN-audit.uf2`). Core 1 does counter increments, three timer reads, a PIO FIFO-level read and one 16-byte ring store per cycle; no printf, no flash, no locks. Core 0 formats and drains to UART0 (GPIO 0/1, 115200) from a RAM ring without ever waiting on the FIFO. It reports every 10 s and on events:
+- per cycle class (`W0..W3`, `R0..R3` = `$C0C4+loc`): handler time `H` and start-to-word-published time `T`, 7 buckets (`<2, 2-3, 4-7, 8-15, 16-31, 32-63, 64+` µs) plus max; a separate `Sn_CR write` histogram (the command itself);
+- listener FIFO depth at cycle start and at publish (a non-zero depth at publish means the next cycle had already arrived), and `RXSTALL` (cycle dropped);
+- core-0 service gaps (`>5/20/100 ms`, `>1 s`, and a line with the gap and the number of bus cycles that happened inside it for every gap ≥ 20 ms), Wi-Fi connect begin/end, NTP attempt begin/end, legacy-op begin/end;
+- reset: count, and per reset "served" with latency (and `SKIPPED` for the old idle-clear path in the baseline image);
+- `missed_command why1..7` and `clamp` counters;
+- `served!=word-byte` by register: the byte the emulation returned for a read versus the byte the previously published PIO word carried. A mismatch is a direct "the 6502 got something other than what the emulation computed" detector;
+- a frozen ring of the last 80 cycles plus 16 after, dumped on: a `$03` read from an `Sn_CR` address, a missed-command re-target, a CR clamp, or a served/word mismatch (max 6 dumps per trigger code);
+- XIP cache access/hit counters.
+The image `audit_images/megaflash-pico2_w-b145-audit.uf2` is the **pre-fix baseline**: b143 behaviour plus instrumentation (it still has flash on the bus path and the core-0 reset). The instrumentation itself adds roughly 0.3–0.7 µs per cycle on core 1; compare shapes, not absolute microseconds, against an uninstrumented run.
+
+*Phase 1 – nothing the bus core runs may be in flash.*
+- `pico/u2_busram.h`: `U2_BUS_RAM(fn)` (`__time_critical_func` on RP2350; unchanged on RP2040, which has no spare RAM and does not serve U2 from core 1).
+- `u2_monitor.h`: every `U2_Mon*` is an inline no-op when `U2_ACTIVITY_MONITOR=0` (those were four of the veneer calls on the OPEN/CLOSE/SEND/RECV path).
+- `U2_Net_GetStatus/SetStatus/NoteRecv/RecvConfirm/OpenMacraw`, `set_status`/`get_status`, `U2_SrPublish`, `U2_CmdEpoch`, `U2_SetStationMacFromBytes`, `u2_apply_socket_sizes`, `u2_reset_socket_rings`, `u2_defer_arm`, `u2_missed_command`, the register readers, `u2_reset`, `U2_Net_RequestReset` are `U2_BUS_RAM`.
+- `U2_Net_CloseBus` (new): the core-1 branch of `U2_Net_Close` (state change, queue clear, `need_close` hand-off; never the lwIP lock). `U2_Net_Close` now dispatches (core 1 → `CloseBus`, core 0 → `u2_net_close_core0`), so the bus call tree no longer contains the core-0 close with all of lwIP behind it.
+- `send_data` is MACRAW-only and copies ring → TX-queue slot once (`U2_Net_SendMacrawRing`). The UDP/TCP branches were unreachable on core 1 (those SENDs are armed in the defer queue and run on core 0) but pulled lwIP-adjacent code into the call tree; the 1518-byte and 1024-byte stack buffers on core 1's small stack are gone. The copy is a word loop in SRAM because newlib `memcpy` is a flash function.
+- The MACRAW TX queue lock is a plain `spin_lock_blocking` (inline) instead of `critical_section_t` (`critical_section_enter_blocking` is flash).
+- `-fno-jump-tables` on `uthernet2.c`: switch tables live in flash `.rodata`, so a "RAM" handler still did an XIP read per `switch`.
+- `pico/tools/check_bus_ram.py` walks the call tree (direct calls, tail calls, veneers resolved through their literal target) from `U2_HandleBusAccess` and `U2_PeekDataPort` and fails on any callee at `0x1000xxxx` or any jump table. `build-both.sh` runs it on `pico2_release/megaflash.elf` and stops the build on failure: 47 functions, all SRAM.
+- *Deviation from the plan text:* the plan said to route `OpenMacraw`/`Close`/DISCON through the core-1→core-0 defer queue. They do not take the lwIP lock (MACRAW open/close only flips state and publishes `Sn_SR`), and queueing them would make `Sn_SR` after OPEN late, which is the failure we are trying to avoid. They stay on core 1, in SRAM, and the build check enforces that nothing lwIP-adjacent is reachable.
+
+*Phase 2a – reset is one step on one core.* `u2_reset` restores a precomputed register image (common `$0000–$003F` plus the first `$40` bytes of each socket page, and the `u2_sockets[]` ring bookkeeping) with about 100 word stores, in the same handler call as the MR `$80` write. The image is built once in `U2_Init` by running the ordinary defaults routine. `U2_ResetMemory`, `U2_ResetMemoryIfIdle` and `u2_bus_since_reset` are deleted. Core 0 now only drops the pcbs (`u2_net_reset_pending`, epoch rule unchanged). The TX/RX buffers (`$4000–$7FFF`) are no longer zeroed; a W5100 does not clear them on reset and every reader goes through the ring pointers, which are reset. A full register clear + defaults loop was tried first and rejected before building: with two `u2_apply_socket_sizes` loops it is several hundred cycles, and the 6502 reads the mode register back on the very next instruction.
+
+*Phase 2b – core 0 stays available.* `U2_Net_WaitForWork` (service U2, then wait at most 2 ms) replaces the 15 s `cyw43_arch_wait_for_work_until` in `wifi_connect_timeout_ms` and `NetworkPump::EnsureWifiConnected`; the retry-delay loop in `CUDPTask::ConnectWifi` calls `U2_Net_ServicePoll` each millisecond. `core0Loop` skips an NTP attempt while a `$C0C4–$C0C7` cycle was seen in the last 60 s (`U2_BusActiveRecently`, sampled in `U2_Net_ServicePoll`), unless the Apple asked for a sync now; the boot-time attempt is unaffected because the slot is quiet then. `u2_netif_input_wrapper` gives the native op the STA ingress only while the MACRAW socket is closed; with MACRAW open the Apple wins and the native op times out and retries later.
+
+*Phase 2c – delete what the structure made redundant (partly).* Removed: `u2_mr_latch`, `u2_port_latch`, `u2_dport_latch`, `u2_dip_latch` (the register file is now the single copy; command parameters are still captured into the defer command when the command byte is written), and the latch override of `Sn_MR` in `u2_push_rx_macraw`. Kept, deliberately: `u2_missed_command` (now behind `U2_MISSED_CMD_SALVAGE`, default 1, counted per reason by the audit), `u2_port_ready`, `u2_defer_gen` and `born_epoch`. The salvage compensates for a bus-pipeline fault, so it should only be removed when the audit counters show it never fires; building it out is `-DU2_MISSED_CMD_SALVAGE=0`. The generation and epoch checks are not about lost cycles: they discard an in-flight core-0 command after an asynchronous reset, which is real behaviour and stays.
+
+**What we didn’t do:** Did not change the PIO word, pad `$0111`, fake `$14`/`$1C`/aux `$11`, emulate `$C019`, put the 32 KiB memset back, or gate lwIP on the bus path. Did not modify NetTester, ADTPro, or ip65. Did not delete `u2_missed_command` without data. Did not run anything on hardware: this environment has no Apple IIc, so no catalog or UART capture has been taken for this change. Did not bump `defines.h`.
+
+**Decision rule once the user has UART captures (two power-cycled catalogs of the b145 audit image):**
+
+| Observation in `[ba]` output | Meaning | Action |
+|------|---------|--------|
+| `RXSTALL > 0`, or `fifo@publish` depth ≥ 1, or `served!=word-byte` > 0 (loc3 = data port) | The bus core published late or a cycle was dropped | Phase 1 was the right structure; compare against the b147 run |
+| `H`/`T` max for `W3` or `Sn_CR write` beyond a few µs, with a long upper tail | The command handler itself is slow | Same; check b147 improved it |
+| `core0 gaps` with `>100ms`/`>1s` non-zero, or `ev=` lines for Wi-Fi connect / NTP / legacy op overlapping the catalog | Core 0 was away | Phase 2b removes it; confirm in b147 |
+| `reset: ... SKIPPED` > 0 | The old idle-clear path skipped a clear | Phase 2a removes it |
+| `missed_command why1..7` or `clamp` > 0 | The 6502's address-low write was lost or late | Keep the salvage; the pipeline still has a fault |
+| `missed_command` all 0 and `clamp` = 0 over both catalogs, but results still differ from the IIGS | Not a pipeline fault | Build with `U2_MISSED_CMD_SALVAGE=0`, then go to Phase 3 (per-symptom semantics) |
+
+**Determinism gate (user-run).** A build is only compared with the IIGS after **three power-cycled** identical catalogs. Record them in this matrix; if the three disagree, the pipeline is still non-deterministic and no semantic fix is evaluated:
+
+| Build | Catalog 1 matches | Catalog 2 matches | Catalog 3 matches | Rows that differ between runs | Notes |
+|-------|-------------------|-------------------|-------------------|-------------------------------|-------|
+| b143 history (12 catalogs) | 7, 10, 14, 14, 12, 11, 13, 13, 18, 20, 11, 12 | | | not recorded | one number per catalog across builds b13x–b143; the lost b140 reached 27 |
+| b145 AUDIT (baseline structure + instrumentation) | pending (user) | pending | | | UART capture needed |
+| b147 release (this change) | pending (user) | pending | pending | | |
+
+**Takeaway:** When the same build disagrees with itself, stop adding register-level heuristics. Give every piece of state one owner, keep the bus core off flash and off any lock, make core 0 unable to disappear for seconds, and measure before and after. Phase 3 (re-triage of `$0006` `$03`, LISTEN, `$0600` aux, `$0111` 63 vs 66, ticks) starts only when three catalogs agree.
+
+**Open:** `$0006` `Sn_CR` `$03` is still unexplained (the clamp proves the register cannot hold `$03`, so it is a stale or shifted prefetch word; the ring dump on the `CR$03` trigger is meant to settle it). `$0201`/`$0500` LISTEN, `$0600` aux `$11`/`$1C`, `$0111` (63 vs 66) and ticks are untouched by this change. Reset latency now sits on the bus core (≈ 100 stores); the audit `W3`/`W0` handler max is the number to read. Untested on hardware.
+
+**References:** `pico/u2_busaudit.h`, `pico/u2_busaudit.c`, `pico/u2_busram.h`, `pico/tools/check_bus_ram.py`, `pico/build-audit.sh`, `pico/build-both.sh`, `pico/busloop.c` (U2 branch), `pico/uthernet2.c` (`u2_reset`, `u2_restore_template`, `u2_build_template`, `send_data`, `u2_missed_command`, `U2_MISSED_CMD_SALVAGE`), `pico/uthernet2_net.cpp` (`U2_Net_CloseBus`, `U2_Net_SendMacrawRing`, `U2_Net_WaitForWork`, `U2_BusActiveRecently`, `u2_netif_input_wrapper`), `pico/udptask.cpp` (`wifi_connect_timeout_ms`, `ConnectWifi`), `pico/network_pump.cpp` (`EnsureWifiConnected`), `pico/main.c` (`core0Loop`), `pico/u2_monitor.h`, `pico/CMakeLists.txt` (`-fno-jump-tables`, `U2_BUS_AUDIT`, `U2_MISSED_CMD_SALVAGE`).
+
+---
+
+## 1ew. First audit capture and the three b147 catalogs: the bus pipeline is healthy; the failure is in core-0 TCP lifecycle (2026-11-08)
+
+**What:** Three inputs after §1ev: a UART capture of the b145 AUDIT image (`8nov1127-b145.txt`: seven boots, about 700,000 `$C0C4–$C0C7` cycles), the two catalogs of the morning (`megaflash-20261108.md`) and the three b147 catalogs (`megaflash-b147-three.md`). b147 has no instrumentation; b145 is the pre-fix structure (b143 behaviour) plus the audit.
+
+**What the audit measured (b145, pre-fix structure).**
+- *Late publish: none.* `fifo@start` and `fifo@publish` are depth 0 for every cycle in every boot (e.g. 35,504 / 191,855 / 114,999 cycles). The bus handler is 0–2 µs for mode/address/read cycles and 0–4 µs for `R3`. The only slow handlers are `Sn_CR` writes: 14–22 µs typically, one 58 µs. NetTester leaves 37–66 µs between the `Sn_CR` write and its next access (ring dump), so even the 58 µs command did not overlap a following cycle. The "late word" and "dropped cycle" explanations are not supported by this data.
+- *Dropped cycles: none while the 6502 was talking to slot 4.* `RXSTALL` grew only before the Apple started (boots 1–2, `cyc=0`/433) and stayed at 1 for boots 3–7 across 66k–222k cycles.
+- *Lost or shifted commands: none.* `missed_command why1..7 = 0`, `clamp = 0`, trigger `cr3 = 0` in all seven boots. The salvage never fired and `Sn_CR` was never read as `$03` in the part of the catalog that was captured.
+- *Served != published: 0–3 per boot, all asynchronous.* The ring dumps show core 0 changing `Sn_CR` ($01→$00 after OPEN), `Sn_SR` ($13→$15→$17) or `Sn_RX_RSR` between the address write and the data read, so the prefetched byte is one step old. That is the ordinary race on a real W5100 as well. `U2_BA_T_PK3` therefore counts but no longer freezes the ring (audit noise), `PKOTHER` (mode/address bytes) still triggers.
+- *Core 0 absence: confirmed.* Every boot has an NTP attempt (`ntp_attempt_begin` 3.5 s, `end` 8.7–13.1 s) with a legacy op active. The MR `$80` the Apple issues in that window was serviced 1.1 s, 1.2 s, 1.4 s, 1.7 s and 4.3 s late and `reset_SKIPPED` (the old core-0 idle-clear gave up because 50k–116k cycles had already happened). Boots 4 and 6 show `polls=1` at 11–12.6 s: core 0 did not service U2 at all for about 8 s. Outside that window the core-0 reset latency is 1.72–1.77 ms every time (one core-0 loop).
+- *Coverage caveat.* The captures stop early (`W3 n` = 61–376 data-port writes; DHCP/ARP scan, `$0001–$0112`, the first TCP client). The failing TCP rows (`$0202`+) were not reached. This audit therefore says nothing about the TCP lifecycle itself.
+
+**What the b147 catalogs say.** Matches with the IIGS: 13, not retained, 19 (previous best of the last twelve was 12). New passes against b143: `$0216` steady echo 1152/1152 `$17`, `$0218` 80/80 `$1C`, `$0300` 40/40 `$22`, `$0400` `$32`, `$0302`/`$0303` timeout, on catalog 3. Still not deterministic: `$0216`/`$0218`/`$0300`/`$0302`/`$0303`/`$0400`/`$0500`/`$0111`/`$0112` differ between catalogs 1 and 3. Fixed and stable in all three: `$0001–$0006`, `$0100`, `$0101`, `$0110`, `$0200`, `$0215`, `$0401`. Unchanged failures in all three: `$0010` (`$00`; b143 stored `$17`, so this is a possible regression of the b147 structure and not a long-standing gap), `$0201`/`$0500` stuck at `$13`, and every TCP client row `$0202–$0208`, `$0210–$0214`, `$0217`, `$0501–$0503`, `$0600` at `$00` with no bytes, while `$0200`, `$0216` and `$0218` connect on the same boots.
+
+**Why this narrows the problem.** §1ev's items 1–3 and 5 (flash on the bus path, two-core reset, dropped/late cycles) are not what makes the TCP client rows `$00`: the pipeline delivers every cycle on time, no command is lost, and b147 removed the core-0 absence. The rows that fail are the ones where core 0 must create a pcb, bind, `tcp_connect`, and publish the result, and where `Sn_SR` returns to `$00`. Candidates, none verified: `tcp_new` failure, `tcp_bind` `ERR_USE` (several tests share a local port; `SOF_REUSEADDR` is set only on the client pcb), `tcp_connect` `ERR_ISCONN` against a TIME_WAIT pcb with the same 5-tuple, a peer RST/refused connect, a stale-epoch drop (`u2_epoch_ok`), or a `tcp_err` callback storing `$00`. The release build prints none of these (`U2_AgentLog` is a no-op by design, §1er).
+
+**What we did.** Built a second audit image on the b147 structure that records the core-0 TCP lifecycle without printing from the hot path: `U2_BaTrace(tag,a,b,c)` (core-safe lock-free ring, printed by core 0 from `U2_BaCore0Poll`), fed by `U2_AgentLog` (conn-go, syn why/err/link, conn-rc, con, con-fail, tcp-err, open, send-*, peer-fin) and by new points: `reset` (previous `Sn_SR` of sockets 0–3 and epoch), `cr` (every `Sn_CR` write with the value and the published status), `arm` / `arm_queued`, `st` (every `set_status`: socket, new, old), `closeBus`, `close0`, `tcp_new_FAIL`. Text ring 32 KiB. Image `pico/audit_images/megaflash-pico2_w-b148-audit.uf2` (`2026-11-08 17:03:06 UTC b148 AUDIT`; check script: 47 functions, SRAM only). Release b149 (`2026-11-08 17:03:29 UTC b149`) is behaviourally identical to b147 (the hooks compile out; no audit symbols in the ELF).
+
+**What we did not do.** Did not change emulation behaviour in this step. Did not remove the salvage yet (it did not fire, but only the early catalog was captured). Did not touch the `$0010`, `$0201`, `$0600` semantics without the trace.
+
+**How to read the next capture** (one full catalog from power-on, UART0 115200, run it to `$0600`; power-cycle first):
+| Trace around a failing row | Meaning |
+|------|---------|
+| `tr=cr b=1` then `tr=arm` then `tr=open` ok=0, or `tcp_new_FAIL` | pcb allocation fails (pool / orphans) |
+| `tr=syn a=2` (bind) with `b=-8` (`ERR_USE`) | local port already bound by a stale pcb |
+| `tr=syn a=3` with `b=-10` (`ERR_ISCONN`) or `b=-4` (`ERR_RTE`) | duplicate 5-tuple / no route; values are decimal lwIP `err_t` |
+| `tr=st b=21` (decimal for `$15`, SYNSENT) then `tr=tcp-err` `a/b` or `con-fail` | peer RST, timeout, or abort; `b` is the lwIP error |
+| `tr=st b=0` with no preceding `tcp-err`/`con-fail` | emulation closed the socket itself; the `close0`/`closeBus`/`reset` line just before names the path |
+| `tr=reset` between `arm` and `conn-rc` | reset overtook the command (`u2_epoch_ok` drop) |
+| `core0 gaps` `>100ms`/`>1s` during a test | core 0 is still away (b147 gating not enough) |
+
+**Takeaway:** the first measurement removed a whole class of hypotheses (bus timing, lost commands). Do not spend another round on the bus path. The remaining non-determinism and the `$00` TCP rows live in core-0 lwIP lifecycle, and the trace is what decides which of the candidates above is real.
+
+**References:** `pico/u2_busaudit.h` (`U2_BaTrace`), `pico/u2_busaudit.c` (`ba_trace_drain`), `pico/uthernet2.c` (`U2_AgentLog`, `u2_reset`, `u2_defer_arm`, CR handler), `pico/uthernet2_net.cpp` (`set_status`, `U2_Net_CloseBus`, `u2_net_close_core0`, `U2_Net_OpenTcp`, `U2_Net_ConnectTcpEx`), `pico/audit_images/megaflash-pico2_w-b148-audit.uf2`.
+
+## 1ex. The b148 capture: the three stalls, the stale `SO_REUSE`, and a watchdog that names the hang (2026-11-08)
+
+**What.** The user ran the b148 audit image through NetTester (`megaflash-b148.md`, UART `8nov1247-b148.txt`) and reported that the emulation stalled three times. The capture holds four boots (power-cycled three times).
+
+**How the three stalls were identified.** The audit prints a 10 s report from core 0 and the bus counter `cyc` in it. Two signals separate "the Apple went quiet" from "core 0 is dead":
+- *Boot 1:* `cyc` is frozen at 64594 from about 20 s to 40 s, and core 0 keeps printing 10 s reports. The Apple stopped touching the slot after `$0010`'s failed CONNECT. The Pico was alive. The CONNECT failed because Wi-Fi was not up (`tr=syn a=3 b=-4` `ERR_RTE`, link JOIN/NOIP for the first 6-15 s; NetTester starts at about +3.5 s).
+- *Boots 2 and 3:* the UART stream is **cut mid-line right after a `cr OPEN`** (18.134 s and 33.376 s) and the 10 s reports stop (boot 2 has the 10 s report but not 20 s; boot 3 has 10/20/30 s but not 40 s). The Apple kept running for tens of seconds afterwards (boot 2: `$0201` `$13`, then `$0202`-`$0214` all `$00`; boot 3: `$0500` `$13`, then `$0501`-`$0503` `$00`). A text-ring backlog cannot explain that: the ring is 32 KiB, which at 115200 baud is under 3 s. So **core 0 stopped running** a few ms after serving an OPEN, and every later command stayed unserved: `$13` stuck where a LISTEN was expected, `$00` for everything else. That is the signature of every `$00` TCP row in the earlier catalogs.
+- *Boot 4:* runs to the end of the capture.
+
+**Why I first assumed a hang in the lwIP lock, and why that was wrong.** I read `u2_net_close_core0`, `U2_Net_OpenTcp`, `u2_reclaim_orphan_tcp` for something that blocks. Nothing waits. The build uses `PICO_CYW43_ARCH_POLL` (the build log shows `cyw43_arch_poll.c`), so `cyw43_arch_lwip_begin/end` are no-ops and there is no lock to deadlock on. What remains are an unbounded loop (e.g. a cyclic lwIP pcb list walked by `u2_reclaim_orphan_tcp`) or a HardFault on core 0 (use after free of a pcb or `U2TcpArg`). Static reading cannot choose between them, and a third guess without evidence is the pattern that cost 20 rounds. So this round measures instead.
+
+**A real emulation bug found in the same capture: `SO_REUSE` was 0.** `tr=syn a=2 b=-8` in boot 4 is `tcp_bind` returning `ERR_USE` for socket 1 while another pcb still holds the port. `U2_Net_ConnectTcpEx` and `U2_Net_ListenTcp` call `ip_set_option(pcb, SOF_REUSEADDR)` and the comments assume that lets a second socket or a TIME_WAIT leftover share the port. lwIP only honours the flag when `SO_REUSE` is 1, and `lwipopts.h` did not define it. A W5100 does not refuse a source port that another socket or an old connection still uses, so this is an emulation gap, not a test quirk. Fix: `#define SO_REUSE 1` in `pico/lwipopts.h`. pcbs that do not set the flag (NTP, TFTP, DNS) are unaffected. `tcp_connect` still rejects an identical 5-tuple, as a real stack would.
+
+**What we did.**
+1. `lwipopts.h`: `SO_REUSE 1` (release and audit).
+2. Audit image only, a hang locator: core 0's polling feeds a 6 s hardware watchdog (`U2_BaCore0Poll`, started at the first poll). If core 0 stops, the chip resets. The watchdog scratch registers survive that, so the next boot prints `PREVIOUS BOOT WAS RESET BY THE WATCHDOG` with the last **stage id** (`scratch[1]`), the time of the last poll and, if a fault caused it, the HardFault PC (`isr_hardfault` override stores the stacked PC and spins). Stage ids are written by `U2_BaStage` at: each `U2_LWIP_BEGIN/END` call site (file 1/3/5, detail = source line, phase 1 waiting, 2 inside, 3 left), `U2_MARK()` points in `U2_Net_OpenTcp` and `u2_net_close_core0` (phase 0x10), the sections of `U2_Net_ServicePoll` (file 4), and each deferred command in `U2_ProcessDeferredSocketCmds` (file 2, detail = op<<4 | socket, phase 0 started, 0xF returned). A reset also lets the catalog continue instead of stalling for the rest of the run.
+3. The 10 s report now prints the UART backlog, so a late line is not mistaken for a lost one.
+4. `u2_lockdbg.h` wraps the lock calls. With `U2_BUS_AUDIT=0` the macros are the plain `cyw43_arch_lwip_begin/end` and `U2_BaStage` is empty, so release behaviour is unchanged apart from `SO_REUSE`.
+
+**What we did not do.** No change to `u2_reclaim_orphan_tcp` or the close path: the hang is unlocated and a speculative guard would hide it. No change for the cold-start `$0010` `$00` (Wi-Fi not up when NetTester starts; a W5100 would simply have a link, so any "wait" belongs in how soon the Pico is ready, not in faking CONNECT). The 1.7-2 s pauses between Apple tests are the Apple reporting, not the Pico.
+
+**How to read the next capture.** Look for `PREVIOUS BOOT WAS RESET BY THE WATCHDOG`. `hardfault_pc` non-zero: look it up in `pico2_audit/megaflash.elf` (`arm-none-eabi-addr2line`). Otherwise the stage names the last point reached: file 1 detail N is the line in `uthernet2_net.cpp` of the last lock call or `U2_MARK` (phase 0x10); file 2 with phase 0 means the command with that op/socket never returned (op values `U2_DF_*` in `uthernet2.c`); file 4 is a ServicePoll section.
+
+**Open.** Where core 0 hangs. Whether `SO_REUSE` removes the `$0501` bind failure and the TCP client `$00` rows. `$0600` aux `$01`, `$0111`/`$0112` lengths, ticks 0 (plan phase 3), still deferred until the hang is gone.
+
+**References:** `pico/lwipopts.h`, `pico/u2_lockdbg.h`, `pico/u2_busaudit.{h,c}` (`U2_BaStage`, `isr_hardfault`, watchdog), `pico/uthernet2_net.cpp` (`U2_MARK`, `U2_LWIP_BEGIN`), `pico/uthernet2.c` (`U2_ProcessDeferredSocketCmds`), `pico/audit_images/megaflash-pico2_w-b151-audit.uf2`.
+
+## 1ey. The b151 watchdog report: every LISTEN panicked core 0 (2026-11-08)
+
+**What.** The user captured the b151 audit image (`b151.txt`, plus catalogs `megaflash-b151.md` and `megaflash-b153.md`). Earlier in this session a b148-image capture was mistaken for it (the banner said `b148`; the user confirmed a file-name typo and the b151 capture arrived afterwards). The b151 capture contains the line the watchdog was added to produce:
+
+`PREVIOUS BOOT WAS RESET BY THE WATCHDOG ... last stage=0x10055202 file=1 detail=1362 phase=2 last_poll_us=24251172 hardfault_pc=0x1000ec09`
+
+**Reading it.**
+- Stage `0x10055202`: file 1 (`uthernet2_net.cpp`), line 1362, phase 2 = holding the lwIP section after `U2_LWIP_BEGIN()`. Line 1362 is the first line of `U2_Net_ListenTcp`. The last poll time (24.251 s) is the `cr OPEN` of `$0201` the UART was printing when it died.
+- `hardfault_pc=0x1000ec09` is `_exit` (`arm-none-eabi-addr2line` on `pico2_audit/megaflash.elf`: `_exit`, `newlib_interface.c:45`, which is a `bkpt` loop). Only `panic()`/`abort()` get there, and a BKPT with no debugger raises a HardFault, which the audit handler caught. So core 0 called `panic()` while inside `U2_Net_ListenTcp`.
+
+**Root cause.** `U2_Net_ListenTcp` creates the listener with `tcp_listen_with_backlog()` and then calls `u2_attach_tcp_pcb(listen, i)`, which calls `tcp_recv()` and `tcp_err()`. In this lwIP those functions contain `LWIP_ASSERT("invalid socket state for recv callback", pcb->state != LISTEN)` (and the same for err/sent/poll), and the Pico SDK maps `LWIP_PLATFORM_ASSERT` to `panic()`. A listener may only have `arg` and `accept`. Related landmines of the same kind: `u2_release_tcp_arg` also called `tcp_recv/tcp_err(NULL)`, and the close/reclaim paths called `tcp_abort()` on a listener (`tcp_abandon` asserts "don't call tcp_abort/tcp_abandon for listen-pcbs").
+
+**Why it explains the whole pattern.** Every LISTEN panics core 0: `$0201`, `$0210`, `$0500` stop at `$13` (OPEN ran, LISTEN never published `$14`). Core 1 keeps serving the slot, so the Apple carries on, but nothing on core 0 runs again: every later OPEN or CONNECT stays unserved and reads `$00`. That is the b148 capture's cut-off UART after the OPEN, the "stalled three times" (three restarts), the `$00` rows `$0202`-`$0218`, and why a lost frame plus a restart makes the next few rows pass again. It also explains why earlier fixes to reset, epoch and core-0 availability never moved those rows. No dependence on the UART, the audit image or timing: the release image panics identically (no watchdog, so it just stays dead).
+
+**What we did.**
+1. `u2_attach_tcp_pcb`: for a LISTEN pcb set only `arg` (the caller sets `accept`); skip `tcp_recv/tcp_err`.
+2. `u2_release_tcp_arg`: skip `tcp_recv/tcp_err(NULL)` when the pcb is LISTEN.
+3. New `u2_tcp_kill()`: `tcp_close()` for a listener, `tcp_abort()` otherwise. Used in `u2_net_close_core0`, `u2_free_pending`, `u2_reclaim_orphan_tcp` (its LISTEN branch called `tcp_abort`) and `U2_Net_ListenTcp`.
+4. A W5100 ignores CONNECT unless `Sn_SR` is `$13` (and LISTEN unless `$13`). In `U2_ProcessDeferredSocketCmds` a CONNECT/LISTEN that finds another status is dropped (`tr=connect_dup_drop` / `listen_dup_drop` in the audit). Reason: the b148-image capture showed `arm_queued` right after `arm` for the same CONNECT (core 0 `u2_defer_rearm_cr` raced core 1's arm), so the command ran twice; the second `tcp_bind` on the SYN_SENT pcb returned `ERR_VAL` (`syn a=2 b=-6`), the socket was closed and the HTTP client stored `$00`. The race itself (two writers to `u2_defer`) is not removed; the duplicate is made harmless.
+5. Audit image: fatal reporting. `isr_hardfault`, `__wrap_abort`, `__wrap_panic` (`-Wl,--wrap`, audit only) and `LWIP_PLATFORM_ASSERT` (`lwipopts.h`, audit only) print blocking on UART0: queued trace lines first (the ones core 0 never got to print), then the reason and message/file/line for lwIP asserts, PC, LR, SP and a scan of flash return addresses on the stack. The watchdog then resets the chip.
+
+**What we did not do.** No change to the bus path or the PIO word. No fake `$14`. The earlier hypotheses (lock deadlock, unbounded loop in `u2_reclaim_orphan_tcp`, cyclic pcb list) were wrong; poll-mode cyw43 has no lock, and the evidence was a panic, not a loop.
+
+**Takeaway.** The watchdog plus breadcrumb round named the site in one capture after 20 rounds of per-symptom patches. A "core 0 stopped" symptom should be assumed to be a panic/assert before anything subtler: lwIP asserts are live in this build.
+
+**Open / to verify on hardware.** LISTEN rows reach `$14`; `$0202`-`$0218`, `$0300`, `$0301`-`$0303`, `$0400`, `$0500`-`$0503`, `$0600` after LISTEN no longer dead. Then phase 3 items (`$0111` 60/63 vs 66, ticks 0, `$0600` aux). If another fatal appears, the audit prints it with the stack scan.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_attach_tcp_pcb`, `u2_release_tcp_arg`, `u2_tcp_kill`, `u2_reclaim_orphan_tcp`, `U2_Net_ListenTcp`), `pico/uthernet2.c` (`U2_ProcessDeferredSocketCmds`), `pico/u2_busaudit.c` (`ba_fatal_report`), `pico/lwipopts.h`, `pico/CMakeLists.txt`, `~/pico-sdk/lib/lwip/src/core/tcp.c` (`tcp_recv`, `tcp_err`, `tcp_abandon`).
+
+## 1ez. b154/b155 result: LISTEN works; what the b154 capture says about the rest (2026-11-08)
+
+**What.** After the §1ey fix the user ran the audit build (b154) and the catalog `megaflash-b154.md` (the user's message pointed at `megaflash-b151.md` by mistake; the new catalog is `megaflash-b154.md`) plus UART `b154.txt` (it also contains the tail of the earlier b151 run, which ends in the watchdog report).
+
+**Result.** 14 IIGS matches (b151) became 32. No `FATAL`, no watchdog report, no panic in any b154 boot. LISTEN publishes `$14` (`tr=st b=20`). The TCP client rows `$0202`-`$0208`, `$0211`-`$0213`, `$0216`, `$0217`, `$0301`-`$0303`, `$0501`-`$0503` now match; `$0600` connects. Core 0 stays alive for the whole run (gaps max 50 ms after boot). `connect_dup_drop` fired twice (`b=21`, SYN_SENT): the duplicate CONNECT race is real and the status guard absorbs it (no `ERR_VAL`, no stray close).
+
+**What the trace shows for the remaining rows (not yet fixed).**
+- *Accept never happens* (`$0201`, `$0210`, `$0500`): after `listen`/`st b=20` there is no `st b=23` and no `con` for 12-15 s while the host connects to `--local-ip`. Either no SYN reaches the lwIP listener (the host dials the Apple address, which is the Pico's STA address only if the DHCP lease is that address) or lwIP drops it. Unknown which; b140 had the same `$14`-without-accept symptom.
+- *`$0300` UDP echo*: `arm op=6 dport=17000` is issued once and nothing comes back (`error 5`, tx 40, rx 0). It passed in earlier catalogs (b148, 5/7 Nov). Whether the datagram leaves and whether a reply arrives is not traced.
+- *`$0400`*: IPRAW OPEN reaches `$32`, then the next test's MR reset arrives 57 ms later, so the Apple stored a status read after the reset. Not explained yet.
+- *`$0214`/`$0218` lost frames*: on the Pico side `$0214` ran to completion (connect 14084, send 16, rx 16, peer FIN, CLOSE, `st 0`) and bus cycles stopped about 12 s later. Looks like the Apple/host serial leg, not the card; unproven.
+- Ticks 0, `$0111` 63 vs 66, `$0600` aux `$01` (no SEND_OK in `Sn_IR`): phase 3, unchanged.
+
+**What we did.** Audit-only diagnostics so the next capture decides accept and UDP: `tr=accept` (socket, err, remote port), `tr=listen_ok` (socket, port, Pico STA IP), `tr=udp_tx` (socket, len, lwIP err), `tr=udp_rx` / `udp_rx_nosock` (len, source port), and a per-report line `ip: pico STA a.b.c.d  SIPR(6502) a.b.c.d`. If `accept` never prints and the STA IP differs from the address the host dials, the inbound failures are an addressing issue, not lwIP. No behaviour change in the release build (b155 stays the candidate).
+
+**Not done.** No speculative change to the listen/accept path, UDP receive, or the IPRAW path without the traces above.
+
+**References:** `pico/uthernet2_net.cpp` (`u2_tcp_accept_cb`, `U2_Net_ListenTcp`, `OnUdpRecvPbuf`, `U2_Net_SendUdp`, `U2_BaStaIp`), `pico/u2_busaudit.c` (`ba_report`), `pico/uthernet2.c` (`U2_BaSipr`), audit image `pico/audit_images/megaflash-pico2_w-b156-audit.uf2` (2026-11-08 21:30:06 UTC b156 AUDIT).
+
+## 1fa. b156 capture and the 9 November catalog: address mismatch and slow Wi-Fi bring-up (2026-11-09)
+
+**What.** NetTester `megaflash-20261109.md` plus the b156 audit capture (`/Users/eositis/Downloads/b156.txt`, four boots). Accept rows (`$0201`, `$0210`, `$0500`) still failed after the LISTEN fix, and a block of outbound rows (`$0214` retry, `$0215`, `$0216`-`$0218`, `$0300`) failed with `ERR_RTE` only right after a Pico boot.
+
+**Why (evidence, not a guess).**
+- The new `[ba] ip:` line shows `pico STA 192.168.0.241  SIPR(6502) 192.168.0.50`. NetTester dials `--local-ip` (`.50`) for server tests. No boot has a single `tr=accept`, so the SYN never reaches lwIP: nothing on the LAN answers ARP for `.50`. LISTEN itself is healthy (`listen_ok`, SR `$14`). This is an addressing gap, not a lwIP bug.
+- After a Pico boot the link goes JOIN, NOIP, UP over 6-22 s. In boot 3 the legacy NTP operation ran 3.55 s to 22.04 s (`ntp_attempt_begin` / `ntp_attempt_end`), and `ip:` printed `0.0.0.0` at t=10 s. The Apple starts the catalog at ~3.7 s, so every CONNECT or UDP SEND in that window gets `ERR_RTE` (-4). A real card has link and an address immediately; this is MegaFlash boot latency leaking into the 6502's view.
+- `$0400` (IP raw, reads `$00` instead of `$32`): trace shows `cr 01` then `st 50` 284 us later. The test reads `Sn_SR` once right after the OPEN write. Core 1 queues OPEN, core 0 publishes `$32` later; the 6502 can win that race. MACRAW does not have this problem because core 1 publishes `$42` itself in the OPEN handler. **Not fixed in this change** (needs core 1 to publish the status without a `$00` flicker from core 0's `close0`); recorded as open.
+
+**What we did.**
+- `U2_ProcessDeferredSocketCmds`: a CONNECT or SEND waits (CR stays set) while `U2_Net_LinkReady()` is false, for at most `U2_LINK_HOLD_US` (30 s). A command queued behind it (for example CLOSE from an impatient 6502) ends the hold; a reset (generation change) restarts it. Traces: `link_hold`, `link_hold_end` (c = ms waited), `link_hold_expire`. This keeps W5100 semantics (the chip was "still working") instead of reporting a timeout the real card would never produce.
+- `U2_Net_LinkReady()` (link UP and non-zero STA address) and `U2_Net_LinkStatusRaw()` in `uthernet2_net.cpp`.
+- Audit: `[ba] ev=link a=<CYW43_LINK_*> b=<ready>` on every change, so the next capture shows exactly when Wi-Fi comes up.
+- **RP2040 stopped (user decision).** `build-both.sh` builds only `pico2_release`; `.cursor/rules/pico-firmware-build.mdc` rewritten. `pico_release/` is stale (b155) and must not be shipped.
+
+**What we did not do.**
+- No SIPR to STA-IP aliasing (would need ARP answers for `.50`, inbound dst rewrite with incremental TCP/UDP checksum fixes, and reverse rewrite of replies). Cheaper alternative: run NetTester with `--local-ip 192.168.0.241`. Waiting for the user's choice.
+- Did not try to speed up DHCP itself yet; the `link` events will show whether the time is join, DHCP or the legacy NTP operation.
+
+**Takeaway / open.** Inbound addressing decision; `$0400` publish race; `$0600` aux `$11`; `$0111` length 66; ticks; `$0214`/`$0218` lost frames (Pico side clean); `u2_defer` arm race at source.
+
+**References.** `pico/uthernet2.c` `U2_ProcessDeferredSocketCmds`, `pico/uthernet2_net.cpp` `U2_Net_LinkReady`, `pico/u2_busaudit.c` `U2_BaCore0Poll`, `pico/build-both.sh`. Images: `pico/pico2_release/megaflash.uf2` (b157), `pico/audit_images/megaflash-pico2_w-b158-audit.uf2`.
+
+---
+
+---
+
 ## 11. Summary table of code locations
 
 | Topic | Key files | Decision / fix |
@@ -4160,6 +4558,23 @@ Operator confirmed first-connect fixed on the V1.2.4-eo Release rebuild. Removed
 | ip65 W5100 probe + SHAR | `uthernet2.c` §`u2_reset`, §1c | RTR $07/$D0 + RMSR/TMSR $06 for `w5100.s` probe; default SHAR = `00:08:DC:A2:A2:A2` (matches `w5100.s`) so RMSR=$06 short path does not leave `cfg_mac` all-zero |
 | Two DATA reads both $07 | §1f, `uthernet2.c` `auto_increment` | Pointer only advances when **MR** has **AI** ($02); **$03** = IND+AI; **$00** after reset or **$01** → no increment, second read still RTR0 |
 | First `$C0C7` wrong then RTR OK | §1f, `busloop.c`, `U2_PeekDataPort` | RP2350 PIO prefetches next read’s byte; **`r[7]`** must hold **`U2_PeekDataPort()`** after each U2 cycle so first DATA read after addr setup isn’t stale |
+| Nettest MACRAW socket and mode shadow | §1ej, §1ek, `uthernet2.c`, `busloop.c` | One PIO word per cycle: mode, pointer, data peek (§1ek). The b129 byte-store call did not change that word. MACRAW OPEN only on socket 0, without `U2_Net_Close` on core 1. A multi-bit `Sn_CR` reads as `$00` |
+| Soft reset must not take the lwIP lock | §1el, `uthernet2_net.cpp` `U2_Net_Close` | Core 1 marks TCP/UDP/IPRAW `need_close` and leaves the pcb. Core 0 frees it and installs or restores the MACRAW input hook. A core-1 `cyw43_arch_lwip_begin` made `Sn_CR` read back as mode `$03` and left later `OPEN`s closed until power was removed |
+| Fresh catalog `Sn_CR` `$03` and LISTEN `$13` | §1em, `u2_reset`, `u2_sr`, `u2_defer_next` | MR `$80` posts a core-0 close and does not call `U2_Net_Close`. `Sn_SR` is an SRAM shadow. A command behind a busy defer slot is queued. The all-zero `Sn_CR` word from this section was reverted in §1en |
+| All-zero `Sn_CR` word reverted; multicast DHAR | §1en, `busloop.c`, `U2_ResetMemory` | Normal PIO word again. Bus reset does not clear 32 KiB. `Sn_DHAR` defaults to 0. UDP MULTI with that DHAR completes SEND and does not transmit |
+| Late core-0 reset wiped the next test | §1eo, `u2_bus_since_reset`, `U2_Net_ServicePoll` | `U2_ResetMemory` and close-all run only if no slot cycle has happened since MR `$80`. A later cycle means the 6502 already programmed the socket. §1ep: skipping the close left the previous pcb, whose error callback stored `$00` |
+| Reset closes the previous pcb only | §1ep, `born_epoch`, `U2_ResetMemoryIfIdle` | Pcbs record the reset epoch they were opened under. Core 0 frees older ones. A 128-byte clear stops once the 6502 touches the slot. `u2_tcp_err` does not publish `Sn_SR` for a pcb the socket no longer owns. §1eq: the chunk is 8 bytes, and a socket with a command already armed is not closed here |
+| LISTEN stuck at `$13`, later opens `$00` | §1eq, `u2_mr_latch`, `write_socket_register` | Mode, port, and destination are latched as the 6502 writes them. A LISTEN/CONNECT that missed `Sn_CR` while status is `$13` is armed anyway. Deferred commands run again after `cyw43_arch_poll`. §1er widens that salvage and stops the in-flight command from clearing the next test's slot |
+| 18:26: SEND_OK and the peer FIN are late | §1er, `u2_missed_command`, `u2_defer_gen`, `U2_AgentLog` | Missed LISTEN/OPEN/SEND are armed as `Sn_CR` before the `Sn_IR` clear. Reset bumps a generation so a command still running cannot drop the next OPEN. Release does not printf on core 0. A FIN parked on `refused_data` is delivered on the RECV poll and published as `$1C`. §1es: that close was still storing `$00` on the next socket, and a port low byte of `$01` was armed as OPEN |
+| 20:09: idle connect and later TCP opens `$00` | §1es, `u2_defer_stale`, `u2_defer_rearm_cr` | A command that lost its generation does not close the socket. Reset still frees the previous pcb when a new command is queued. OPEN is not salvaged off the port or destination bytes. A leftover `Sn_CR` command is armed again |
+| 20:34: DISCON stops at `$1D`, wrap and UDP echo `$00` | §1et, `U2_Net_DisconTcp`, `u2_reclaim_orphan_tcp` | `DISCON` from `CLOSE_WAIT` publishes `CLOSED` before `Sn_CR` clears. Rearm does not start a second `OPEN`. `Sn_SR` is not an `OPEN`. An 8K socket keeps `TCP_WND`. A failed `tcp_new` aborts orphan pcbs and retries |
+| 20:57: idle connect `$17`, payload opens `$00` | §1eu, `u2_port_ready`, `u2_macraw_hook_apply` | `OPEN` at `Sn_SR` runs only after the port low byte is stored. The MAC filter uses the mode latch. STA input is restored when MACRAW closes. The close-wait pcb is parked for free |
+| First audit capture: pipeline healthy; TCP lifecycle is the gap | §1ew, `U2_BaTrace`, `megaflash-pico2_w-b148-audit.uf2` | b145 audit: 0 backlog over ~700k cycles, 0 missed commands, 0 `Sn_CR=$03`; only NTP-time core-0 absence confirmed (b147 addresses it). b147 catalogs 13/–/19 matches but still non-deterministic; TCP client rows `$00`, `$0010` `$00` in all three. Next: b148 audit image traces reset/cr/arm/st/close/syn/tcp-err; read it with the §1ew table |
+| Stall locator and SO_REUSE | §1ex, `u2_lockdbg.h`, `U2_BaStage`, `lwipopts.h`, `megaflash-pico2_w-b151-audit.uf2` | b148: boot 1 Apple quiet after failed CONNECT (Wi-Fi not up); boots 2 and 3 core 0 dead right after an OPEN (UART and 10 s reports stop, Apple continues, all later rows `$00`). Build is cyw43 poll mode, so no lock deadlock; cause unlocated. Audit image resets via watchdog and prints last stage/HardFault PC next boot. `SO_REUSE=1` fixes `tcp_bind` `ERR_USE` (lwIP ignored `SOF_REUSEADDR` without it) |
+| LISTEN panicked core 0 | §1ey, `u2_attach_tcp_pcb`, `u2_tcp_kill`, `ba_fatal_report`, `megaflash-pico2_w-b154-audit.uf2` | b151 watchdog report: stage = `U2_Net_ListenTcp`, PC = `_exit`. `tcp_recv/tcp_err` on a LISTEN pcb hit `LWIP_ASSERT` = `panic()`; core 0 dead after every LISTEN, hence `$13` and all later `$00`. Fixed (listener only gets arg/accept; `tcp_close` instead of `tcp_abort` for listeners); CONNECT/LISTEN dropped unless `Sn_SR` is `$13` (duplicate-CONNECT race). Audit prints panic/assert/fault with stack scan |
+| Post-LISTEN-fix status and inbound diagnostics | §1ez, `tr=accept`, `tr=udp_rx`, `ip:` report line, `megaflash-pico2_w-b156-audit.uf2` | b154: 32 IIGS matches, no fatal. Open: accept after LISTEN, `$0300` UDP echo rx 0, `$0400`, lost frames `$0214`/`$0218` (Pico side clean), `$0600` aux, `$0111`, ticks. Next capture prints Pico STA IP vs SIPR and whether SYN/UDP reply arrive |
+| Address mismatch and slow Wi-Fi bring-up | §1fa, `U2_Net_LinkReady`, `link_hold` trace, `ev=link`, `build-both.sh` | STA `.241` vs SIPR `.50`: no accept can arrive (decision pending: `--local-ip` or alias). CONNECT/SEND wait up to 30 s for link+IP instead of `ERR_RTE`. `$0400` is a publish race (open). RP2040 stopped; Pico 2 W only |
+| Same build, different results: bus pipeline audit + structure | §1ev, `u2_busaudit.c`, `check_bus_ram.py`, `u2_restore_template`, `U2_Net_WaitForWork` | Phase 0 UART audit image (`audit_images/*-audit.uf2`, `U2_BUS_AUDIT=1`). Phase 1: whole bus call tree in SRAM, enforced by `build-both.sh`. Phase 2: reset is one atomic step on core 1; core 0 serviced during Wi-Fi connect and NTP is gated while the Apple is active; four latches removed. Salvage kept behind `U2_MISSED_CMD_SALVAGE`. Not yet verified on hardware; Phase 3 waits for three agreeing power-cycled catalogs |
 | **`async_context` PANIC at `ck=5`** | §1g, `main.c`, `u2_monitor.h` | **`U2_MonPollFlush`** only on **core 0** — not from **`U2_Poll`** on core 1 |
 | MACRAW RX full (W5100 parity) | §1au, `uthernet2.c` `u2_push_rx_macraw` | If **used+(2+len) > size**, new frame **not written**; **no** implicit **RX_RD** flush. (Older doc rows §**1ao**/§**1aq** refer to optional staging / **`into_ring`** paths not present in minimal tree.) |
 | MACRAW TX `Sn_TX_RD` vs queue / `pbuf` | §**1ax**, `uthernet2_net.cpp`, `uthernet2.c` `send_data` | **`U2_Net_SendMacraw`** **`0`/`-1`**; advance **`TX_RD`** only on accept; drain **re-queue** on **`u2_send_macraw_core0`** fail |

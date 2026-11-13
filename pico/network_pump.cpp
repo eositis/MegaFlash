@@ -1,8 +1,11 @@
+#define U2_FILE_ID 3
+#include "u2_lockdbg.h"
 #include "network_pump.h"
 #include "debug.h"
 #include "misc.h"
 #if PICO_CYW43_ARCH_POLL
 #include "uthernet2_net.h"
+#include "u2_busaudit.h"
 #endif
 #include <algorithm>
 #include "lwip/pbuf.h"
@@ -225,6 +228,7 @@ bool NetworkPump::EnsureWifiConnected(const char *ssid, const char *wpakey) {
   }
 
   absolute_time_t timeout = make_timeout_time_ms(15000);
+  U2_BaEvent("wifi_connect_begin", 0, 0);
   int err = cyw43_arch_wifi_connect_bssid_async(ssid, NULL, wpakey, authType);
   if (err) return false;
 
@@ -237,10 +241,12 @@ bool NetworkPump::EnsureWifiConnected(const char *ssid, const char *wpakey) {
     if (status < 0) break;
     if (time_reached(timeout)) break;
     cyw43_arch_poll();
-    cyw43_arch_wait_for_work_until(timeout);
+    U2_BaDrain();
+    U2_Net_WaitForWork(timeout);
   }
 
   wifiConnected = (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP);
+  U2_BaEvent("wifi_connect_end", (long)wifiConnected, (long)status);
   return wifiConnected;
 }
 
@@ -263,6 +269,12 @@ void NetworkPump::PollOnce() {
   U2_Net_ServicePoll();
 #endif
   cyw43_arch_poll();
+#if PICO_CYW43_ARCH_POLL
+  /* A LISTEN or OPEN written while cyw43_arch_poll ran is still armed.
+   * Handling it here, before the 6502's status wait expires, is the
+   * difference between SOCK_INIT ($13) and SOCK_LISTEN ($14). */
+  U2_Net_ServicePoll();
+#endif
   for (INetworkSession *s : sessions_) {
     if (s) s->OnPump(*this);
   }
@@ -304,50 +316,50 @@ udp_pcb *NetworkPump::CreateUdpPcb(INetworkSession *owner, uint16_t local_port) 
   if (!owner) {
     return nullptr;
   }
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   udp_pcb *pcb = udp_new();
   if (!pcb) {
     WARN_PRINTF("NETPUMP: CreateUdpPcb udp_new failed\n");
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return nullptr;
   }
   err_t err = udp_bind(pcb, IP4_ADDR_ANY, local_port);
   if (err != ERR_OK) {
     WARN_PRINTF("NETPUMP: CreateUdpPcb udp_bind port=%u err=%d\n", (unsigned)local_port, (int)err);
     udp_remove(pcb);
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return nullptr;
   }
   RegisterUdpPcbOwner(pcb, owner);
   udp_recv(pcb, NetworkPump_LegacyUdpRecv, this);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   return pcb;
 }
 
 void NetworkPump::DestroyUdpPcb(udp_pcb *pcb) {
   if (!pcb) return;
   UnregisterUdpPcb(pcb);
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   udp_remove(pcb);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
 }
 
 tcp_pcb *NetworkPump::CreateTcpPcb(INetworkSession *owner) {
   if (!owner) {
     return nullptr;
   }
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   tcp_pcb *pcb = tcp_new();
   if (!pcb) {
     WARN_PRINTF("NETPUMP: CreateTcpPcb tcp_new failed\n");
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return nullptr;
   }
   RegisterTcpPcbOwner(pcb, owner);
   tcp_arg(pcb, owner);
   tcp_recv(pcb, NetworkPump_LegacyTcpRecv);
   tcp_err(pcb, NetworkPump_LegacyTcpErr);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   return pcb;
 }
 
@@ -356,12 +368,12 @@ void NetworkPump::DestroyTcpPcb(tcp_pcb *pcb) {
     return;
   }
   UnregisterTcpPcb(pcb);
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   tcp_arg(pcb, nullptr);
   tcp_recv(pcb, nullptr);
   tcp_err(pcb, nullptr);
   tcp_abort(pcb);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
 }
 
 void NetworkPump::ScheduleTimer(INetworkSession *owner, uint32_t timeout_ms, uint32_t arg) {
@@ -391,6 +403,7 @@ void NetworkPump::BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid
   activeLegacyOperation = kind;
   activeLegacyTaskId = taskid;
   activeLegacyLabel = label;
+  U2_BaEvent("legacy_op_begin", (long)kind, (long)taskid);
   DEBUG_PRINTF("NETPUMP: begin op=%d label=%s taskid=%u\n",
                (int)kind,
                label ? label : "(null)",
@@ -398,6 +411,7 @@ void NetworkPump::BeginLegacyOperation(LegacyOperationKind kind, uint32_t taskid
 }
 
 void NetworkPump::EndLegacyOperation() {
+  U2_BaEvent("legacy_op_end", (long)activeLegacyOperation, 0);
   if (activeLegacyOperation != LEGACY_OPERATION_NONE) {
     DEBUG_PRINTF("NETPUMP: end op=%d label=%s taskid=%u\n",
                  (int)activeLegacyOperation,

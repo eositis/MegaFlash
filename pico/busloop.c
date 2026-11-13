@@ -8,6 +8,7 @@
 #include "cmdhandler.h"
 #include "dmamemops.h"
 #include "uthernet2.h"
+#include "u2_busaudit.h"
 
 //--------------------------------------------------------------------
 //Accessing buffers from Apple IIc
@@ -111,7 +112,14 @@ void __no_inline_not_in_flash_func(BusLoop)() {
        * so the next read presents this byte on the data bus — see docs §2 / §1d.
        */
       uint8_t u2_read_byte;
+#if U2_BUS_AUDIT
+      u2_ba_cyc_t ba_c;
+      U2_BaBegin(&ba_c, u2_data_address);
+#endif
       U2_HandleBusAccess(busdata, &u2_read_byte);
+#if U2_BUS_AUDIT
+      U2_BaHandlerDone(&ba_c);
+#endif
       if (busdata & READFLAG) {
         registers.r[addr] = u2_read_byte;
       } else {
@@ -132,10 +140,26 @@ void __no_inline_not_in_flash_func(BusLoop)() {
         tight_loop_contents();
       }
 #endif
-      /* Peek *after* IRQ0 so r[7] samples the RX ring after any core-0 MACRAW write that
-       * raced the wait. Prefetch still needs the next DATA byte before UpdateMegaFlashRegisters. */
-      registers.r[7] = U2_PeekDataPort();
-      UpdateMegaFlashRegisters(1, registers.i32[1]);  /* PIO must have current values for next read */
+      /* Peek *after* IRQ0 so the data byte samples the RX ring after any core-0 MACRAW
+       * write that raced the wait. One store is the whole $C0C4–$C0C7 word: mode, address
+       * high, address low, data peek. Separate stores through a uint8_t* did not change the
+       * word the PIO shifted, so $C0C5/$C0C6 stayed the last byte written on that port
+       * ($0002 captured $10, $0003 captured $5F). RST $80 still reads $00 because reset
+       * clears the mode register before this word is built. */
+      {
+        uint16_t adr = u2_data_address;
+        uint8_t data_byte = U2_PeekDataPort();
+        uint32_t chunk = (uint32_t)u2_mode_register
+                       | ((uint32_t)(uint8_t)(adr >> 8) << 8)
+                       | ((uint32_t)(uint8_t)adr << 16)
+                       | ((uint32_t)data_byte << 24);
+        registers.i32[1] = chunk;
+        UpdateMegaFlashRegisters(1, chunk);
+#if U2_BUS_AUDIT
+        U2_BaEnd(&ba_c, busdata, (busdata & READFLAG) ? u2_read_byte : (uint8_t)0, chunk, adr,
+                 u2_mode_register);
+#endif
+      }
       /* §1di: H5 (core 1 falling behind the listener FIFO) was REJECTED by measurement —
        * backlog occurred on 2 of 155,358 cycles, max depth 1 — so its probe is removed rather
        * than left on the timing-critical path it was measuring. */

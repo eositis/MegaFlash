@@ -25,6 +25,7 @@
 #include "uthernet2.h"
 #include "uthernet2_net.h"
 #include "u2_monitor.h"
+#include "u2_busaudit.h"
 
 static inline void InitActLed() {
   gpio_init(ACT_LED_PIN);
@@ -122,9 +123,23 @@ void __no_inline_not_in_flash_func(core0Loop)() {
   
   if (CheckPicoW()) {
     do {
+      /* Section 1ev: an NTP attempt (Wi-Fi connect + UDP) is a long native operation that competes
+       * with the Apple's Uthernet II traffic for core 0 and for STA ingress. Run it when the slot
+       * has been quiet for 60 s, unless the Apple explicitly asked for a sync now. */
+      bool ntpForced = updateNTPNow;
+      updateNTPNow = false;
+      while (!ntpForced && U2_BusActiveRecently(60u * 1000u)) {
+#if defined(NDEBUG)
+        ReleaseUpdateBusUsbGate();
+#endif
+        PicoW_ServiceCore0IpcAndNetwork(0);
+        ntpForced = updateNTPNow;
+      }
       updateNTPNow = false;
       U2_MonPollFlush();
+      U2_BaEvent("ntp_attempt_begin", 0, 0);
       int err = GetNetworkTime();
+      U2_BaEvent("ntp_attempt_end", (long)err, 0);
       DEBUG_PRINTF("GetNTP err=%d (%d=NETERR_NONE)\n",err,NETERR_NONE);
       if (err==NETERR_NONE) nextUpdateTime = make_timeout_time_ms(NEXTUPDATE_SUCCESS);
       else nextUpdateTime = make_timeout_time_ms(NEXTUPDATE_FAILED);

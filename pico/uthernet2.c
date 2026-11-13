@@ -5,6 +5,7 @@
 #include "uthernet2.h"
 #include "uthernet2_net.h"
 #include "u2_monitor.h"
+#include "u2_busaudit.h"
 #include "w5100_regs.h"
 #include "ipc.h"
 #include "a2bus.h"
@@ -25,11 +26,7 @@
 
 /* RP2350: U2 runs on core1 inside BusLoop (RAM). These helpers are on every $C0C4–$C0C7 cycle;
  * keep them in SRAM to avoid XIP wait states between IRQ0 clear and UpdateMegaFlashRegisters. */
-#ifndef PICO_RP2040
-#define U2_BUS_RAM(fn) __time_critical_func(fn)
-#else
-#define U2_BUS_RAM(fn) fn
-#endif
+#include "u2_busram.h"
 
 #ifndef U2_MON_LOG_BUS
 #define U2_MON_LOG_BUS 0
@@ -42,6 +39,13 @@
 #endif
 #ifndef U2_MACRAW_COMPAT_DROP_OLDEST
 #define U2_MACRAW_COMPAT_DROP_OLDEST 0
+#endif
+/* 1 = keep the missed-command salvage (u2_missed_command re-targets a command byte that landed on the
+ * wrong register to Sn_CR). It compensates for a lost/late address-low write, i.e. a bus-pipeline
+ * fault. The section 1ev audit counts every use (missed_command why1..7); when those read 0 over
+ * power-cycled catalogs the heuristic is dead weight and can be built out with -DU2_MISSED_CMD_SALVAGE=0. */
+#ifndef U2_MISSED_CMD_SALVAGE
+#define U2_MISSED_CMD_SALVAGE 1
 #endif
 
 /* §1dh RX delivery audit (measurement only, no behaviour change).
@@ -70,9 +74,9 @@ static void u2_arm_ip65_data_trace(uint8_t mode_byte) {
 static void u2_arm_ip65_data_trace(uint8_t mode_byte) { (void)mode_byte; }
 #endif
 
-static uint8_t  u2_memory[W5100_MEM_SIZE];
-static uint8_t  u2_mode_register;
-static uint16_t u2_data_address;
+static uint8_t  __attribute__((aligned(4))) u2_memory[W5100_MEM_SIZE];
+uint8_t  u2_mode_register;
+uint16_t u2_data_address;
 
 typedef struct {
   uint16_t transmit_base;
@@ -121,6 +125,20 @@ typedef struct {
 } u2_defer_t;
 
 static u2_defer_t u2_defer[W5100_NUM_SOCKETS];
+/* Latest command written while u2_defer[i].op was still set. Promoted on core 0
+ * once that op finishes, so LISTEN is not dropped behind OPEN. */
+static u2_defer_t u2_defer_next[W5100_NUM_SOCKETS];
+static volatile uint8_t u2_defer_next_valid[W5100_NUM_SOCKETS];
+/* Bumped on MR $80. An in-flight command captures it and will not clear a
+ * slot the next test has already armed. */
+static volatile uint8_t u2_defer_gen[W5100_NUM_SOCKETS];
+static uint8_t u2_sr[W5100_NUM_SOCKETS];
+/* Set when Sn_PORT low is actually stored. A $01 that arrives at Sn_SR before
+ * that is the low byte of local port 49153, not OPEN.
+ * (The MR/port/dport/dip "latches" that used to sit here are gone: they existed because core 0's
+ * delayed 32 KiB memset could zero u2_memory under the 6502's setup writes. Reset is now one atomic
+ * step on the bus core (u2_clear_registers), so the register file itself is the single copy.) */
+static uint8_t u2_port_ready[W5100_NUM_SOCKETS];
 #if UTHERNET2_DEBUG
 static uint16_t u2_dbg_last_wire[W5100_NUM_SOCKETS];
 static uint8_t u2_dbg_stall_dumped[W5100_NUM_SOCKETS];
@@ -164,7 +182,7 @@ static inline void u2_rx_wr_store(u2_socket_t *s, uint16_t wr) {
  * advanced Sn_RX_RD by a bogus length header, and RSR never converged to 0 -> an unbounded
  * "sock0 RECV" storm and no DNS/connection progress. Zeroing both producer and consumer on OPEN
  * matches hardware and stops the storm. */
-static void u2_reset_socket_rings(int i) {
+static void U2_BUS_RAM(u2_reset_socket_rings)(int i) {
   u2_socket_t *s = &u2_sockets[i];
   uint16_t reg = s->register_address;
   u2_rx_wr_store(s, 0);
@@ -335,7 +353,7 @@ static inline uint16_t u2_size_from_rmsr_field(uint8_t field) {
   return (uint16_t)(1u << (10 + (field & 3u))); /* 1K,2K,4K,8K */
 }
 
-static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
+static void U2_BUS_RAM(u2_apply_socket_sizes)(int is_rx, uint8_t value) {
   uint16_t base = is_rx ? W5100_RX_BASE : W5100_TX_BASE;
   const uint16_t end = is_rx ? W5100_MEM_SIZE : W5100_RX_BASE;
   uint8_t val = value;
@@ -377,21 +395,13 @@ static void u2_apply_socket_sizes(int is_rx, uint8_t value) {
 #endif
 }
 
-static void u2_reset(void) {
-#if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
-  u2_ip65_data_trace_left = 0;
-#endif
-  U2_MonReset();
-  __atomic_fetch_add(&u2_cmd_epoch, 1, __ATOMIC_ACQ_REL);
-  u2_host_net_locked = 0;
-  __atomic_store_n(&u2_ir, 0, __ATOMIC_RELEASE);
-  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-    __atomic_store_n(&u2_sn_ir[i], 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&u2_defer[i].op, 0, __ATOMIC_RELEASE);
-    U2_Net_Close(i);
-  }
-  memset(u2_memory, 0, sizeof(u2_memory));
-  u2_mode_register = 0;
+void U2_BUS_RAM(U2_SrPublish)(int socket_i, uint8_t status) {
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS)
+    return;
+  __atomic_store_n(&u2_sr[socket_i], status, __ATOMIC_RELEASE);
+}
+
+static void u2_reset_memory_defaults(void) {
   /* data_address is NOT reset on soft reset (Uthernet II doc) */
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
     u2_sockets[i].transmit_base = 0;
@@ -418,12 +428,14 @@ static void u2_reset(void) {
   u2_memory[W5100_SHAR5] = 0xA2;
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
     uint16_t ra = u2_sockets[i].register_address;
-    u2_memory[ra + W5100_SN_DHAR0] = 0xFF;
-    u2_memory[ra + W5100_SN_DHAR1] = 0xFF;
-    u2_memory[ra + W5100_SN_DHAR2] = 0xFF;
-    u2_memory[ra + W5100_SN_DHAR3] = 0xFF;
-    u2_memory[ra + W5100_SN_DHAR4] = 0xFF;
-    u2_memory[ra + W5100_SN_DHAR5] = 0xFF;
+    /* Real Uthernet II leaves Sn_DHAR zero. 0xFF is broadcast and a multicast
+     * SEND would be answered. The IIGS timeout on $0302/$0303 is that zero. */
+    u2_memory[ra + W5100_SN_DHAR0] = 0x00;
+    u2_memory[ra + W5100_SN_DHAR1] = 0x00;
+    u2_memory[ra + W5100_SN_DHAR2] = 0x00;
+    u2_memory[ra + W5100_SN_DHAR3] = 0x00;
+    u2_memory[ra + W5100_SN_DHAR4] = 0x00;
+    u2_memory[ra + W5100_SN_DHAR5] = 0x00;
     u2_memory[ra + W5100_SN_TTL]   = 0x80;
   }
   /* Default buffer sizes: 0x06 so ip65 chip-check path accepts without full reset; ip65 then writes 0x0A. */
@@ -431,6 +443,86 @@ static void u2_reset(void) {
   u2_memory[W5100_TMSR] = 0x06;
   u2_apply_socket_sizes(0, 0x06);
   u2_apply_socket_sizes(1, 0x06);
+}
+
+/* Chip reset of the register file, run INLINE on the bus core in the same handler call as the MR $80
+ * write (section 1ev).
+ *
+ * The power-on register image (common registers $0000-$003F and the first $40 bytes of each socket
+ * page, plus the u2_sockets[] ring bookkeeping) is built ONCE in U2_Init by running the ordinary
+ * defaults routine, and snapshotted. A reset is then ~100 word stores: no loops over sockets, no
+ * divisions, no flash. That keeps the handler to about a microsecond, because the 6502's very next
+ * access is the MR read-back (t_mode) and it latches whatever word is published by then.
+ *
+ * What this replaces: core 0 memset the whole 32 KiB later, in 8-byte chunks, abandoning the job
+ * if the 6502 had already issued a cycle (u2_bus_since_reset). That made reset non-deterministic:
+ * if core 0 was away (Wi-Fi connect, NTP) or a cycle landed first, the clear was skipped or ran
+ * under the next test's setup writes, which is what the latches, "ready" flags and missed-command
+ * salvage were invented to paper over. The TX/RX buffer bytes ($4000-$7FFF) are not cleared; a W5100
+ * does not clear them on reset either, and every reader goes through the ring pointers, which are
+ * reset here. */
+typedef uint32_t __attribute__((may_alias)) u2_w32_t;
+
+#define U2_REG_IMG_WORDS 16u /* $40 bytes */
+static u2_w32_t u2_tpl_regs[1 + W5100_NUM_SOCKETS][U2_REG_IMG_WORDS];
+static uint16_t u2_tpl_sockets[W5100_NUM_SOCKETS * (sizeof(u2_socket_t) / 2u)];
+
+static void U2_BUS_RAM(u2_restore_template)(void) {
+  u2_w32_t *p = (u2_w32_t *)&u2_memory[0];
+  for (unsigned k = 0; k < U2_REG_IMG_WORDS; k++)
+    p[k] = u2_tpl_regs[0][k];
+  for (unsigned n = 0; n < W5100_NUM_SOCKETS; n++) {
+    p = (u2_w32_t *)&u2_memory[W5100_S0_BASE + (n << 8)];
+    for (unsigned k = 0; k < U2_REG_IMG_WORDS; k++)
+      p[k] = u2_tpl_regs[1 + n][k];
+  }
+  uint16_t *sp = (uint16_t *)u2_sockets;
+  for (unsigned k = 0; k < sizeof(u2_tpl_sockets) / 2u; k++)
+    sp[k] = u2_tpl_sockets[k];
+}
+
+/* Core 0, once, before the bus loop starts: u2_memory is still all zero (BSS). */
+static void u2_build_template(void) {
+  u2_reset_memory_defaults();
+  u2_w32_t *p = (u2_w32_t *)&u2_memory[0];
+  for (unsigned k = 0; k < U2_REG_IMG_WORDS; k++)
+    u2_tpl_regs[0][k] = p[k];
+  for (unsigned n = 0; n < W5100_NUM_SOCKETS; n++) {
+    p = (u2_w32_t *)&u2_memory[W5100_S0_BASE + (n << 8)];
+    for (unsigned k = 0; k < U2_REG_IMG_WORDS; k++)
+      u2_tpl_regs[1 + n][k] = p[k];
+  }
+  const uint16_t *sp = (const uint16_t *)u2_sockets;
+  for (unsigned k = 0; k < sizeof(u2_tpl_sockets) / 2u; k++)
+    u2_tpl_sockets[k] = sp[k];
+}
+
+static void U2_BUS_RAM(u2_reset)(void) {
+#if UTHERNET2_DEBUG && U2_IP65_TRACE_DATA
+  u2_ip65_data_trace_left = 0;
+#endif
+  U2_MonReset();
+  U2_BaResetNote();
+  U2_BaTrace("reset", (int32_t)((uint32_t)u2_sr[0] | ((uint32_t)u2_sr[1] << 8) | ((uint32_t)u2_sr[2] << 16) |
+                                ((uint32_t)u2_sr[3] << 24)),
+             (int32_t)u2_cmd_epoch, 0);
+  __atomic_fetch_add(&u2_cmd_epoch, 1, __ATOMIC_ACQ_REL);
+  u2_host_net_locked = 0;
+  __atomic_store_n(&u2_ir, 0, __ATOMIC_RELEASE);
+  for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
+    __atomic_store_n(&u2_sn_ir[i], 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&u2_defer[i].op, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&u2_defer_next_valid[i], 0, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&u2_defer_gen[i], 1, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&u2_sr[i], 0, __ATOMIC_RELEASE);
+    u2_port_ready[i] = 0;
+  }
+  /* t_mode reads $03 on the instruction after MR $80, so the mode register is zeroed first and
+   * the whole reset finishes inside this handler call (see u2_clear_registers). */
+  u2_mode_register = 0;
+  u2_restore_template();
+  /* Core 0 only has the pcbs to drop; it no longer touches the register file. */
+  U2_Net_RequestReset();
 }
 
 static void U2_BUS_RAM(set_tx_sizes)(uint16_t address, uint8_t value) {
@@ -493,12 +585,27 @@ static uint8_t U2_BUS_RAM(read_socket_register)(uint16_t address) {
   uint16_t loc = address & 0xFF;
   switch (loc) {
   case W5100_SN_MR:
-  case W5100_SN_CR:
     return u2_memory[address];
+  case W5100_SN_CR: {
+    /* Commands are a single bit (OPEN $01, LISTEN $02, …). $03 is MR IND|AI.
+     * Nettest $0006 read that back from Sn_CR after UDP status had moved.
+     * A multi-bit value was never a command we issued; present it as done. */
+    uint8_t cr = u2_memory[address];
+    if (cr != 0 && (cr & (uint8_t)(cr - 1u)) != 0) {
+      U2_BaClamp();
+      u2_memory[address] = 0;
+      return 0;
+    }
+    return cr;
+  }
   case W5100_SN_IR:
     return __atomic_load_n(&u2_sn_ir[i], __ATOMIC_ACQUIRE);
   case W5100_SN_SR:
-    return U2_Net_GetStatus(i);
+    /* GetStatus lives in flash. A miss here holds the bus loop across the next
+     * $C0C7 sample, and that sample is the mode byte. */
+    if ((unsigned)i >= W5100_NUM_SOCKETS)
+      return 0;
+    return __atomic_load_n(&u2_sr[i], __ATOMIC_ACQUIRE);
   case W5100_SN_TX_FSR0:
     return get_tx_fsr_byte(i, 8);
   case W5100_SN_TX_FSR1:
@@ -926,7 +1033,8 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
    * multicast + our unicast) into the small RX ring, which floods it with ambient traffic and
    * intermittently drops the unicast ARP reply / DNS response the host is waiting on. Dropping
    * filtered frames is normal hardware behavior (not an error), so do it silently. */
-  if ((u2_memory[s->register_address + W5100_SN_MR] & W5100_SN_MR_MF) && len >= 6) {
+  uint8_t mr = u2_memory[s->register_address + W5100_SN_MR];
+  if ((mr & W5100_SN_MR_MF) && len >= 6) {
     const uint8_t *dm = data; /* Ethernet destination MAC = first 6 bytes of the raw frame */
     int is_broadcast = (dm[0] & dm[1] & dm[2] & dm[3] & dm[4] & dm[5]) == 0xFF;
     int is_ours = dm[0] == u2_memory[W5100_SHAR0 + 0] && dm[1] == u2_memory[W5100_SHAR0 + 1] &&
@@ -1023,8 +1131,12 @@ static void u2_push_rx_macraw(int socket_i, const uint8_t *data, uint16_t len) {
 #endif
 }
 
-/* Read TX buffer data between rd and wr and send via network. Returns 0 on success, -1 if MACRAW not accepted. */
-static int send_data(int i) {
+/* MACRAW SEND on the bus core. Only MACRAW is sent from here: TCP/UDP/IPRAW SEND is armed in the
+ * defer queue and executed on core 0 (u2_defer_send), so the old UDP/TCP branches were dead on
+ * this core and pulled lwIP-adjacent flash code into the bus call tree (section 1ev).
+ * The frame goes ring -> TX-queue slot in one copy (no 1518-byte stack buffer on core 1's small
+ * stack). Returns 0 on success, -1 if the frame was not accepted (TX_RD is then left alone). */
+static int U2_BUS_RAM(send_data)(int i) {
   const u2_socket_t *s = &u2_sockets[i];
   uint16_t buf_size = s->transmit_size;
   if (buf_size == 0) return 0;
@@ -1037,66 +1149,18 @@ static int send_data(int i) {
   int data_len = (int)wr - (int)rd;
   if (data_len < 0) data_len += buf_size;
   if (data_len == 0) return 0;
-  uint16_t base = s->transmit_base;
   uint16_t consumed = (uint16_t)data_len; /* bytes to advance Sn_TX_RD past */
-  uint8_t status = U2_Net_GetStatus(i);
-  if (status == W5100_SN_SR_SOCK_UDP) {
-    uint32_t dip = (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR0] << 24
-                  | (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR1] << 16
-                  | (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR2] << 8
-                  | (uint32_t)u2_memory[s->register_address + W5100_SN_DIPR3];
-    uint16_t dport = (uint16_t)u2_memory[s->register_address + W5100_SN_DPORT0] << 8
-                  | (uint16_t)u2_memory[s->register_address + W5100_SN_DPORT1];
-    /* Item 3: send the whole datagram with no truncation and no large scratch buffer.
-     * The net layer copies straight from the (possibly wrapping) TX ring into the pbuf. */
-    U2_MonNetUdpSend(i, dip, dport, (uint16_t)data_len);
-    U2_Net_SendUdp(i, &u2_memory[base], buf_size, rd, (uint16_t)data_len, dip, dport);
-    consumed = (uint16_t)data_len; /* UDP datagram is atomic: always drain fully */
-  } else if (status == W5100_SN_SR_ESTABLISHED) {
-    /* Shared-access clients (e.g. wget65) can queue >2 KiB before SEND. Send in chunks and
-     * respect lwIP backpressure: advance TX_RD only by bytes lwIP accepted. Any remainder
-     * stays in the FIFO TX ring and flushes in order on the host's next SEND (no loss). */
-    uint8_t buf[1024];
-    int remaining = data_len;
-    int pos = 0;
-    U2_MonNetTcpSend(i, (uint16_t)data_len);
-    while (remaining > 0) {
-      int n = remaining;
-      if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
-      for (int j = 0; j < n; j++)
-        buf[j] = u2_memory[base + ((rd + pos + j) & mask)];
-      int acc = U2_Net_SendTcp(i, buf, (uint16_t)n);
-      if (acc < 0)
-        break; /* fatal socket error: stop, keep remainder in ring */
-      pos += acc;
-      remaining -= acc;
-      if (acc < n)
-        break; /* lwIP send buffer full: leave remainder queued */
-    }
-    consumed = (uint16_t)pos;
-  } else if (status == W5100_SN_SR_SOCK_MACRAW) {
-    uint8_t buf[1518];
-    /* Log the true RD→WR span so oversize/desync is visible on UART (OVERSIZE tag if >1518). */
-    U2_MonNetMacrawTxPtrs(i, (uint16_t)data_len, rd_full, wr_full, rd, wr);
-    if (data_len > (int)sizeof(buf)) {
-      /* data_len > one max Ethernet frame ⇒ host TX_WR/TX_RD desync (garbage Sn_TX_WR, e.g.
-       * 0xEFxx). A real single MACRAW frame is ≤1518. Do NOT blast stale ring bytes onto the
-       * wire — that emits a corrupt Ethernet frame that peers/switches drop (why the DNS server
-       * never replied, §1ci). Drop this frame but still retire the full host TX window so the
-       * pointers re-sync and Sn_TX_FSR recovers. */
-      U2_MonNetMacrawTx(i, 0); /* len=0 paired with an OVERSIZE ptrs line == desync drop */
-      consumed = (uint16_t)data_len;
-    } else {
-      int n = data_len;
-      for (int j = 0; j < n; j++)
-        buf[j] = u2_memory[base + ((rd + j) & mask)];
-      /* Log TX only from core-0 linkoutput (`u2_send_macraw_core0`). A second line here made
-       * every SEND look like a duplicate frame; the queue copies once and drains once. */
-      if (U2_Net_SendMacraw(i, buf, (uint16_t)n) != 0) {
-        return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
-      }
-      consumed = (uint16_t)data_len;
-    }
+  /* Log the true RD→WR span so oversize/desync is visible on UART (OVERSIZE tag if >1518). */
+  U2_MonNetMacrawTxPtrs(i, (uint16_t)data_len, rd_full, wr_full, rd, wr);
+  if (data_len > 1518) {
+    /* data_len > one max Ethernet frame ⇒ host TX_WR/TX_RD desync (garbage Sn_TX_WR, e.g.
+     * 0xEFxx). A real single MACRAW frame is ≤1518. Do NOT blast stale ring bytes onto the
+     * wire — that emits a corrupt Ethernet frame that peers/switches drop (why the DNS server
+     * never replied, §1ci). Drop this frame but still retire the full host TX window so the
+     * pointers re-sync and Sn_TX_FSR recovers. */
+    U2_MonNetMacrawTx(i, 0); /* len=0 paired with an OVERSIZE ptrs line == desync drop */
+  } else if (U2_Net_SendMacrawRing(i, &u2_memory[s->transmit_base], mask, rd, (uint16_t)data_len) != 0) {
+    return -1; /* not accepted: do NOT advance TX_RD, retry on next SEND */
   }
   /* Advance TX_RD by the bytes actually consumed (full host-visible pointer progression;
    * only ring indexing is masked). */
@@ -1133,10 +1197,32 @@ static int u2_epoch_ok(uint8_t ep) {
   return __atomic_load_n(&u2_cmd_epoch, __ATOMIC_ACQUIRE) == ep;
 }
 
-static void u2_defer_finish(int i, uint8_t ep) {
+uint8_t U2_BUS_RAM(U2_CmdEpoch)(void) {
+  return __atomic_load_n(&u2_cmd_epoch, __ATOMIC_ACQUIRE);
+}
+
+static int u2_defer_promote(int i);
+static int U2_BUS_RAM(u2_defer_arm)(int i, const u2_defer_t *src);
+static uint8_t U2_BUS_RAM(u2_sn_mr)(int i, uint16_t base);
+static uint16_t U2_BUS_RAM(u2_sn_port)(int i, uint16_t base);
+static uint16_t U2_BUS_RAM(u2_sn_dport)(int i, uint16_t base);
+static uint32_t U2_BUS_RAM(u2_sn_dip)(int i, uint16_t base);
+
+static void u2_defer_finish(int i, uint8_t ep, uint8_t gen) {
+  /* MR $80 bumps the generation from the bus core. Clearing here anyway
+   * would drop the OPEN the next test has already armed. */
+  if (__atomic_load_n(&u2_defer_gen[i], __ATOMIC_ACQUIRE) != gen)
+    return;
   __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
   if (u2_epoch_ok(ep))
     u2_cr_clear(i);
+}
+
+static void u2_defer_stale(int i, uint8_t ep, uint8_t gen) {
+  /* Do not close. This command was armed before MR $80. Closing here sets
+   * Sn_SR to $00 on the socket the next test has already opened, and the
+   * reset handler frees a pcb whose generation is still the old one. */
+  u2_defer_finish(i, ep, gen);
 }
 
 void U2_SocketIrq(int socket_i, uint8_t bits) {
@@ -1158,7 +1244,7 @@ void U2_MirrorStaNet(const uint8_t ip[4], const uint8_t gw[4], const uint8_t mas
   }
 }
 
-static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep) {
+static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep, uint8_t gen) {
   int ok = 0;
   switch (d->mr & W5100_SN_MR_PROTO_MASK) {
   case W5100_SN_MR_UDP:
@@ -1177,8 +1263,7 @@ static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep) {
     break;
   }
   if (!u2_epoch_ok(ep)) {
-    U2_Net_Close(i);
-    __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+    u2_defer_stale(i, ep, gen);
     return;
   }
   U2_MonSockOpen(i, d->mr, d->port, ok);
@@ -1188,7 +1273,7 @@ static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep) {
   /* a2stream polls Sn_SR for SOCK_INIT and then writes CONNECT without waiting
    * for Sn_CR. Publishing INIT while this OPEN still owns the defer slot drops
    * that CONNECT (arm-fail op 2) and the following CR clear makes it look done. */
-  u2_defer_finish(i, ep);
+  u2_defer_finish(i, ep, gen);
   if (ok && u2_epoch_ok(ep)) {
     uint8_t st = W5100_SN_SR_CLOSED;
     switch (d->mr & W5100_SN_MR_PROTO_MASK) {
@@ -1208,7 +1293,10 @@ static void u2_defer_open(int i, u2_defer_t *d, uint8_t ep) {
   }
 }
 
-static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
+static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep, uint8_t gen) {
+  /* A reset may have reused this struct for the next test's OPEN. */
+  if (__atomic_load_n(&u2_defer_gen[i], __ATOMIC_ACQUIRE) != gen)
+    return;
   uint8_t st = U2_Net_GetStatus(i);
   if (st == W5100_SN_SR_SOCK_CLOSE_WAIT || st == W5100_SN_SR_SOCK_FIN_WAIT ||
       st == W5100_SN_SR_SOCK_LAST_ACK || st == W5100_SN_SR_CLOSED) {
@@ -1216,14 +1304,14 @@ static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
     U2_AgentLog("H3", "send-bad-st", i, st, 0, 1);
     // #endregion
     U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
-    u2_defer_finish(i, ep);
+    u2_defer_finish(i, ep, gen);
     return;
   }
   uint16_t total = u2_tx_span(i, d->tx_rd, d->tx_wr);
   if (d->sent >= total) {
     u2_tx_rd_store(i, d->tx_wr);
     U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
-    u2_defer_finish(i, ep);
+    u2_defer_finish(i, ep, gen);
     return;
   }
   uint16_t size = u2_sockets[i].transmit_size;
@@ -1231,27 +1319,42 @@ static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
   uint16_t base = u2_sockets[i].transmit_base;
   uint16_t left = (uint16_t)(total - d->sent);
   if (st == W5100_SN_SR_SOCK_UDP || st == W5100_SN_SR_SOCK_IPRAW) {
+    /* UDP MULTI sends to Sn_DHAR. The IIGS leaves that register zero and the
+     * frame is not delivered: tx 8, rx 0, then the receive times out. lwIP
+     * would address 224.0.0.1 itself and the peer would answer. */
+    if (st == W5100_SN_SR_SOCK_UDP) {
+      uint16_t ra = u2_sockets[i].register_address;
+      uint8_t dhar_or = 0;
+      for (int b = 0; b < 6; b++)
+        dhar_or = (uint8_t)(dhar_or | u2_memory[ra + W5100_SN_DHAR0 + b]);
+      if ((u2_memory[ra + W5100_SN_MR] & W5100_SN_MR_MULTI) && dhar_or == 0) {
+        u2_tx_rd_store(i, d->tx_wr);
+        U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
+        u2_defer_finish(i, ep, gen);
+        return;
+      }
+    }
     uint16_t off = (uint16_t)(d->tx_rd & mask);
     int rc = (st == W5100_SN_SR_SOCK_UDP)
                  ? U2_Net_SendUdp(i, &u2_memory[base], size, off, left, d->dip, d->dport)
                  : U2_Net_SendIpraw(i, &u2_memory[base], size, off, left, d->dip);
     if (!u2_epoch_ok(ep)) {
-      __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+      u2_defer_stale(i, ep, gen);
       return;
     }
     if (rc != 0) {
       U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       return;
     }
     u2_tx_rd_store(i, d->tx_wr);
     U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
-    u2_defer_finish(i, ep);
+    u2_defer_finish(i, ep, gen);
     return;
   }
   if (st != W5100_SN_SR_ESTABLISHED) {
     U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
-    u2_defer_finish(i, ep);
+    u2_defer_finish(i, ep, gen);
     return;
   }
   uint8_t buf[256];
@@ -1261,7 +1364,7 @@ static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
     buf[j] = u2_memory[base + ((off + j) & mask)];
   int acc = U2_Net_SendTcp(i, buf, n);
   if (!u2_epoch_ok(ep)) {
-    __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+    u2_defer_stale(i, ep, gen);
     return;
   }
   if (acc < 0) {
@@ -1269,7 +1372,7 @@ static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
     U2_AgentLog("H2", "send-fail", i, st, acc, 1);
     // #endregion
     U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
-    u2_defer_finish(i, ep);
+    u2_defer_finish(i, ep, gen);
     return;
   }
   d->sent = (uint16_t)(d->sent + (uint16_t)acc);
@@ -1284,12 +1387,67 @@ static void u2_defer_send(int i, u2_defer_t *d, uint8_t ep) {
   U2_AgentLog("H2", "send-ok", i, (int)total, st, 0);
   // #endregion
   U2_SocketIrq(i, W5100_SN_IR_SEND_OK);
-  u2_defer_finish(i, ep);
+  u2_defer_finish(i, ep, gen);
 }
 
 static volatile uint8_t u2_arm_fail_sock;
 static volatile uint8_t u2_arm_fail_op;
 static volatile uint8_t u2_arm_fail_pending;
+
+/* Sn_CR still holds a command but the defer slot was cleared (a reset raced
+ * the arm, or finish dropped the op and left the byte). Arm it again from
+ * the latched registers. A multi-bit byte is the mode value, not a command. */
+static void u2_defer_rearm_cr(int i) {
+  if (__atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE) != U2_DF_NONE)
+    return;
+  if (__atomic_load_n(&u2_defer_next_valid[i], __ATOMIC_ACQUIRE))
+    return;
+  uint16_t base = u2_sockets[i].register_address;
+  uint8_t cr = u2_memory[base + W5100_SN_CR];
+  if (cr == 0 || (cr & (uint8_t)(cr - 1u)) != 0)
+    return;
+  uint8_t st = __atomic_load_n(&u2_sr[i], __ATOMIC_ACQUIRE);
+  u2_defer_t cmd;
+  memset(&cmd, 0, sizeof(cmd));
+  switch (cr) {
+  case W5100_SN_CR_OPEN:
+    /* Do not arm another OPEN. OpenTcp closes the socket first, so a second
+     * one publishes $00 over a socket that already reached UDP or INIT.
+     * Clearing a leftover $01 lets sock_cmd finish. */
+    if (st != W5100_SN_SR_CLOSED)
+      u2_memory[base + W5100_SN_CR] = 0;
+    return;
+  case W5100_SN_CR_LISTEN:
+    if (st == W5100_SN_SR_SOCK_LISTEN) {
+      u2_memory[base + W5100_SN_CR] = 0;
+      return;
+    }
+    if (st != W5100_SN_SR_SOCK_INIT)
+      return;
+    cmd.op = U2_DF_LISTEN;
+    cmd.port = u2_sn_port(i, base);
+    break;
+  case W5100_SN_CR_CONNECT:
+    if (st != W5100_SN_SR_SOCK_INIT) {
+      if (st != W5100_SN_SR_CLOSED)
+        u2_memory[base + W5100_SN_CR] = 0;
+      return;
+    }
+    cmd.op = U2_DF_CONNECT;
+    cmd.port = u2_sn_port(i, base);
+    cmd.dport = u2_sn_dport(i, base);
+    cmd.dip = u2_sn_dip(i, base);
+    break;
+  default:
+    return;
+  }
+  u2_defer_arm(i, &cmd);
+}
+
+/* Core 0 only. Longest a CONNECT/SEND waits for the Wi-Fi link + DHCP (section 1fa). */
+#define U2_LINK_HOLD_US 30000000u
+static uint32_t u2_hold_since[W5100_NUM_SOCKETS];
+static uint8_t u2_hold_gen[W5100_NUM_SOCKETS];
 
 void U2_ProcessDeferredSocketCmds(void) {
   if (get_core_num() != 0)
@@ -1300,18 +1458,59 @@ void U2_ProcessDeferredSocketCmds(void) {
     u2_arm_fail_pending = 0;
   }
   // #endregion
+  for (int pass = 0; pass < 2; pass++)
   for (int i = 0; i < W5100_NUM_SOCKETS; i++) {
-    uint8_t op = __atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE);
-    if (op == U2_DF_NONE)
+    if (pass == 0)
+      u2_defer_rearm_cr(i);
+    int promoted = u2_defer_promote(i);
+    /* Pass 0 runs whatever is already armed. Pass 1 runs only a command that
+     * was waiting behind it (LISTEN after OPEN). Do not run SEND twice. */
+    if (pass == 1 && !promoted)
       continue;
+    uint8_t op = __atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE);
+    if (op == U2_DF_NONE) {
+      u2_hold_since[i] = 0;
+      continue;
+    }
     uint8_t ep = __atomic_load_n(&u2_cmd_epoch, __ATOMIC_ACQUIRE);
+    uint8_t gen = __atomic_load_n(&u2_defer_gen[i], __ATOMIC_ACQUIRE);
     u2_defer_t *d = &u2_defer[i];
+    /* Section 1fa: a real card has link and an IP from power-on, MegaFlash needs 6-20 s after boot
+     * (JOIN, NOIP, UP). CONNECT/SEND before that fail with ERR_RTE, which NetTester saw as
+     * $0010/$0214/$0215/$0216/$0300 failures right after a Pico boot. Hold the command (CR stays
+     * set, as if the chip were still working) until the link is ready, for at most
+     * U2_LINK_HOLD_US. A command queued behind it (CLOSE from an impatient 6502) ends the hold. */
+    if ((op == U2_DF_CONNECT || op == U2_DF_SEND) && !U2_Net_LinkReady() &&
+        !__atomic_load_n(&u2_defer_next_valid[i], __ATOMIC_ACQUIRE)) {
+      uint32_t now = time_us_32() | 1u;
+      if (u2_hold_since[i] == 0 || u2_hold_gen[i] != gen) {
+        u2_hold_since[i] = now;
+        u2_hold_gen[i] = gen;
+        U2_BaTrace("link_hold", i, op, 0);
+      }
+      if ((uint32_t)(now - u2_hold_since[i]) < U2_LINK_HOLD_US)
+        continue;
+      U2_BaTrace("link_hold_expire", i, op, 0);
+    } else if (u2_hold_since[i]) {
+      U2_BaTrace("link_hold_end", i, op, (int32_t)((time_us_32() - u2_hold_since[i]) / 1000u));
+      u2_hold_since[i] = 0;
+    }
     int rc;
+    U2_BaStage((2u << 28) | ((uint32_t)((op << 4) | (uint32_t)i) << 8));
     switch (op) {
     case U2_DF_OPEN:
-      u2_defer_open(i, d, ep);
+      u2_defer_open(i, d, ep, gen);
       break;
     case U2_DF_CONNECT:
+      /* A W5100 ignores CONNECT unless Sn_SR is SOCK_INIT. b151 audit: core 0's
+       * u2_defer_rearm_cr raced the bus core's arm, so the same CONNECT was queued twice. The
+       * second ran tcp_bind on the pcb that was already SYN_SENT (ERR_VAL), closed the socket
+       * and stored $00. Drop it like the chip would. */
+      if (U2_Net_GetStatus(i) != W5100_SN_SR_SOCK_INIT) {
+        U2_BaTrace("connect_dup_drop", i, U2_Net_GetStatus(i), 0);
+        u2_defer_finish(i, ep, gen);
+        break;
+      }
       // #region agent log
       U2_AgentLog("H6", "conn-go", i, (int)d->dip, (int)d->dport, 1);
 #ifndef PICO_RP2040
@@ -1322,8 +1521,7 @@ void U2_ProcessDeferredSocketCmds(void) {
       // #endregion
       rc = U2_Net_ConnectTcpEx(i, d->dip, d->dport, d->port);
       if (!u2_epoch_ok(ep)) {
-        U2_Net_Close(i);
-        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        u2_defer_stale(i, ep, gen);
         break;
       }
       U2_MonSockConnect(i, d->dip, d->dport, rc == 0);
@@ -1334,13 +1532,21 @@ void U2_ProcessDeferredSocketCmds(void) {
         U2_Net_Close(i);
         U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
       }
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       break;
     case U2_DF_LISTEN:
+      /* Same rule: LISTEN only from SOCK_INIT (an existing listener is re-published by ListenTcp). */
+      {
+        uint8_t lst = U2_Net_GetStatus(i);
+        if (lst != W5100_SN_SR_SOCK_INIT && lst != W5100_SN_SR_SOCK_LISTEN) {
+          U2_BaTrace("listen_dup_drop", i, lst, 0);
+          u2_defer_finish(i, ep, gen);
+          break;
+        }
+      }
       rc = U2_Net_ListenTcp(i, d->port);
       if (!u2_epoch_ok(ep)) {
-        U2_Net_Close(i);
-        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        u2_defer_stale(i, ep, gen);
         break;
       }
       U2_MonSockListen(i, d->port, rc == 0);
@@ -1348,41 +1554,97 @@ void U2_ProcessDeferredSocketCmds(void) {
         U2_Net_Close(i);
         U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
       }
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       break;
     case U2_DF_DISCON:
       rc = U2_Net_DisconTcp(i);
       if (!u2_epoch_ok(ep)) {
-        __atomic_store_n(&u2_defer[i].op, U2_DF_NONE, __ATOMIC_RELEASE);
+        u2_defer_stale(i, ep, gen);
         break;
       }
       if (rc != 0)
         U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       break;
     case U2_DF_CLOSE:
+      if (!u2_epoch_ok(ep)) {
+        u2_defer_stale(i, ep, gen);
+        break;
+      }
       U2_MonSockClose(i);
       U2_Net_Close(i);
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       break;
     case U2_DF_SEND:
-      u2_defer_send(i, d, ep);
+      u2_defer_send(i, d, ep, gen);
       break;
     default:
-      u2_defer_finish(i, ep);
+      u2_defer_finish(i, ep, gen);
       break;
     }
+    U2_BaStage((2u << 28) | ((uint32_t)((op << 4) | (uint32_t)i) << 8) | 0xFu);
   }
 }
 
-static int u2_defer_arm(int i, const u2_defer_t *src) {
+static uint8_t u2_defer_cr_byte(uint8_t op) {
+  switch (op) {
+  case U2_DF_OPEN:
+    return W5100_SN_CR_OPEN;
+  case U2_DF_LISTEN:
+    return W5100_SN_CR_LISTEN;
+  case U2_DF_CONNECT:
+    return W5100_SN_CR_CONNECT;
+  case U2_DF_DISCON:
+    return W5100_SN_CR_DISCON;
+  case U2_DF_CLOSE:
+    return W5100_SN_CR_CLOSE;
+  case U2_DF_SEND:
+    return W5100_SN_CR_SEND;
+  default:
+    return 0;
+  }
+}
+
+static int u2_defer_promote(int i) {
+  if (__atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE) != U2_DF_NONE)
+    return 0;
+  if (!__atomic_load_n(&u2_defer_next_valid[i], __ATOMIC_ACQUIRE))
+    return 0;
+  u2_defer_t n = u2_defer_next[i];
+  __atomic_store_n(&u2_defer_next_valid[i], 0, __ATOMIC_RELEASE);
+  if (n.op == U2_DF_NONE)
+    return 0;
+  u2_defer[i].mr = n.mr;
+  u2_defer[i].proto = n.proto;
+  u2_defer[i].port = n.port;
+  u2_defer[i].dport = n.dport;
+  u2_defer[i].dip = n.dip;
+  u2_defer[i].tx_rd = n.tx_rd;
+  u2_defer[i].tx_wr = n.tx_wr;
+  u2_defer[i].sent = 0;
+  u2_memory[u2_sockets[i].register_address + W5100_SN_CR] = u2_defer_cr_byte(n.op);
+  __atomic_store_n(&u2_defer[i].op, n.op, __ATOMIC_RELEASE);
+  U2_RequestCore0NetPoll();
+  return 1;
+}
+
+static int U2_BUS_RAM(u2_defer_arm)(int i, const u2_defer_t *src) {
+  if (i < 0 || i >= W5100_NUM_SOCKETS || !src || src->op == U2_DF_NONE)
+    return -1;
   if (__atomic_load_n(&u2_defer[i].op, __ATOMIC_ACQUIRE) != U2_DF_NONE) {
+    /* OPEN still owns the slot when the 6502 writes LISTEN. Dropping that
+     * write left Sn_SR at SOCK_INIT ($13) for the rest of $0210. */
+    U2_BaTrace("arm_queued", i, src->op, u2_defer[i].op);
+    u2_defer_next[i] = *src;
+    u2_defer_next[i].sent = 0;
+    __atomic_store_n(&u2_defer_next_valid[i], 1, __ATOMIC_RELEASE);
     // #region agent log
     u2_arm_fail_sock = (uint8_t)i;
     u2_arm_fail_op = src->op;
     u2_arm_fail_pending = 1;
     // #endregion
-    return -1;
+    U2_RequestCore0NetPoll();
+    return 0;
   }
   u2_defer[i].mr = src->mr;
   u2_defer[i].proto = src->proto;
@@ -1392,20 +1654,112 @@ static int u2_defer_arm(int i, const u2_defer_t *src) {
   u2_defer[i].tx_rd = src->tx_rd;
   u2_defer[i].tx_wr = src->tx_wr;
   u2_defer[i].sent = 0;
+  U2_BaTrace("arm", i, src->op, (int32_t)src->dport);
   __atomic_store_n(&u2_defer[i].op, src->op, __ATOMIC_RELEASE);
   U2_RequestCore0NetPoll();
+  return 0;
+}
+
+static uint16_t U2_BUS_RAM(u2_sn_port)(int i, uint16_t base) {
+  (void)i;
+  return (uint16_t)((uint16_t)u2_memory[base + W5100_SN_PORT0] << 8) | u2_memory[base + W5100_SN_PORT1];
+}
+
+static uint16_t U2_BUS_RAM(u2_sn_dport)(int i, uint16_t base) {
+  (void)i;
+  return (uint16_t)((uint16_t)u2_memory[base + W5100_SN_DPORT0] << 8) | u2_memory[base + W5100_SN_DPORT1];
+}
+
+static uint32_t U2_BUS_RAM(u2_sn_dip)(int i, uint16_t base) {
+  (void)i;
+  return (uint32_t)u2_memory[base + W5100_SN_DIPR0] << 24
+       | (uint32_t)u2_memory[base + W5100_SN_DIPR1] << 16
+       | (uint32_t)u2_memory[base + W5100_SN_DIPR2] << 8
+       | (uint32_t)u2_memory[base + W5100_SN_DIPR3];
+}
+
+static uint8_t U2_BUS_RAM(u2_sn_mr)(int i, uint16_t base) {
+  (void)i;
+  return u2_memory[base + W5100_SN_MR];
+}
+
+int U2_SocketCmdPending(int socket_i) {
+  if (socket_i < 0 || socket_i >= W5100_NUM_SOCKETS)
+    return 0;
+  if (__atomic_load_n(&u2_defer[socket_i].op, __ATOMIC_ACQUIRE) != U2_DF_NONE)
+    return 1;
+  return __atomic_load_n(&u2_defer_next_valid[socket_i], __ATOMIC_ACQUIRE) != 0;
+}
+
+/* A dropped address-low write leaves the pointer where auto-increment stopped.
+ * The command byte is then stored on that register and Sn_CR stays 0, so
+ * sock_cmd returns and the status wait never sees LISTEN, UDP, or SEND_OK.
+ * Sn_IR is write-1-to-clear and returns before any later check, so this has
+ * to run first. Setup writes that equal a command (port $01, TX_WR $20) are
+ * not commands: those happen in CLOSED, or they are the TX_WR bytes. */
+/* Returns 0 when the write is what it says, else a reason code 1..7 (counted by the section 1ev
+ * audit): 1 LISTEN/CONNECT after Sn_SR/DPORT, 2 OPEN at Sn_IR, 3 OPEN at Sn_SR (stream),
+ * 4 OPEN at Sn_SR (IPRAW), 5 OPEN at PROTO+1, 6 SEND, 7 DISCON/CLOSE. */
+static int U2_BUS_RAM(u2_missed_command)(int sock_i, uint16_t loc, uint8_t value) {
+  if (sock_i < 0 || sock_i >= W5100_NUM_SOCKETS || loc == W5100_SN_CR ||
+      loc > W5100_SN_RX_RD1)
+    return 0;
+  uint8_t st = __atomic_load_n(&u2_sr[sock_i], __ATOMIC_ACQUIRE);
+  /* Only the register auto-increment stops on after Sn_SR or Sn_DPORT.
+   * A port low byte of $01 (local 49153, dest port 1) is not an OPEN. */
+  if (st == W5100_SN_SR_SOCK_INIT &&
+      (value == W5100_SN_CR_LISTEN || value == W5100_SN_CR_CONNECT) &&
+      (loc <= W5100_SN_DHAR0 || loc == (uint16_t)(W5100_SN_DPORT1 + 1)))
+    return 1;
+  if (st == W5100_SN_SR_CLOSED && value == W5100_SN_CR_OPEN) {
+    uint8_t proto = (uint8_t)(u2_memory[u2_sockets[sock_i].register_address + W5100_SN_MR] & W5100_SN_MR_PROTO_MASK);
+    int stream = proto == W5100_SN_MR_TCP || proto == W5100_SN_MR_UDP;
+    if (loc == W5100_SN_IR &&
+        (stream || proto == W5100_SN_MR_IPRAW))
+      return 2;
+    /* After MACRAW the OPEN byte lands on Sn_SR. Before the port low byte is
+     * stored, that same $01 is local port 49153 and must not open early. */
+    if (loc == W5100_SN_SR && stream && u2_port_ready[sock_i])
+      return 3;
+    if (loc == W5100_SN_SR && proto == W5100_SN_MR_IPRAW)
+      return 4;
+    if (loc == (uint16_t)(W5100_SN_PROTO + 1) && proto == W5100_SN_MR_IPRAW)
+      return 5;
+  }
+  if (value == W5100_SN_CR_SEND &&
+      (st == W5100_SN_SR_ESTABLISHED || st == W5100_SN_SR_SOCK_UDP ||
+       st == W5100_SN_SR_SOCK_IPRAW || st == W5100_SN_SR_SOCK_CLOSE_WAIT) &&
+      (loc == W5100_SN_IR || loc == W5100_SN_SR || loc == W5100_SN_DHAR0 ||
+       loc == (uint16_t)(W5100_SN_DPORT1 + 1) || loc == W5100_SN_RX_RSR0 ||
+       loc == W5100_SN_RX_RSR1))
+    return 6;
+  if ((value == W5100_SN_CR_DISCON || value == W5100_SN_CR_CLOSE) &&
+      (st == W5100_SN_SR_ESTABLISHED || st == W5100_SN_SR_SOCK_CLOSE_WAIT ||
+       st == W5100_SN_SR_SOCK_FIN_WAIT) &&
+      (loc == W5100_SN_IR || loc == W5100_SN_SR || loc == W5100_SN_RX_RSR0 ||
+       loc == W5100_SN_RX_RSR1))
+    return 7;
   return 0;
 }
 
 static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
   uint16_t loc = address & 0xFF;
   int sock_i = (address >> 8) - 0x04;
+  int missed_why = U2_MISSED_CMD_SALVAGE ? u2_missed_command(sock_i, loc, value) : 0;
+  if (missed_why) {
+    U2_BaMissed((uint8_t)missed_why);
+    U2_BaTrigger(U2_BA_T_MISSED);
+    loc = W5100_SN_CR;
+    address = (uint16_t)((address & 0xFF00) | W5100_SN_CR);
+  }
   if (loc == W5100_SN_IR && sock_i >= 0 && sock_i < W5100_NUM_SOCKETS) {
     uint8_t cur = __atomic_load_n(&u2_sn_ir[sock_i], __ATOMIC_ACQUIRE);
     __atomic_store_n(&u2_sn_ir[sock_i], (uint8_t)(cur & (uint8_t)~value), __ATOMIC_RELEASE);
     return;
   }
   u2_memory[address] = value;
+  if (sock_i >= 0 && sock_i < W5100_NUM_SOCKETS && loc == W5100_SN_PORT1)
+    u2_port_ready[sock_i] = 1;
   /* NOTE: Sn_RX_RD byte writes deliberately do NOT publish the core-0 shadow. On a real W5100
    * the host's Sn_RX_RD update only takes effect (Sn_RX_RSR is recomputed) when the RECV command
    * is issued; the shadow is therefore published in the RECV handler below, where both RX_RD bytes
@@ -1416,17 +1770,32 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
   if (loc == W5100_SN_CR) {
     int i = (address >> 8) - 0x04;
     int hold_cr = 0;
+    U2_BaTrace("cr", i, value, (i >= 0 && i < W5100_NUM_SOCKETS) ? (int32_t)u2_sr[i] : -1);
     switch (value) {
     case W5100_SN_CR_OPEN: {
-      uint8_t mr = u2_memory[(address & 0xFF00) + W5100_SN_MR];
-      uint16_t port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
-                    | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
+      uint16_t base = (uint16_t)(address & 0xFF00);
+      uint8_t mr = u2_sn_mr(i, base);
+      uint16_t port = u2_sn_port(i, base);
       /* Hardware resets the socket's ring pointers on OPEN; do the same so a reused socket
        * starts with Sn_RX_RSR=0 (see u2_reset_socket_rings — fixes the Contiki RECV storm). */
       u2_reset_socket_rings(i);
       __atomic_store_n(&u2_sn_ir[i], 0, __ATOMIC_RELEASE);
       uint8_t proto = mr & W5100_SN_MR_PROTO_MASK;
-      if (proto == W5100_SN_MR_MACRAW) {
+      if (proto == W5100_SN_MR_MACRAW && i != 0) {
+        /* W5100 MACRAW is socket 0 only. Do not call U2_Net_OpenMacraw.
+         * A socket that is still open is closed on core 0. */
+        uint8_t st = U2_Net_GetStatus(i);
+        U2_MonSockOpen(i, mr, port, 0);
+        U2_Net_SetStatus(i, W5100_SN_SR_CLOSED);
+        u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
+        if (st != W5100_SN_SR_CLOSED) {
+          u2_defer_t cmd;
+          memset(&cmd, 0, sizeof(cmd));
+          cmd.op = U2_DF_CLOSE;
+          if (u2_defer_arm(i, &cmd) == 0)
+            hold_cr = 1;
+        }
+      } else if (proto == W5100_SN_MR_MACRAW) {
         int ok = (U2_Net_OpenMacraw(i) == 0);
         U2_MonSockOpen(i, mr, port, ok);
         if (ok) {
@@ -1442,9 +1811,9 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
         cmd.op = U2_DF_OPEN;
         cmd.mr = mr;
         cmd.port = port;
-        cmd.proto = u2_memory[(address & 0xFF00) + W5100_SN_PROTO];
-        u2_defer_arm(i, &cmd);
-        hold_cr = 1;
+        cmd.proto = u2_memory[base + W5100_SN_PROTO];
+        if (u2_defer_arm(i, &cmd) == 0)
+          hold_cr = 1;
       } else {
         U2_MonSockOpen(i, mr, port, 0);
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
@@ -1452,43 +1821,39 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
       break;
     }
     case W5100_SN_CR_CONNECT: {
+      uint16_t base = (uint16_t)(address & 0xFF00);
       u2_defer_t cmd;
       memset(&cmd, 0, sizeof(cmd));
       cmd.op = U2_DF_CONNECT;
-      cmd.dip = (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR0] << 24
-              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR1] << 16
-              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR2] << 8
-              | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
-      cmd.dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
-                | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
-      cmd.port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
-               | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
-      u2_defer_arm(i, &cmd);
-      hold_cr = 1;
+      cmd.dip = u2_sn_dip(i, base);
+      cmd.dport = u2_sn_dport(i, base);
+      cmd.port = u2_sn_port(i, base);
+      if (u2_defer_arm(i, &cmd) == 0)
+        hold_cr = 1;
       break;
     }
     case W5100_SN_CR_LISTEN: {
+      uint16_t base = (uint16_t)(address & 0xFF00);
       u2_defer_t cmd;
       memset(&cmd, 0, sizeof(cmd));
       cmd.op = U2_DF_LISTEN;
-      cmd.port = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT0] << 8
-               | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_PORT1];
-      u2_defer_arm(i, &cmd);
-      hold_cr = 1;
+      cmd.port = u2_sn_port(i, base);
+      if (u2_defer_arm(i, &cmd) == 0)
+        hold_cr = 1;
       break;
     }
     case W5100_SN_CR_CLOSE:
     case W5100_SN_CR_DISCON:
       if (U2_Net_GetStatus(i) == W5100_SN_SR_SOCK_MACRAW) {
         U2_MonSockClose(i);
-        U2_Net_Close(i);
+        U2_Net_CloseBus(i);
         u2_memory[(address & 0xFF00) + W5100_SN_SR] = W5100_SN_SR_CLOSED;
       } else {
         u2_defer_t cmd;
         memset(&cmd, 0, sizeof(cmd));
         cmd.op = (value == W5100_SN_CR_DISCON) ? U2_DF_DISCON : U2_DF_CLOSE;
-        u2_defer_arm(i, &cmd);
-        hold_cr = 1;
+        if (u2_defer_arm(i, &cmd) == 0)
+          hold_cr = 1;
       }
       break;
     case W5100_SN_CR_SEND:
@@ -1510,8 +1875,8 @@ static void U2_BUS_RAM(write_socket_register)(uint16_t address, uint8_t value) {
                 | (uint32_t)u2_memory[(address & 0xFF00) + W5100_SN_DIPR3];
         cmd.dport = (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT0] << 8
                   | (uint16_t)u2_memory[(address & 0xFF00) + W5100_SN_DPORT1];
-        u2_defer_arm(i, &cmd);
-        hold_cr = 1;
+        if (u2_defer_arm(i, &cmd) == 0)
+          hold_cr = 1;
       }
       U2_RequestCore0NetPoll();
       break;
@@ -1718,7 +2083,7 @@ static void U2_BUS_RAM(write_value)(uint8_t value) {
   auto_increment();
 }
 
-void U2_SetStationMacFromBytes(const uint8_t mac[6]) {
+void U2_BUS_RAM(U2_SetStationMacFromBytes)(const uint8_t mac[6]) {
   if (!mac)
     return;
   for (int i = 0; i < 6; i++)
@@ -1850,6 +2215,22 @@ void U2_StagePoll(void) {
 }
 
 void U2_AgentLog(const char *hid, const char *msg, int a, int b, int c, int force) {
+#if !UTHERNET2_DEBUG
+  /* Release used to printf these on core 0. A line at 115200 holds that core
+   * long enough that LISTEN, SEND_OK, and the peer FIN land after the 6502
+   * has already sampled Sn_SR / Sn_IR. */
+  (void)hid;
+  (void)force;
+#if U2_BUS_AUDIT
+  U2_BaTrace(msg, a, b, c);
+#else
+  (void)msg;
+  (void)a;
+  (void)b;
+  (void)c;
+#endif
+  return;
+#else
   // #region agent log
   static uint16_t u2_agent_n;
   if (u2_agent_n >= 400)
@@ -1864,14 +2245,17 @@ void U2_AgentLog(const char *hid, const char *msg, int a, int b, int c, int forc
   printf("{\"sessionId\":\"98f944\",\"hypothesisId\":\"%s\",\"location\":\"uthernet2\",\"message\":\"%s\",\"data\":{\"a\":%d,\"b\":%d,\"c\":%d},\"timestamp\":%llu}\n",
          hid, msg, a, b, c, (unsigned long long)(time_us_64() / 1000u));
   // #endregion
+#endif
 }
 
 void U2_Init(void) {
-  /* Socket-mode probe: Release turns UART off. Bring it back here so a few
-   * NDJSON lines are visible on GPIO 0/1 without the Debug monitor flood. */
+#if UTHERNET2_DEBUG
+  /* Debug NDJSON on GPIO 0/1. Release leaves UART off: printf on core 0
+   * was late for Sn_IR and the peer FIN. */
   stdio_uart_init();
   stdio_set_driver_enabled(&stdio_uart, true);
   setbuf(stdout, NULL);
+#endif
 #if U2_RX_AUDIT
   /* The audit must run in a Release build to keep the bus path's normal timing, but Release
    * disables UART stdio (main.c) leaving only USB CDC — and a connected USB console gates the
@@ -1881,6 +2265,7 @@ void U2_Init(void) {
   stdio_set_driver_enabled(&stdio_uart, true);
   setbuf(stdout, NULL);
 #endif
+  U2_BaInit();
   U2_DEBUGF("init\n");
   U2_MonInit();
 #if UTHERNET2_DEBUG
@@ -1889,6 +2274,7 @@ void U2_Init(void) {
 #endif
   u2_data_address = 0;
   U2_Net_Init(u2_push_rx, u2_push_rx_macraw);
+  u2_build_template();
   u2_reset();
   // #region agent log
   U2_AgentLog("H5", "boot", 0, 0, 0, 1);
@@ -1909,6 +2295,8 @@ void U2_RequestCore0NetPoll(void) {}
 #endif
 
 volatile bool u2_core0_net_wake_pending;
+
+uint32_t U2_BusCycleCount(void) { return u2_bus_n; }
 
 void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
   u2_bus_n++;
@@ -2008,3 +2396,10 @@ void U2_BUS_RAM(U2_HandleBusAccess)(uint32_t busdata, uint8_t *read_byte_out) {
     u2_cyc_i = (uint8_t)(i + 1u);
   }
 }
+
+#if U2_BUS_AUDIT
+uint32_t U2_BaSipr(void) {
+  return (uint32_t)u2_memory[W5100_SIPR0] | ((uint32_t)u2_memory[W5100_SIPR0 + 1] << 8) |
+         ((uint32_t)u2_memory[W5100_SIPR0 + 2] << 16) | ((uint32_t)u2_memory[W5100_SIPR0 + 3] << 24);
+}
+#endif

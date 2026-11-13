@@ -50,6 +50,23 @@
 #define LWIP_UDP                    1
 #define LWIP_DNS                    1
 #define LWIP_TCP_KEEPALIVE          1
+/* tcp_bind()/tcp_connect() only honour SOF_REUSEADDR when this is 1. The emulation sets
+ * SOF_REUSEADDR on its pcbs (a W5100 does not refuse a source port that an old connection or a
+ * second socket still uses), but with SO_REUSE=0 the bind returned ERR_USE (b148 trace
+ * "syn a=2 b=-8"). pcbs that do not set the option are unaffected. */
+#define SO_REUSE                    1
+
+/* Audit image only: report an lwIP assertion on the audit UART before the chip stops (docs 1ex). */
+#if defined(U2_BUS_AUDIT) && U2_BUS_AUDIT
+#ifdef __cplusplus
+extern "C" {
+#endif
+void u2_ba_lwip_assert(const char *msg, const char *file, int line) __attribute__((noreturn));
+#ifdef __cplusplus
+}
+#endif
+#define LWIP_PLATFORM_ASSERT(x) u2_ba_lwip_assert((x), __FILE__, __LINE__)
+#endif
 #define LWIP_NETIF_TX_SINGLE_PBUF   1
 #define DHCP_DOES_ARP_CHECK         0
 #define LWIP_DHCP_DOES_ACD_CHECK    0

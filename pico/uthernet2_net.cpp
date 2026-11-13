@@ -3,9 +3,13 @@
  * UDP uses NetworkPump::CreateUdpPcb; U2_Net_Poll drives shared NetworkPump_PollOnce.
  * TCP uses per-pcb U2TcpArg (lwIP tcp_err does not pass pcb).
  */
+#define U2_FILE_ID 1
+#include "u2_lockdbg.h"
 #include "uthernet2_net.h"
 #include "uthernet2.h"
 #include "u2_monitor.h"
+#include "u2_busaudit.h"
+#include "u2_busram.h"
 #include "w5100_regs.h"
 #include "network.h"
 #include "network_pump.h"
@@ -16,6 +20,7 @@
 #include "cyw43.h"
 #include "lwip/udp.h"
 #include "lwip/tcp.h"
+#include "lwip/priv/tcp_priv.h"
 #include "lwip/raw.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
@@ -67,6 +72,7 @@ typedef struct {
   uint8_t silent_abort;  /* CLOSE / reset: tcp_err must not raise TIMEOUT */
   uint8_t need_close;    /* core 1 asked core 0 to free the pcb */
   uint8_t retire_listen; /* accepted one child; drop the listen pcb */
+  uint8_t born_epoch;    /* U2_CmdEpoch() when this pcb was opened. Reset closes older ones. */
   uint8_t hold_noted;   /* one UART line while a hold cannot enter the ring */
   struct pbuf *hold;     /* TCP bytes ACKed but not yet in the W5100 ring */
 } u2_net_socket_t;
@@ -74,8 +80,23 @@ typedef struct {
 static u2_push_rx_fn push_rx_cb;
 static u2_push_rx_macraw_fn push_rx_macraw_cb;
 static netif_input_fn u2_saved_netif_input;
+/* First real STA input. u2_saved_netif_input is cleared once MACRAW ends, and
+ * a second hook install then has nothing to put back. */
+static netif_input_fn u2_sta_input_real;
+/* Core 1 asks core 0 to install (1) or restore (0) sta->input. Never written from the bus loop
+ * under the lwIP lock: a core-1 cyw43_arch_lwip_begin stalls the PIO prefetch. */
+static uint8_t u2_macraw_hook;
+static volatile uint8_t u2_net_reset_pending;
 static u2_net_socket_t sockets[U2_NET_MAX_SOCKETS];
-static critical_section_t u2_macraw_tx_cs;
+/* Plain spin lock (inline SDK primitives only) instead of critical_section_t: the bus core takes
+ * this lock from SRAM, and critical_section_enter_blocking is flash code (section 1ev). */
+static spin_lock_t *u2_macraw_tx_lock;
+static inline __attribute__((always_inline)) uint32_t u2_tx_lock(void) {
+  return spin_lock_blocking(u2_macraw_tx_lock);
+}
+static inline __attribute__((always_inline)) void u2_tx_unlock(uint32_t s) {
+  spin_unlock(u2_macraw_tx_lock, s);
+}
 
 typedef struct {
   int sock;
@@ -107,7 +128,7 @@ static Uthernet2Session g_u2_session;
 /** Always use the CYW43 STA netif (`w0`), not netif_default/netif_list: cyw43_lwip calls
  * netif_set_default() for each netif; if AP (`w1`) is up, default becomes AP and linkoutput
  * would send on the wrong interface. MACRAW RX hook must also attach to STA->input. */
-static struct netif *u2_cyw43_sta_netif(void) { return &cyw43_state.netif[CYW43_ITF_STA]; }
+static inline __attribute__((always_inline)) struct netif *u2_cyw43_sta_netif(void) { return &cyw43_state.netif[CYW43_ITF_STA]; }
 
 #if U2_ETH_HEADER_TRACE
 /* UART “poor man’s tcpdump”: first 64 bytes per frame (Eth 14 + IPv4 20 + TCP/UDP start). */
@@ -280,7 +301,7 @@ static int u2_pnat_rx_match(uint16_t dport) {
   return 0;
 }
 
-static void u2_pnat_reset(void) {
+static void U2_BUS_RAM(u2_pnat_reset)(void) {
   u2_pnat_used = 0;
   u2_pnat_wire = 0;
   u2_pnat_rx_n = 0;
@@ -337,18 +358,21 @@ static void u2_pnat_rx(uint8_t *eth, uint16_t len) {
   u2_tcp_csum_replace2(tcp, dport, U2_PNAT_HOST);
 }
 
-static void set_status(int i, uint8_t s) {
-  if (i >= 0 && i < U2_NET_MAX_SOCKETS)
+static void U2_BUS_RAM(set_status)(int i, uint8_t s) {
+  if (i >= 0 && i < U2_NET_MAX_SOCKETS) {
+    U2_BaTrace("st", i, s, sockets[i].status);
     __atomic_store_n(&sockets[i].status, s, __ATOMIC_RELEASE);
+    U2_SrPublish(i, s);
+  }
 }
 
-static uint8_t get_status(int i) {
+static uint8_t U2_BUS_RAM(get_status)(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return W5100_SN_SR_CLOSED;
   return __atomic_load_n(&sockets[i].status, __ATOMIC_ACQUIRE);
 }
 
-static int u2_need_close(int i) {
+static int U2_BUS_RAM(u2_need_close)(int i) {
   return __atomic_load_n(&sockets[i].need_close, __ATOMIC_ACQUIRE) != 0;
 }
 
@@ -358,10 +382,22 @@ static void u2_release_tcp_arg(struct tcp_pcb *pcb) {
   void *arg = pcb->callback_arg;
   GetNetworkPump().UnregisterTcpPcb(pcb);
   tcp_arg(pcb, nullptr);
-  tcp_recv(pcb, nullptr);
-  tcp_err(pcb, nullptr);
+  /* lwIP asserts (LWIP_ASSERT -> panic) if tcp_recv/tcp_err/tcp_sent/tcp_poll is called on a
+   * LISTEN pcb. A listener only has arg and accept. */
+  if (pcb->state != LISTEN) {
+    tcp_recv(pcb, nullptr);
+    tcp_err(pcb, nullptr);
+  }
   tcp_accept(pcb, nullptr);
   delete static_cast<U2TcpArg *>(arg);
+}
+
+/* tcp_abort() asserts on a LISTEN pcb (panic); a listener is released with tcp_close(). */
+static void u2_tcp_kill(struct tcp_pcb *pcb) {
+  if (pcb->state == LISTEN)
+    tcp_close(pcb);
+  else
+    tcp_abort(pcb);
 }
 
 static void u2_attach_tcp_pcb(struct tcp_pcb *pcb, int i);
@@ -381,6 +417,9 @@ extern "C" err_t u2_tcp_connected_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
     return ERR_ARG;
   if (u2_need_close(i))
     return ERR_ABRT;
+  /* A SYN-ACK for a pcb this socket no longer owns must not rewrite Sn_SR. */
+  if (tpcb && sockets[i].pcb.tcp != tpcb && sockets[i].tcp_connected != tpcb)
+    return ERR_OK;
   if (err == ERR_OK) {
     set_status(i, W5100_SN_SR_ESTABLISHED);
     if (sockets[i].nd)
@@ -548,13 +587,23 @@ extern "C" void u2_tcp_err(void *arg, err_t err) {
   delete a;
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return;
+  int owned = 0;
   if (dead) {
     GetNetworkPump().UnregisterTcpPcb(dead);
-    if (sockets[i].tcp_connected == dead)
+    if (sockets[i].tcp_connected == dead) {
       sockets[i].tcp_connected = nullptr;
-    if (sockets[i].pcb.tcp == dead)
+      owned = 1;
+    }
+    if (sockets[i].pcb.tcp == dead) {
       sockets[i].pcb.tcp = nullptr;
+      owned = 1;
+    }
+  } else {
+    owned = 1;
   }
+  /* The slot may already hold the next test's pcb. Closing that status is the $00 row. */
+  if (!owned && (sockets[i].pcb.tcp || sockets[i].tcp_connected))
+    return;
   uint8_t silent = sockets[i].silent_abort;
   uint8_t fin = sockets[i].tx_fin_sent;
   sockets[i].silent_abort = 0;
@@ -576,6 +625,7 @@ extern "C" void u2_tcp_err(void *arg, err_t err) {
 
 extern "C" err_t u2_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err) {
   auto *a = static_cast<U2TcpArg *>(arg);
+  U2_BaTrace("accept", a ? a->sock_index : -1, (int32_t)err, newpcb ? (int32_t)newpcb->remote_port : 0);
   if (!a || !newpcb)
     return ERR_VAL;
   int i = a->sock_index;
@@ -600,6 +650,11 @@ static void u2_attach_tcp_pcb(struct tcp_pcb *pcb, int i) {
   auto *a = new U2TcpArg{i, pcb};
   GetNetworkPump().RegisterTcpPcbOwner(pcb, &g_u2_session);
   tcp_arg(pcb, a);
+  /* b151 audit: core 0 died here for every LISTEN. lwIP's tcp_recv()/tcp_err() assert
+   * "invalid socket state for recv/err callback" when pcb->state == LISTEN, and LWIP_ASSERT is
+   * panic() on this build. A listener needs only arg (and accept, set by the caller). */
+  if (pcb->state == LISTEN)
+    return;
   tcp_recv(pcb, u2_tcp_recv);
   tcp_err(pcb, u2_tcp_err);
 }
@@ -614,7 +669,8 @@ void Uthernet2Session::OnUdpRecvPbuf(struct udp_pcb *pcb, struct pbuf *p, const 
       break;
     }
   }
-  if (i < 0)
+  U2_BaTrace(i < 0 ? "udp_rx_nosock" : "udp_rx", i, (int32_t)p->tot_len, (int32_t)port);
+  if (i < 0 || u2_need_close(i))
     return;
   if (push_rx_cb && p->tot_len > 0) {
     uint16_t len = (uint16_t)p->tot_len;
@@ -644,8 +700,12 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
   const bool legacy = GetNetworkPump().IsLegacyOperationActive();
   const bool macraw0 = (sockets[0].type == PCB_MACRAW && push_rx_macraw_cb);
 
-  /* Native MegaFlash (NTP/TFTP/TestWifi): lwIP owns STA ingress; do not copy into ip65 ring. */
-  if (legacy) {
+  /* Native MegaFlash (NTP/TFTP/TestWifi): lwIP owns STA ingress; do not copy into ip65 ring.
+   * Only while the Apple's MACRAW socket is closed (section 1ev). An NTP attempt that was already
+   * running (or a Wi-Fi retry) used to take every frame for its whole duration, so a MACRAW OPEN
+   * during it received no DHCP/ARP replies at all: the same build then passed or failed depending
+   * on boot-time NTP luck. With MACRAW open the Apple wins and the native op just times out. */
+  if (legacy && !macraw0) {
     if (u2_saved_netif_input)
       return u2_saved_netif_input(p, inp);
     pbuf_free(p);
@@ -669,6 +729,8 @@ static err_t u2_netif_input_wrapper(struct pbuf *p, struct netif *inp) {
 
   if (u2_saved_netif_input)
     return u2_saved_netif_input(p, inp);
+  if (u2_sta_input_real)
+    return u2_sta_input_real(p, inp);
   pbuf_free(p);
   return ERR_ARG;
 }
@@ -679,27 +741,53 @@ extern "C" {
 
 static bool u2_send_macraw_core0(int i, const uint8_t *data, uint16_t len);
 
-static void u2_macraw_tx_queue_clear(void) {
-  critical_section_enter_blocking(&u2_macraw_tx_cs);
+static void U2_BUS_RAM(u2_macraw_tx_queue_clear)(void) {
+  uint32_t sv = u2_tx_lock();
   u2_macraw_tx_q_head = 0;
   u2_macraw_tx_q_count = 0;
-  critical_section_exit(&u2_macraw_tx_cs);
+  u2_tx_unlock(sv);
 }
 
-static bool u2_macraw_tx_queue_enqueue(int sock, const uint8_t *data, uint16_t len) {
-  critical_section_enter_blocking(&u2_macraw_tx_cs);
+/* SRAM-only copy (newlib memcpy is flash). Unaligned 32-bit accesses are legal on Cortex-M33. */
+typedef uint32_t __attribute__((may_alias, aligned(1))) u2_u32u_t;
+static inline __attribute__((always_inline)) void u2_ram_copy(uint8_t *d, const uint8_t *s, uint32_t n) {
+  while (n >= 4u) {
+    *(u2_u32u_t *)d = *(const u2_u32u_t *)s;
+    d += 4;
+    s += 4;
+    n -= 4u;
+  }
+  while (n--)
+    *d++ = *s++;
+}
+
+/* Bus core: ring (power-of-two size mask+1, wrapping) -> queue slot, one copy, SRAM only. */
+int U2_BUS_RAM(U2_Net_SendMacrawRing)(int i, const uint8_t *ring, uint16_t mask, uint16_t start,
+                                      uint16_t len) {
+  if ((unsigned)i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_MACRAW || !ring || len == 0 ||
+      len > U2_MACRAW_MAX_FRAME)
+    return -1;
+  uint32_t sv = u2_tx_lock();
   if (u2_macraw_tx_q_count >= U2_MACRAW_TX_Q_DEPTH) {
     u2_macraw_tx_q_drop++;
-    critical_section_exit(&u2_macraw_tx_cs);
-    return false;
+    u2_tx_unlock(sv);
+    return -1;
   }
   uint8_t tail = (uint8_t)((u2_macraw_tx_q_head + u2_macraw_tx_q_count) % U2_MACRAW_TX_Q_DEPTH);
-  u2_macraw_tx_q[tail].sock = sock;
+  u2_macraw_tx_q[tail].sock = i;
   u2_macraw_tx_q[tail].len = len;
-  memcpy(u2_macraw_tx_q[tail].data, data, len);
+  uint8_t *dst = u2_macraw_tx_q[tail].data;
+  uint16_t off = (uint16_t)(start & mask);
+  uint32_t first = (uint32_t)mask + 1u - off;
+  if (first >= len) {
+    u2_ram_copy(dst, ring + off, len);
+  } else {
+    u2_ram_copy(dst, ring + off, first);
+    u2_ram_copy(dst + first, ring, (uint32_t)(len - first));
+  }
   u2_macraw_tx_q_count++;
-  critical_section_exit(&u2_macraw_tx_cs);
-  return true;
+  u2_tx_unlock(sv);
+  return 0;
 }
 
 static void u2_macraw_tx_drain(void) {
@@ -707,9 +795,9 @@ static void u2_macraw_tx_drain(void) {
     int sock;
     uint16_t len;
     uint8_t buf[U2_MACRAW_MAX_FRAME];
-    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    uint32_t sv = u2_tx_lock();
     if (u2_macraw_tx_q_count == 0) {
-      critical_section_exit(&u2_macraw_tx_cs);
+      u2_tx_unlock(sv);
       break;
     }
     sock = u2_macraw_tx_q[u2_macraw_tx_q_head].sock;
@@ -717,19 +805,19 @@ static void u2_macraw_tx_drain(void) {
     memcpy(buf, u2_macraw_tx_q[u2_macraw_tx_q_head].data, len);
     /* Peek only: pop after linkoutput succeeds so a failed send retries the same frame.
      * Do not emit twice — one copy, one drain attempt per poll slot. */
-    critical_section_exit(&u2_macraw_tx_cs);
+    u2_tx_unlock(sv);
 
-    cyw43_arch_lwip_begin();
+    U2_LWIP_BEGIN();
     bool ok = u2_send_macraw_core0(sock, buf, len);
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
 
     if (!ok)
       break;
 
-    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    uint32_t sv2 = u2_tx_lock();
     u2_macraw_tx_q_head = (uint8_t)((u2_macraw_tx_q_head + 1) % U2_MACRAW_TX_Q_DEPTH);
     u2_macraw_tx_q_count--;
-    critical_section_exit(&u2_macraw_tx_cs);
+    u2_tx_unlock(sv2);
   }
 }
 
@@ -783,31 +871,38 @@ void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
   push_rx_cb = push_rx;
   push_rx_macraw_cb = push_rx_macraw;
   memset(sockets, 0, sizeof(sockets));
-  critical_section_init(&u2_macraw_tx_cs);
+  if (!u2_macraw_tx_lock)
+    u2_macraw_tx_lock = spin_lock_init((uint)spin_lock_claim_unused(true));
   u2_macraw_tx_queue_clear();
   u2_macraw_tx_q_drop = 0;
   u2_macraw_tx_lo_err = 0;
   u2_macraw_tx_pbuf_fail = 0;
   u2_macraw_tx_stats_next = make_timeout_time_ms(10000);
+  u2_macraw_hook = 0;
+  u2_saved_netif_input = NULL;
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++)
-    sockets[i].status = W5100_SN_SR_CLOSED;
+    set_status(i, W5100_SN_SR_CLOSED);
   GetNetworkPump().AddSession(&g_u2_session);
 }
 
-int U2_Net_OpenMacraw(int i) {
+int U2_BUS_RAM(U2_Net_OpenMacraw)(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return -1;
-  U2_Net_Close(i);
+  U2_Net_CloseBus(i);
+  /* A TCP/UDP/IPRAW pcb is still core 0's. Overwriting the union here would leak it. */
+  if (sockets[i].type != PCB_NONE || u2_need_close(i))
+    return -1;
   sockets[i].type = PCB_MACRAW;
-  sockets[i].status = W5100_SN_SR_SOCK_MACRAW;
+  sockets[i].born_epoch = U2_CmdEpoch();
+  set_status(i, W5100_SN_SR_SOCK_MACRAW);
   /* ip65 DHCP uses MACRAW with Ethernet SA = SHAR. CYW43 transmits frames as-is; APs expect
    * Ethernet source MAC == STA hwaddr. Align SHAR (and TX SA below) with lwIP netif. */
   struct netif *sta = u2_cyw43_sta_netif();
   if (cyw43_is_initialized(&cyw43_state) && sta->hwaddr_len == 6)
     U2_SetStationMacFromBytes(sta->hwaddr);
-  if (i == 0 && cyw43_is_initialized(&cyw43_state) && sta->input && !u2_saved_netif_input) {
-    u2_saved_netif_input = sta->input;
-    sta->input = u2_netif_input_wrapper;
+  if (i == 0) {
+    __atomic_store_n(&u2_macraw_hook, 1, __ATOMIC_RELEASE);
+    U2_RequestCore0NetPoll();
   }
   return 0;
 }
@@ -816,17 +911,14 @@ int U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_MACRAW || !data || len == 0 ||
       len > U2_MACRAW_MAX_FRAME)
     return -1;
-  if (get_core_num() != 0) {
-    if (!u2_macraw_tx_queue_enqueue(i, data, len))
-      return -1;
-    return 0;
-  }
-  cyw43_arch_lwip_begin();
+  if (get_core_num() != 0)
+    return U2_Net_SendMacrawRing(i, data, 0xFFFFu, 0, len);
+  U2_LWIP_BEGIN();
 #if U2_ETH_HEADER_TRACE
   u2_eth_trace_tap("direct", data, len);
 #endif
   bool ok = u2_send_macraw_core0(i, data, len);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   return ok ? 0 : -1;
 }
 
@@ -843,13 +935,13 @@ static void u2_net_close_core0(int i);
 static bool u2_lwip_enter(void) {
   if (!cyw43_is_initialized(&cyw43_state))
     return false;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   return true;
 }
 
 static void u2_lwip_exit(bool held) {
   if (held)
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
 }
 
 static void u2_free_pending(int i) {
@@ -866,13 +958,13 @@ static void u2_free_pending(int i) {
     struct tcp_pcb *c = sockets[i].pend_conn;
     sockets[i].pend_conn = nullptr;
     u2_release_tcp_arg(c);
-    tcp_abort(c);
+    u2_tcp_kill(c);
   }
   if (sockets[i].pend_tcp) {
     struct tcp_pcb *t = sockets[i].pend_tcp;
     sockets[i].pend_tcp = nullptr;
     u2_release_tcp_arg(t);
-    tcp_abort(t);
+    u2_tcp_kill(t);
   }
   if (sockets[i].pend_udp) {
     struct udp_pcb *u = sockets[i].pend_udp;
@@ -886,34 +978,55 @@ static void u2_free_pending(int i) {
     raw_remove(r);
   }
   sockets[i].silent_abort = 0;
+  sockets[i].born_epoch = 0;
   u2_lwip_exit(true);
   __atomic_store_n(&sockets[i].need_close, 0, __ATOMIC_RELEASE);
+}
+
+void U2_BUS_RAM(U2_Net_RequestReset)(void) {
+  __atomic_store_n(&u2_net_reset_pending, 1, __ATOMIC_RELEASE);
+  U2_RequestCore0NetPoll();
+}
+
+/* Bus core (core 1). Never takes the lwIP lock: cyw43_arch_lwip_begin from here stalls the PIO
+ * prefetch (Sn_CR comes back as the mode byte $03) and can run while core 0 is inside the pcb.
+ * A live pcb is not touched; it is flagged for core 0 (need_close / silent_abort). */
+void U2_BUS_RAM(U2_Net_CloseBus)(int i) {
+  if (i < 0 || i >= U2_NET_MAX_SOCKETS)
+    return;
+  U2_BaTrace("closeBus", i, sockets[i].type, sockets[i].status);
+  if (sockets[i].type == PCB_MACRAW) {
+    sockets[i].type = PCB_NONE;
+    sockets[i].tx_fin_sent = 0;
+    sockets[i].retire_listen = 0;
+    set_status(i, W5100_SN_SR_CLOSED);
+    u2_macraw_tx_queue_clear();
+    u2_pnat_reset();
+    if (i == 0)
+      __atomic_store_n(&u2_macraw_hook, 0, __ATOMIC_RELEASE);
+    if (sockets[i].hold)
+      __atomic_store_n(&sockets[i].need_close, 1, __ATOMIC_RELEASE);
+    U2_RequestCore0NetPoll();
+    return;
+  }
+  if (sockets[i].type == PCB_TCP || sockets[i].type == PCB_UDP || sockets[i].type == PCB_IPRAW) {
+    sockets[i].silent_abort = 1;
+    set_status(i, W5100_SN_SR_CLOSED);
+    __atomic_store_n(&sockets[i].need_close, 1, __ATOMIC_RELEASE);
+    U2_RequestCore0NetPoll();
+    return;
+  }
+  set_status(i, W5100_SN_SR_CLOSED);
+  if (i == 0 && u2_saved_netif_input)
+    __atomic_store_n(&u2_macraw_hook, 0, __ATOMIC_RELEASE);
+  U2_RequestCore0NetPoll();
 }
 
 void U2_Net_Close(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return;
-  /* lwIP pcbs are freed on core 0. Detach them here so a following OPEN can reuse the slot. */
-  if (get_core_num() != 0 &&
-      (sockets[i].type == PCB_TCP || sockets[i].type == PCB_UDP || sockets[i].type == PCB_IPRAW)) {
-    sockets[i].silent_abort = 1;
-    if (sockets[i].type == PCB_TCP) {
-      sockets[i].pend_tcp = sockets[i].pcb.tcp;
-      sockets[i].pend_conn = sockets[i].tcp_connected;
-      sockets[i].pcb.tcp = nullptr;
-      sockets[i].tcp_connected = nullptr;
-    } else if (sockets[i].type == PCB_UDP) {
-      sockets[i].pend_udp = sockets[i].pcb.udp;
-      sockets[i].pcb.udp = nullptr;
-    } else {
-      sockets[i].pend_raw = sockets[i].raw;
-      sockets[i].raw = nullptr;
-    }
-    sockets[i].type = PCB_NONE;
-    sockets[i].tx_fin_sent = 0;
-    sockets[i].retire_listen = 0;
-    __atomic_store_n(&sockets[i].need_close, 1, __ATOMIC_RELEASE);
-    set_status(i, W5100_SN_SR_CLOSED);
+  if (get_core_num() != 0) {
+    U2_Net_CloseBus(i);
     return;
   }
   u2_net_close_core0(i);
@@ -922,16 +1035,28 @@ void U2_Net_Close(int i) {
 static void u2_net_close_core0(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return;
+  U2_BaTrace("close0", i, sockets[i].type, sockets[i].status);
   __atomic_store_n(&sockets[i].need_close, 0, __ATOMIC_RELEASE);
+  if (sockets[i].type == PCB_MACRAW && i == 0)
+    __atomic_store_n(&u2_macraw_hook, 0, __ATOMIC_RELEASE);
   bool held = u2_lwip_enter();
-  if (i == 0 && u2_saved_netif_input && held) {
-    u2_cyw43_sta_netif()->input = u2_saved_netif_input;
+  if (i == 0 && held &&
+      __atomic_load_n(&u2_macraw_hook, __ATOMIC_ACQUIRE) == 0) {
+    struct netif *sta = u2_cyw43_sta_netif();
+    netif_input_fn real = u2_saved_netif_input;
+    if (!real || real == u2_netif_input_wrapper)
+      real = u2_sta_input_real;
+    if (real && sta->input == u2_netif_input_wrapper)
+      sta->input = real;
     u2_saved_netif_input = NULL;
   }
   u2_net_socket_t *s = &sockets[i];
   if (s->type == PCB_UDP && s->pcb.udp) {
-    if (held)
+    if (held) {
+      U2_MARK();
       GetNetworkPump().DestroyUdpPcb(s->pcb.udp);
+      U2_MARK();
+    }
     s->pcb.udp = NULL;
   } else if (s->type == PCB_TCP) {
     s->silent_abort = 1;
@@ -939,23 +1064,31 @@ static void u2_net_close_core0(int i) {
       struct tcp_pcb *c = s->tcp_connected;
       s->tcp_connected = NULL;
       if (held) {
+        U2_MARK();
         u2_release_tcp_arg(c);
-        tcp_abort(c);
+        U2_MARK();
+        u2_tcp_kill(c);
+        U2_MARK();
       }
     }
     if (s->pcb.tcp) {
       struct tcp_pcb *t = s->pcb.tcp;
       s->pcb.tcp = NULL;
       if (held) {
+        U2_MARK();
         u2_release_tcp_arg(t);
-        tcp_abort(t);
+        U2_MARK();
+        u2_tcp_kill(t);
+        U2_MARK();
       }
     }
     s->silent_abort = 0;
   } else if (s->type == PCB_IPRAW && s->raw) {
     if (held) {
+      U2_MARK();
       raw_recv(s->raw, nullptr, nullptr);
       raw_remove(s->raw);
+      U2_MARK();
     }
     s->raw = NULL;
   } else if (s->type == PCB_MACRAW) {
@@ -971,6 +1104,7 @@ static void u2_net_close_core0(int i) {
   }
   s->hold_noted = 0;
   s->type = PCB_NONE;
+  s->born_epoch = 0;
   set_status(i, W5100_SN_SR_CLOSED);
   u2_lwip_exit(held);
 }
@@ -989,19 +1123,36 @@ int U2_Net_DisconTcp(int i) {
   if (st != W5100_SN_SR_ESTABLISHED && st != W5100_SN_SR_SOCK_CLOSE_WAIT &&
       st != W5100_SN_SR_SOCK_FIN_WAIT && st != W5100_SN_SR_SOCK_LAST_ACK)
     return -1;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   sockets[i].tx_fin_sent = 1;
   err_t e = tcp_shutdown(pcb, 0, 1);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   if (e != ERR_OK) {
     sockets[i].tx_fin_sent = 0;
     u2_net_close_core0(i);
     U2_SocketIrq(i, W5100_SN_IR_TIMEOUT);
     return -1;
   }
-  if (st == W5100_SN_SR_SOCK_CLOSE_WAIT)
-    set_status(i, W5100_SN_SR_SOCK_LAST_ACK);
-  else if (st == W5100_SN_SR_ESTABLISHED)
+  if (st == W5100_SN_SR_SOCK_CLOSE_WAIT) {
+    /* Peer already FINed. The FIN is queued. The IIGS reads Sn_SR as soon as
+     * DISCON's command byte clears, and that read is CLOSED. LAST_ACK is
+     * still the pcb's state until the ACK; publishing it here is what left
+     * $0212 and $0213 at $1D. Drop our pointer so that ACK cannot write $00
+     * onto the next test's socket. */
+    set_status(i, W5100_SN_SR_CLOSED);
+    if (sockets[i].tcp_connected == pcb)
+      sockets[i].tcp_connected = nullptr;
+    if (sockets[i].pcb.tcp == pcb)
+      sockets[i].pcb.tcp = nullptr;
+    /* Park it for u2_free_pending. Leaving it only on lwIP's list leaked the
+     * pcb: the slot type is NONE, so reset skipped it. */
+    sockets[i].pend_tcp = pcb;
+    if (sockets[i].type == PCB_TCP)
+      sockets[i].type = PCB_NONE;
+    sockets[i].tx_fin_sent = 0;
+    return 0;
+  }
+  if (st == W5100_SN_SR_ESTABLISHED)
     set_status(i, W5100_SN_SR_SOCK_FIN_WAIT);
   return 0;
 }
@@ -1015,6 +1166,7 @@ int U2_Net_OpenUdp(int i, uint16_t local_port) {
     return -1;
   sockets[i].pcb.udp = pcb;
   sockets[i].type = PCB_UDP;
+  sockets[i].born_epoch = U2_CmdEpoch();
   return 0;
 }
 
@@ -1055,10 +1207,10 @@ int U2_Net_OpenIpraw(int i, uint8_t proto) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return -1;
   U2_Net_Close(i);
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   struct raw_pcb *pcb = raw_new(proto);
   if (!pcb) {
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return -1;
   }
   ip_addr_t any;
@@ -1067,7 +1219,8 @@ int U2_Net_OpenIpraw(int i, uint8_t proto) {
   raw_recv(pcb, u2_raw_recv, (void *)(uintptr_t)(i + 1));
   sockets[i].raw = pcb;
   sockets[i].type = PCB_IPRAW;
-  cyw43_arch_lwip_end();
+  sockets[i].born_epoch = U2_CmdEpoch();
+  U2_LWIP_END();
   return 0;
 }
 
@@ -1083,21 +1236,77 @@ void U2_Net_SetTcpNoDelay(int i, int enable) {
     tcp_nagle_disable(pcb);
 }
 
+static int u2_tcp_still_installed(struct tcp_pcb *pcb) {
+  for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
+    if (sockets[i].pcb.tcp == pcb || sockets[i].tcp_connected == pcb ||
+        sockets[i].pend_tcp == pcb || sockets[i].pend_conn == pcb)
+      return 1;
+  }
+  return 0;
+}
+
+/* A DISCON that already published CLOSED, or a listen that lost its slot,
+ * still occupies a TCP pcb. tcp_new then fails and the next OPEN stays $00. */
+static void u2_reclaim_orphan_tcp(void) {
+  struct tcp_pcb *lists[4];
+  lists[0] = tcp_active_pcbs;
+  lists[1] = tcp_tw_pcbs;
+  lists[2] = tcp_bound_pcbs;
+  lists[3] = tcp_listen_pcbs.pcbs;
+  struct tcp_pcb *doomed[8];
+  int n = 0;
+  for (int L = 0; L < 4 && n < 8; L++) {
+    for (struct tcp_pcb *p = lists[L]; p && n < 8; p = p->next) {
+      auto *a = static_cast<U2TcpArg *>(p->callback_arg);
+      if (!a || a->pcb != p)
+        continue;
+      if (a->sock_index < 0 || a->sock_index >= U2_NET_MAX_SOCKETS)
+        continue;
+      if (u2_tcp_still_installed(p))
+        continue;
+      doomed[n++] = p;
+    }
+  }
+  for (int i = 0; i < n; i++) {
+    struct tcp_pcb *p = doomed[i];
+    if (p->state == LISTEN) {
+      void *arg = p->callback_arg;
+      tcp_arg(p, nullptr);
+      tcp_accept(p, nullptr);
+      delete static_cast<U2TcpArg *>(arg);
+      u2_tcp_kill(p);
+    } else {
+      u2_release_tcp_arg(p);
+      u2_tcp_kill(p);
+    }
+  }
+}
+
 int U2_Net_OpenTcp(int i) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS)
     return -1;
   U2_Net_Close(i);
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
+  U2_MARK();
   struct tcp_pcb *pcb = tcp_new();
   if (!pcb) {
-    cyw43_arch_lwip_end();
+    U2_MARK();
+    u2_reclaim_orphan_tcp();
+    U2_MARK();
+    pcb = tcp_new();
+  }
+  U2_MARK();
+  if (!pcb) {
+    U2_BaTrace("tcp_new_FAIL", i, 0, 0);
+    U2_LWIP_END();
     return -1;
   }
   u2_attach_tcp_pcb(pcb, i);
   sockets[i].pcb.tcp = pcb;
   sockets[i].tcp_connected = NULL;
   sockets[i].type = PCB_TCP;
-  cyw43_arch_lwip_end();
+  sockets[i].born_epoch = U2_CmdEpoch();
+  U2_LWIP_END();
   return 0;
 }
 
@@ -1105,15 +1314,20 @@ int U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_
   int why = 0;
   err_t err = ERR_OK;
   int link = -1;
+  uint8_t ep0 = U2_CmdEpoch();
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_TCP || !sockets[i].pcb.tcp)
     why = 1;
   else {
     ip_addr_t addr;
     IP4_ADDR(&addr, (dest_ip_net >> 24) & 0xFF, (dest_ip_net >> 16) & 0xFF, (dest_ip_net >> 8) & 0xFF,
              dest_ip_net & 0xFF);
-    cyw43_arch_lwip_begin();
+    U2_LWIP_BEGIN();
     link = (int)cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
     if (local_port != 0) {
+      /* $0202 and $0203 both bind local port 50023. A pcb still in TIME_WAIT
+       * from the previous test would make the second bind fail and the row
+       * stay CLOSED. */
+      ip_set_option(sockets[i].pcb.tcp, SOF_REUSEADDR);
       err_t br = tcp_bind(sockets[i].pcb.tcp, IP4_ADDR_ANY, local_port);
       if (br != ERR_OK) {
         err = br;
@@ -1127,7 +1341,10 @@ int U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_
       if (err == ERR_OK) {
         int sz = 0, live = 0, sh = 0;
         U2_RxDebugStat(i, &sz, &live, &sh);
-        if (sz > 1) {
+        /* An 8K socket is already TCP_WND. Shrinking it by one byte leaves
+         * rcv_ann_right_edge one past rcv_wnd. Leave the window tcp_connect
+         * installed. A 2K socket still has to advertise the socket, not 8K. */
+        if (sz > 1 && sz < TCP_WND) {
           tcpwnd_size_t w = (tcpwnd_size_t)(sz - 1);
           sockets[i].pcb.tcp->rcv_wnd = w;
           sockets[i].pcb.tcp->rcv_ann_wnd = w;
@@ -1138,12 +1355,17 @@ int U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_
           // #endregion
         }
       }
-      if (err == ERR_OK)
-        set_status(i, W5100_SN_SR_SOCK_SYNSENT);
-      else
+      if (err == ERR_OK) {
+        /* MR $80 during tcp_connect belongs to the next test. Publishing
+         * SYNSENT here would be that test's Sn_SR. */
+        if (U2_CmdEpoch() != ep0)
+          why = 4;
+        else
+          set_status(i, W5100_SN_SR_SOCK_SYNSENT);
+      } else
         why = 3;
     }
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
   }
   // #region agent log
   /* why: 1=no pcb, 2=bind, 3=tcp_connect. b=lwIP err. c=STA link (0 down, 3 up). */
@@ -1155,24 +1377,59 @@ int U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_
 int U2_Net_ListenTcp(int i, uint16_t local_port) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_TCP || !sockets[i].pcb.tcp)
     return -1;
-  cyw43_arch_lwip_begin();
+  uint8_t ep0 = U2_CmdEpoch();
+  U2_LWIP_BEGIN();
   struct tcp_pcb *pcb = sockets[i].pcb.tcp;
+  /* tcp_listen requires CLOSED. A pcb left in another state makes lwIP return
+   * ERR_VAL and the defer path then publishes CLOSED, but a LISTEN that never
+   * enters this function stays at SOCK_INIT. If this one is already listening,
+   * publish that. Otherwise replace it with a fresh CLOSED pcb. */
+  if (pcb->state == LISTEN) {
+    if (U2_CmdEpoch() == ep0)
+      set_status(i, W5100_SN_SR_SOCK_LISTEN);
+    U2_LWIP_END();
+    return U2_CmdEpoch() == ep0 ? 0 : -1;
+  }
+  if (pcb->state != CLOSED) {
+    u2_release_tcp_arg(pcb);
+    u2_tcp_kill(pcb);
+    pcb = tcp_new();
+    if (!pcb) {
+      u2_reclaim_orphan_tcp();
+      pcb = tcp_new();
+    }
+    if (!pcb) {
+      sockets[i].pcb.tcp = nullptr;
+      sockets[i].type = PCB_NONE;
+      U2_LWIP_END();
+      return -1;
+    }
+    u2_attach_tcp_pcb(pcb, i);
+    sockets[i].pcb.tcp = pcb;
+    sockets[i].tcp_connected = nullptr;
+  }
+  ip_set_option(pcb, SOF_REUSEADDR);
   err_t err = tcp_bind(pcb, IP4_ADDR_ANY, local_port);
   if (err != ERR_OK) {
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return -1;
   }
   u2_release_tcp_arg(pcb);
   struct tcp_pcb *listen = tcp_listen_with_backlog(pcb, 1);
   if (!listen) {
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     return -1;
   }
   sockets[i].pcb.tcp = listen;
   u2_attach_tcp_pcb(listen, i);
   tcp_accept(listen, u2_tcp_accept_cb);
+  if (U2_CmdEpoch() != ep0) {
+    U2_LWIP_END();
+    return -1;
+  }
   set_status(i, W5100_SN_SR_SOCK_LISTEN);
-  cyw43_arch_lwip_end();
+  U2_BaTrace("listen_ok", i, (int32_t)local_port, (int32_t)ip4_addr_get_u32(netif_ip4_addr(u2_cyw43_sta_netif())));
+  U2_LWIP_END();
   return 0;
 }
 
@@ -1181,7 +1438,7 @@ int U2_Net_SendUdp(int i, const uint8_t *ring_base, uint16_t ring_size, uint16_t
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_UDP || !sockets[i].pcb.udp ||
       !ring_base || ring_size == 0 || len == 0)
     return -1;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   /* PBUF_RAM gives a single contiguous payload; copy from the (possibly wrapping) TX ring. */
   struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
   err_t e = ERR_MEM;
@@ -1196,7 +1453,8 @@ int U2_Net_SendUdp(int i, const uint8_t *ring_base, uint16_t ring_size, uint16_t
     e = udp_sendto(sockets[i].pcb.udp, p, &addr, dest_port);
     pbuf_free(p);
   }
-  cyw43_arch_lwip_end();
+  U2_BaTrace("udp_tx", i, (int32_t)len, (int32_t)e);
+  U2_LWIP_END();
   return (e == ERR_OK) ? 0 : -1;
 }
 
@@ -1205,7 +1463,7 @@ int U2_Net_SendIpraw(int i, const uint8_t *ring_base, uint16_t ring_size, uint16
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || sockets[i].type != PCB_IPRAW || !sockets[i].raw ||
       !ring_base || ring_size == 0 || len == 0)
     return -1;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   struct pbuf *p = pbuf_alloc(PBUF_IP, len, PBUF_RAM);
   err_t e = ERR_MEM;
   if (p) {
@@ -1219,7 +1477,7 @@ int U2_Net_SendIpraw(int i, const uint8_t *ring_base, uint16_t ring_size, uint16
     e = raw_sendto(sockets[i].raw, p, &addr);
     pbuf_free(p);
   }
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   return (e == ERR_OK) ? 0 : -1;
 }
 
@@ -1231,7 +1489,7 @@ int U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
   struct tcp_pcb *pcb = sockets[i].tcp_connected ? sockets[i].tcp_connected : sockets[i].pcb.tcp;
   if (!pcb)
     return -1;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   uint16_t avail = tcp_sndbuf(pcb);
   uint16_t to_write = (len < avail) ? len : avail;
   int accepted = 0;
@@ -1245,48 +1503,129 @@ int U2_Net_SendTcp(int i, const uint8_t *data, uint16_t len) {
     }
     /* ERR_MEM => accepted stays 0; remainder is left in the W5100 TX ring. */
   }
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   return accepted;
 }
 
 static volatile uint32_t u2_tcp_rx_credit[U2_NET_MAX_SOCKETS];
 
-void U2_Net_NoteRecv(int i, uint16_t n) {
+void U2_BUS_RAM(U2_Net_NoteRecv)(int i, uint16_t n) {
   if (i < 0 || i >= U2_NET_MAX_SOCKETS || n == 0)
     return;
   __atomic_fetch_add(&u2_tcp_rx_credit[i], (uint32_t)n, __ATOMIC_RELAXED);
 }
 
-void U2_Net_RecvConfirm(int i) { (void)i; }
+void U2_BUS_RAM(U2_Net_RecvConfirm)(int i) { (void)i; }
 
-uint8_t U2_Net_GetStatus(int i) { return get_status(i); }
+uint8_t U2_BUS_RAM(U2_Net_GetStatus)(int i) { return get_status(i); }
 
-void U2_Net_SetStatus(int i, uint8_t status) { set_status(i, status); }
+void U2_BUS_RAM(U2_Net_SetStatus)(int i, uint8_t status) { set_status(i, status); }
+
+static void u2_macraw_hook_apply(void) {
+  uint8_t want = __atomic_load_n(&u2_macraw_hook, __ATOMIC_ACQUIRE);
+  if (!want && !u2_saved_netif_input && !u2_sta_input_real)
+    return;
+  if (!u2_lwip_enter())
+    return;
+  struct netif *sta = u2_cyw43_sta_netif();
+  want = __atomic_load_n(&u2_macraw_hook, __ATOMIC_ACQUIRE);
+  if (u2_saved_netif_input == u2_netif_input_wrapper)
+    u2_saved_netif_input = NULL;
+  if (sta->input && sta->input != u2_netif_input_wrapper && !u2_sta_input_real)
+    u2_sta_input_real = sta->input;
+  if (want) {
+    if (sta->input && sta->input != u2_netif_input_wrapper) {
+      u2_saved_netif_input = sta->input;
+      if (!u2_sta_input_real)
+        u2_sta_input_real = sta->input;
+      sta->input = u2_netif_input_wrapper;
+    }
+  } else if (sockets[0].type != PCB_MACRAW) {
+    netif_input_fn real = u2_saved_netif_input ? u2_saved_netif_input : u2_sta_input_real;
+    if (real && sta->input == u2_netif_input_wrapper)
+      sta->input = real;
+    u2_saved_netif_input = NULL;
+  }
+  u2_lwip_exit(true);
+}
+
+/* Core 0 view of "is the Apple using the slot": any $C0C4-$C0C7 cycle since the last look. */
+static uint32_t u2_act_n;
+static uint32_t u2_act_ms;
+static bool u2_act_seen;
+static void u2_note_bus_activity(void) {
+  uint32_t n = U2_BusCycleCount();
+  if (n != u2_act_n) {
+    u2_act_n = n;
+    u2_act_ms = to_ms_since_boot(get_absolute_time());
+    u2_act_seen = true;
+  }
+}
+
+int U2_BusActiveRecently(uint32_t window_ms) {
+  u2_note_bus_activity();
+  return u2_act_seen && (uint32_t)(to_ms_since_boot(get_absolute_time()) - u2_act_ms) < window_ms;
+}
 
 void U2_Net_ServicePoll(void) {
   /* cyw43/lwIP poll is core-0 only; U2_Poll() may run on core 1 from bus loop. */
   if (get_core_num() != 0)
     return;
+  U2_BaCore0Poll();
+  u2_note_bus_activity();
+  if (__atomic_exchange_n(&u2_net_reset_pending, 0, __ATOMIC_ACQ_REL)) {
+    /* MR $80 already bumped u2_cmd_epoch and cleared the register file on the bus core, in
+     * one step (u2_reset, section 1ev). All that is left for core 0 is to drop the pcbs.
+     * Pcbs opened after the bump (born_epoch == now) belong to the test that
+     * has already continued. Closing those is what stored $00. */
+    uint8_t ep = U2_CmdEpoch();
+    U2_BaNoteResetServed(1);
+    U2_BaStage((4u << 28) | 2u);
+    if (!(sockets[0].type == PCB_MACRAW && sockets[0].born_epoch == ep))
+      __atomic_store_n(&u2_macraw_hook, 0, __ATOMIC_RELEASE);
+    for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
+      if (sockets[i].born_epoch == ep)
+        continue;
+      /* A queued command does not keep the previous pcb. Leaving it allocated
+       * filled the TCP pool, and later OPEN stayed at CLOSED ($00). The new
+       * command allocates its own pcb. */
+      if (sockets[i].type == PCB_NONE && !sockets[i].need_close && !sockets[i].pend_tcp &&
+          !sockets[i].pend_conn && !sockets[i].pend_udp && !sockets[i].pend_raw)
+        continue;
+      if (sockets[i].born_epoch == ep)
+        continue;
+      u2_net_close_core0(i);
+    }
+  }
+  U2_BaStage((4u << 28) | 3u);
+  u2_macraw_hook_apply();
+  U2_BaStage((4u << 28) | 4u);
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
+    /* Live pcbs stay on the socket until this core can take the lock. A core-1 detach
+     * during ListenTcp/OpenTcp freed the pcb out from under lwIP and wedged later OPENs. */
     if (u2_need_close(i))
+      u2_net_close_core0(i);
+    if (sockets[i].pend_tcp || sockets[i].pend_conn || sockets[i].pend_udp || sockets[i].pend_raw)
       u2_free_pending(i);
     if (sockets[i].retire_listen && sockets[i].type == PCB_TCP && sockets[i].pcb.tcp) {
       struct tcp_pcb *listen = sockets[i].pcb.tcp;
       sockets[i].pcb.tcp = nullptr;
       sockets[i].retire_listen = 0;
-      cyw43_arch_lwip_begin();
+      U2_LWIP_BEGIN();
       u2_release_tcp_arg(listen);
       tcp_close(listen);
-      cyw43_arch_lwip_end();
+      U2_LWIP_END();
     }
   }
+  U2_BaStage((4u << 28) | 5u);
   U2_ProcessDeferredSocketCmds();
+  U2_BaStage((4u << 28) | 6u);
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
     uint32_t credit = __atomic_exchange_n(&u2_tcp_rx_credit[i], 0, __ATOMIC_ACQ_REL);
     if (credit && sockets[i].type == PCB_TCP) {
       struct tcp_pcb *tpcb = u2_tcp_pcb(i);
       if (tpcb) {
-        cyw43_arch_lwip_begin();
+        U2_LWIP_BEGIN();
         while (credit) {
           u16_t chunk = credit > 65535u ? 65535u : (u16_t)credit;
           tcp_recved(tpcb, chunk);
@@ -1300,15 +1639,38 @@ void U2_Net_ServicePoll(void) {
           tpcb->rcv_ann_right_edge = tpcb->rcv_nxt + tpcb->rcv_wnd;
           tcp_output(tpcb);
         }
-        cyw43_arch_lwip_end();
+        U2_LWIP_END();
       }
     }
   }
+  /* echo_once closes after the payload, which FINs. If that FIN was parked
+   * on refused_data, tcp_fasttmr would not deliver it for 250 ms, and
+   * finish_io would still read ESTABLISHED. Deliver it on this poll, then
+   * publish CLOSE_WAIT if the callback did not. */
+  for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
+    if (sockets[i].type != PCB_TCP)
+      continue;
+    struct tcp_pcb *tpcb = u2_tcp_pcb(i);
+    if (!tpcb)
+      continue;
+    if (tpcb->state != ESTABLISHED && tpcb->state != CLOSE_WAIT)
+      continue;
+    U2_LWIP_BEGIN();
+    if (tpcb->refused_data)
+      tcp_process_refused_data(tpcb);
+    struct tcp_pcb *live = u2_tcp_pcb(i);
+    if (live && live->state == CLOSE_WAIT &&
+        get_status(i) == W5100_SN_SR_ESTABLISHED) {
+      set_status(i, W5100_SN_SR_SOCK_CLOSE_WAIT);
+      U2_SocketIrq(i, W5100_SN_IR_DISCON);
+    }
+    U2_LWIP_END();
+  }
   for (int i = 0; i < U2_NET_MAX_SOCKETS; i++) {
     if (sockets[i].hold && sockets[i].type == PCB_TCP) {
-      cyw43_arch_lwip_begin();
+      U2_LWIP_BEGIN();
       u2_flush_hold(i);
-      cyw43_arch_lwip_end();
+      U2_LWIP_END();
       // #region agent log
       if (sockets[i].hold) {
         static uint32_t u2_probe_us;
@@ -1344,13 +1706,13 @@ void U2_Net_ServicePoll(void) {
         if (sockets[i].type != PCB_TCP || !u2_tcp_pcb(i))
           continue;
         int wnd = 0, ann = 0;
-        cyw43_arch_lwip_begin();
+        U2_LWIP_BEGIN();
         struct tcp_pcb *tpcb = u2_tcp_pcb(i);
         if (tpcb) {
           wnd = (int)tpcb->rcv_wnd;
           ann = (int)tpcb->rcv_ann_wnd;
         }
-        cyw43_arch_lwip_end();
+        U2_LWIP_END();
         int sz = 0, live = 0, sh = 0;
         U2_RxDebugStat(i, &sz, &live, &sh);
         int cr = 0, bus = 0, rd = 0;
@@ -1457,14 +1819,22 @@ void U2_Net_ServicePoll(void) {
   if (time_reached(u2_macraw_tx_stats_next)) {
     u2_macraw_tx_stats_next = make_timeout_time_ms(10000);
     uint8_t q_count;
-    critical_section_enter_blocking(&u2_macraw_tx_cs);
+    uint32_t sv = u2_tx_lock();
     q_count = u2_macraw_tx_q_count;
-    critical_section_exit(&u2_macraw_tx_cs);
+    u2_tx_unlock(sv);
     printf("[u2macraw] tx_q=%u tx_q_drop=%lu lo_err=%lu pbuf_fail=%lu\n",
            (unsigned)q_count, (unsigned long)u2_macraw_tx_q_drop,
            (unsigned long)u2_macraw_tx_lo_err, (unsigned long)u2_macraw_tx_pbuf_fail);
   }
 #endif
+}
+
+void U2_Net_WaitForWork(absolute_time_t until) {
+  U2_Net_ServicePoll();
+  absolute_time_t slice = make_timeout_time_ms(2);
+  if (absolute_time_diff_us(slice, until) < 0)
+    slice = until;
+  cyw43_arch_wait_for_work_until(slice);
 }
 
 void U2_Net_Poll(void) {
@@ -1489,6 +1859,7 @@ void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw) {
   push_rx_cb = NULL;
 }
 void U2_Net_Close(int i) { (void)i; }
+void U2_Net_RequestReset(void) {}
 int U2_Net_DisconTcp(int i) {
   (void)i;
   return -1;
@@ -1511,6 +1882,15 @@ int U2_Net_OpenMacraw(int i) {
   (void)i;
   return -1;
 }
+int U2_Net_SendMacrawRing(int i, const uint8_t *ring, uint16_t mask, uint16_t start, uint16_t len) {
+  (void)i;
+  (void)ring;
+  (void)mask;
+  (void)start;
+  (void)len;
+  return -1;
+}
+void U2_Net_CloseBus(int i) { (void)i; }
 void U2_Net_SetTcpNoDelay(int i, int enable) {
   (void)i;
   (void)enable;
@@ -1579,7 +1959,40 @@ void U2_Net_SetStatus(int i, uint8_t status) {
 }
 void U2_Net_ServicePoll(void) {}
 void U2_Net_Poll(void) {}
+void U2_Net_WaitForWork(absolute_time_t until) { (void)until; }
+int U2_BusActiveRecently(uint32_t window_ms) {
+  (void)window_ms;
+  return 0;
+}
 
 } // extern "C"
 
 #endif /* PICO_CYW43_ARCH_POLL */
+
+/* Core 0. 1 when the Pico's Wi-Fi link is up and DHCP has given it an address. A real Uthernet II
+ * has its PHY link and an IP from power-on; MegaFlash needs ~6-20 s after boot. Until then every
+ * networked command fails with ERR_RTE. u2 deferred CONNECT/SEND wait on this (section 1fa). */
+extern "C" int U2_Net_LinkReady(void) {
+  if (!cyw43_is_initialized(&cyw43_state))
+    return 0;
+  if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) != CYW43_LINK_UP)
+    return 0;
+  return !ip4_addr_isany_val(*netif_ip4_addr(u2_cyw43_sta_netif()));
+}
+
+/* Audit only: raw link state (CYW43_LINK_*) for the transition trace. -99 before init. */
+extern "C" int U2_Net_LinkStatusRaw(void) {
+  if (!cyw43_is_initialized(&cyw43_state))
+    return -99;
+  return cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+}
+
+#if U2_BUS_AUDIT
+/* Audit report helpers: the Pico's STA address as lwIP sees it. Compare with SIPR (what the 6502
+ * programmed) and with the --local-ip the NetTester host connects to. */
+extern "C" uint32_t U2_BaStaIp(void) {
+  if (!cyw43_is_initialized(&cyw43_state))
+    return 0;
+  return ip4_addr_get_u32(netif_ip4_addr(u2_cyw43_sta_netif()));
+}
+#endif

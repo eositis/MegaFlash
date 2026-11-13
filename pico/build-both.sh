@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build Pico W (RP2040) and Pico 2 W (RP2350) Release firmware in one step.
+# Build the Pico 2 W (RP2350) Release firmware. RP2040 (Pico W) development is stopped (user decision,
+# 2026-11-09): pico_release is no longer built, verified or delivered. The name is kept for old muscle memory.
 # Does NOT bump defines.h (unlike cmakeall.sh). Use for CI / quick verification.
 # Sets FIRMWARE_BUILD_TIMESTAMP (Unix s) and FIRMWARE_BUILD_TIMESTAMP_STR (UTC, human-readable) per configure.
 #
@@ -88,13 +89,6 @@ echo "U2_ETH_HEADER_TRACE=$U2_ETH_HEADER_TRACE (1=UART [u2eth] STA frame hex dum
 mf_firmware_build_stamp
 echo "(override with FIRMWARE_BUILD_TIMESTAMP / FIRMWARE_BUILD_TIMESTAMP_STR, or pin MF_BUILD_NUMBER)"
 
-echo "Configuring pico_release (Pico W)..."
-"$CMAKE_BIN" -B pico_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w -DPICO_SDK_PATH="$SDK_PATH" \
-  -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
-  "-DFIRMWARE_BUILD_TIMESTAMP_STR=$FIRMWARE_BUILD_TIMESTAMP_STR" \
-  -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
-  $CMAKE_ARM_TOOLCHAIN
-
 echo "Configuring pico2_release (Pico 2 W)..."
 "$CMAKE_BIN" -B pico2_release -S . -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w -DPICO_SDK_PATH="$SDK_PATH" \
   -DFIRMWARE_BUILD_TIMESTAMP="$FIRMWARE_BUILD_TIMESTAMP" \
@@ -102,10 +96,16 @@ echo "Configuring pico2_release (Pico 2 W)..."
   -DU2_ETH_HEADER_TRACE="$U2_ETH_HEADER_TRACE" \
   $CMAKE_ARM_TOOLCHAIN
 
-echo "Building pico_release (-j$JOBS)..."
-make -C pico_release -j"$JOBS" || exit 1
-
 echo "Building pico2_release (-j$JOBS)..."
 make -C pico2_release -j"$JOBS" || exit 1
 
-echo "OK: pico_release/megaflash.uf2 and pico2_release/megaflash.uf2"
+# Section 1ev gate: nothing the Uthernet II bus core can execute may live in flash (XIP). The
+# RP2350 image is the one that serves U2 from core 1; RP2040 keeps its old placement (no spare RAM).
+echo "Checking pico2_release bus call tree is SRAM-only..."
+python3 "$SCRIPT_DIR/tools/check_bus_ram.py" pico2_release/megaflash.elf \
+  --objdump "$TOOLCHAIN_BIN/arm-none-eabi-objdump" || {
+  echo "Error: U2 bus path reaches flash code (see list above). Mark the callee with U2_BUS_RAM() or remove the call." >&2
+  exit 1
+}
+
+echo "OK: pico2_release/megaflash.uf2"

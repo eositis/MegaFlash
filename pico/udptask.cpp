@@ -1,3 +1,5 @@
+#define U2_FILE_ID 5
+#include "u2_lockdbg.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "pico/sync.h"
@@ -7,6 +9,7 @@
 #include "network.h"
 #include "debug.h"
 #include "misc.h"
+#include "uthernet2_net.h"
 
 //--------------------------------------------------------------------
 // This function is modified from cyw43_arch_wifi_connect_timeout_ms()
@@ -33,9 +36,9 @@ static int wifi_connect_timeout_ms(const char *ssid, const char *pw, uint32_t au
       if (time_reached(timeout)) {
           return PICO_ERROR_TIMEOUT;  //-2
       }
-      // Do polling
+      // Do polling. Keep the Uthernet II serviced: this loop runs for up to 15 s (section 1ev).
       cyw43_arch_poll();
-      cyw43_arch_wait_for_work_until(timeout);
+      U2_Net_WaitForWork(timeout);
   }
   
   if (status == CYW43_LINK_UP) {
@@ -82,13 +85,13 @@ CUDPTask::CUDPTask() {
 // Keep WiFi online between sessions - only tear down task resources (UDP PCB, buffer).
 //
 CUDPTask::~CUDPTask() {
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   if (this->pcb) {
     GetNetworkPump().DestroyUdpPcb(this->pcb);
     this->pcb = NULL;
   }
   if (rxbuffer) delete[] rxbuffer;
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   // Do not disconnect or deinit WiFi - keep it online for next TFTP/NTP/etc.
 }
 
@@ -308,6 +311,7 @@ void CUDPTask::ConnectWifi(const char* ssid, const char* wpakey) {
       
       do {
         sleep_ms(1);
+        U2_Net_ServicePoll();   /* retry delays are up to 15 s; the Apple must not wait for them */
         if (CUDPTask::abortRequested) CUDPTask::Abort(this);
       }while(!time_reached(until));
     }
@@ -408,10 +412,10 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
   GetNetworkPump().RegisterDnsPendingOwner(this);
 
   ip_addr_t ipaddr;
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   int err = dns_gethostbyname(hostname, &ipaddr, NetworkPump_LegacyDnsCallback,
                               static_cast<void *>(static_cast<INetworkSession *>(this)));
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
   if (err == ERR_OK) {  //dns_gethostbyname() returns IP address immediately
     GetNetworkPump().ClearDnsPendingOwner(this);
     DEBUG_PRINTF("dns_gethostbyname() returns ERR_OK. resolved IP Address=%s\n",ipaddr_ntoa(&ipaddr));
@@ -443,17 +447,17 @@ void CUDPTask::DNSLookup(const char* hostname,const uint32_t timeout) {
 //
 //
 void CUDPTask::SendUDP(const uint8_t *payload,const uint16_t payloadlen, const uint16_t destPort) {
-  cyw43_arch_lwip_begin();
+  U2_LWIP_BEGIN();
   struct pbuf *pbuf = pbuf_alloc(PBUF_TRANSPORT, payloadlen, PBUF_RAM);
   if (!pbuf) {
-    cyw43_arch_lwip_end();
+    U2_LWIP_END();
     WARN_PRINTF("SendUDP: pbuf_alloc failed len=%u\n", (unsigned)payloadlen);
     return;  // Caller may retry on next timeout
   }
   pbuf_take(pbuf, payload, payloadlen);
   udp_sendto(this->pcb, pbuf, &this->server_addr, destPort);
   pbuf_free(pbuf);
-  cyw43_arch_lwip_end();
+  U2_LWIP_END();
 }
 
 void CUDPTask::OnUdpRecvPbuf(struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, uint16_t port) {

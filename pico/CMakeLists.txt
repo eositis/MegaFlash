@@ -64,6 +64,7 @@ add_executable(${CMAKE_PROJECT_NAME}
     fpu.c
     uthernet2.c
     u2_monitor.c
+    u2_busaudit.c
     uthernet2_net.cpp
     network.cpp
     udptask.cpp
@@ -89,6 +90,9 @@ configure_file(
 pico_set_printf_implementation(${CMAKE_PROJECT_NAME} compiler)
 
 #extra file dependencies
+# Section 1ev: switch jump tables live in flash .rodata, so a "SRAM-only" bus handler still took an
+# XIP read per switch. Compare chains instead (the cases are few). tools/check_bus_ram.py enforces it.
+set_source_files_properties(uthernet2.c PROPERTIES COMPILE_OPTIONS "-fno-jump-tables")
 set_source_files_properties(romdisk.s OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/romdisk.po)
 set_source_files_properties(cpanel.s  OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../cpanel/cpanel.bin)
 
@@ -154,6 +158,20 @@ set(U2_MACRAW_COMPAT_DROP_OLDEST "0" CACHE STRING "1=MACRAW RX: discard unread o
 # Forces UART stdio up from U2_Init (Release normally has it off). cmake ... -DU2_RX_AUDIT=1
 set(U2_RX_AUDIT "0" CACHE STRING "1=[u2audit] RX delivery audit: served bytes vs host Sn_RX_RD advance (§1dh)")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_RX_AUDIT=${U2_RX_AUDIT})
+
+# Section 1ev bus-pipeline audit (measurement only). Per-cycle handler/publish timing, listener
+# FIFO depth + RXSTALL, core-0 service gaps, reset service latency, missed-command counters and
+# a frozen bus-cycle ring, all over UART0 (GPIO 0/1) from core 0. Use ./build-audit.sh; the
+# normal Release build keeps this at 0 and compiles none of it.
+set(U2_BUS_AUDIT "0" CACHE STRING "1=[ba] bus-pipeline audit over UART0 (section 1ev); separate image")
+set(U2_BUS_AUDIT_BAUD "115200" CACHE STRING "UART baud for the [ba] audit stream")
+set(U2_MISSED_CMD_SALVAGE "1" CACHE STRING "1=keep u2_missed_command salvage; 0=build it out (only once the [ba] missed_command counters read 0)")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_MISSED_CMD_SALVAGE=${U2_MISSED_CMD_SALVAGE})
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE U2_BUS_AUDIT=${U2_BUS_AUDIT} U2_BUS_AUDIT_BAUD=${U2_BUS_AUDIT_BAUD})
+if(U2_BUS_AUDIT STREQUAL "1")
+  # abort()/panic() report on the audit UART (u2_busaudit.c __wrap_abort / __wrap_panic).
+  target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -Wl,--wrap=abort -Wl,--wrap=panic)
+endif()
 
 # Debug-build usability (§1de). U2_MonPollFlush printf()s to a *blocking* UART on every core-0
 # iteration, so the stock 128-line budget costs ~10 KB (~0.9 s at 115200) per call and starves

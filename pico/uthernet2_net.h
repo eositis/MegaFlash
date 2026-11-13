@@ -6,6 +6,7 @@
 #define _UTHERNET2_NET_H
 
 #include <stdint.h>
+#include "pico/time.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,8 @@ typedef void (*u2_push_rx_macraw_fn)(int socket_i, const uint8_t *data, uint16_t
 void U2_Net_Init(u2_push_rx_fn push_rx, u2_push_rx_macraw_fn push_rx_macraw);
 
 void U2_Net_Close(int i);
+/** Ask core 0 to close every socket. Core 1 must not call U2_Net_Close from MR $80. */
+void U2_Net_RequestReset(void);
 /** Graceful TCP close (FIN). CLOSE uses U2_Net_Close (abort). Core 0. Returns 0 if accepted. */
 int  U2_Net_DisconTcp(int i);
 int  U2_Net_OpenUdp(int i, uint16_t local_port);
@@ -35,6 +38,12 @@ int  U2_Net_OpenMacraw(int i);
 void U2_Net_SetTcpNoDelay(int i, int enable);
 /** Returns 0 if accepted (queued or sent), -1 if queue full or linkoutput failed. */
 int  U2_Net_SendMacraw(int i, const uint8_t *data, uint16_t len);
+/** Bus core (core 1) MACRAW SEND: copies len bytes from a W5100 TX ring (size mask+1, first byte at
+ *  start) straight into the core-0 TX queue. SRAM-resident, no lwIP, no flash. 0=queued, -1=refused. */
+int  U2_Net_SendMacrawRing(int i, const uint8_t *ring, uint16_t mask, uint16_t start, uint16_t len);
+/** Bus core (core 1) close of a MACRAW socket: state change + queue clear only, no lwIP lock.
+ *  Anything that holds a pcb is handed to core 0 via need_close. SRAM-resident. */
+void U2_Net_CloseBus(int i);
 /** Feed a received raw Ethernet frame into socket i (MACRAW RX). Call from driver hook if available. */
 void U2_Net_FeedMacrawRx(int i, const uint8_t *data, uint16_t len);
 int  U2_Net_ConnectTcpEx(int i, uint32_t dest_ip_net, uint16_t dest_port, uint16_t local_port);
@@ -57,11 +66,25 @@ uint8_t U2_Net_GetStatus(int i);
 /** Publish Sn_SR. Call only after the deferred command slot is free. */
 void U2_Net_SetStatus(int i, uint8_t status);
 
+/** Core 0: Wi-Fi link up and an IPv4 address assigned (section 1fa). */
+int U2_Net_LinkReady(void);
+/** Raw CYW43_LINK_* value (-99 before init). Used by the audit link trace. */
+int U2_Net_LinkStatusRaw(void);
+
 /** Drain deferred MACRAW TX (core 0). Safe from `NetworkPump::PollOnce` during native ops. */
 void U2_Net_ServicePoll(void);
 
 /** Advance lwIP and drain recv into RX buffers. Call periodically from bus loop. */
 void U2_Net_Poll(void);
+
+/** Core 0 wait that keeps the Uthernet II serviced (section 1ev): runs U2_Net_ServicePoll, then waits
+ *  at most ~2 ms (or until `until`) for CYW43 work. Use instead of cyw43_arch_wait_for_work_until in
+ *  any loop that can run for more than a few ms (Wi-Fi connect and retry delays). */
+void U2_Net_WaitForWork(absolute_time_t until);
+
+/** Nonzero if a $C0C4-$C0C7 cycle was seen within the last window_ms. Core 0; sampled at each
+ *  U2_Net_ServicePoll, so it is only as fresh as core 0's service continuity. */
+int U2_BusActiveRecently(uint32_t window_ms);
 
 #ifdef __cplusplus
 }

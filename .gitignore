@@ -15,6 +15,9 @@
 /pico/pico_release
 /pico/pico2_debug
 /pico/pico2_release
+/pico/pico_audit
+/pico/pico2_audit
+/pico/audit_images
 /pico/si_test_build
 /pico/si_test_pico_w
 /pico/si_test_pico2_w
